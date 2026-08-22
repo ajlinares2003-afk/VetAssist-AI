@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from database.database import get_db
 from models.exame import Exame
@@ -17,6 +18,9 @@ router = APIRouter(
 
 @router.get("/")
 def listar_exames(
+    usuario_logado: str = Depends(
+        obter_usuario_logado
+    ),
     db: Session = Depends(get_db)
 ):
     exames = db.query(Exame).all()
@@ -40,9 +44,10 @@ def criar_exame(
     )
 
     if not consulta:
-        return {
-            "erro": "Consulta nao encontrada"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Consulta nao encontrada"
+        )
 
     novo_exame = Exame(
         consulta_id=exame.consulta_id,
@@ -71,6 +76,11 @@ def buscar_exame(
         .first()
     )
 
+    if not exame:
+        raise HTTPException(
+            status_code=404,
+            detail="Exame nao encontrado"
+        )
     return exame
 
 @router.put("/{exame_id}")
@@ -91,9 +101,24 @@ def atualizar_exame(
     )
 
     if not exame_db:
-        return {
-            "erro": "Exame nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Exame nao encontrado"
+        )
+
+    consulta = (
+        db.query(Consulta)
+        .filter(
+            Consulta.id == exame.consulta_id
+        )
+        .first()
+    )
+
+    if not consulta:
+        raise HTTPException(
+            status_code=404,
+            detail="Consulta nao encontrada"
+        )
 
     exame_db.consulta_id = exame.consulta_id
     exame_db.tipo_exame = exame.tipo_exame
@@ -125,9 +150,10 @@ db: Session = Depends(get_db)
     )
 
     if not exame:
-        return {
-        "erro": "Exame nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Exame nao encontrado"
+        )
 
     db.delete(exame)
     db.commit()

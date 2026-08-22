@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, UTC
 from datetime import timedelta
 from jose import jwt
 from passlib.context import CryptContext
@@ -37,11 +37,8 @@ def criar_token(
     dados: dict
 ):
     dados_token = dados.copy()
-    expira = (
-        datetime.utcnow() +
-        timedelta(
-            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-        )
+    expira = datetime.now(UTC) + timedelta(
+        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
     dados_token.update(

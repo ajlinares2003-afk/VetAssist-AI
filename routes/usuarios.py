@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from schemas.usuario import UsuarioCreate
 from database.database import get_db
 from models.usuario import Usuario
@@ -35,6 +37,11 @@ def buscar_usuario(
         .filter(Usuario.id == usuario_id)
         .first()
     )
+    if not usuario:
+        raise HTTPException(
+            status_code=404,
+            detail="Usuario nao encontrado"
+        )
     return usuario
 
 @router.post("/")
@@ -48,19 +55,45 @@ def criar_usuario(
 
     db: Session = Depends(get_db)
 ):
+
+    usuario_existente = (
+        db.query(Usuario)
+        .filter(
+            Usuario.email == usuario.email
+        )
+        .first()
+    )
+
+    if usuario_existente:
+        raise HTTPException(
+            status_code=409,
+            detail="Email ja cadastrado"
+        )
+
     novo_usuario = Usuario(
         nome=usuario.nome,
         email=usuario.email,
         senha_hash=gerar_hash(
-           usuario.senha_hash
+            usuario.senha_hash
         ),
         perfil=usuario.perfil,
-        ativo=True
+         ativo=True
     )
+    
+    try:
 
-    db.add(novo_usuario)
-    db.commit()
-    db.refresh(novo_usuario)
+        db.add(novo_usuario)
+        db.commit()
+        db.refresh(novo_usuario)
+
+    except IntegrityError:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="Email ja cadastrado"
+        )
 
     return {
         "id": novo_usuario.id,
@@ -86,9 +119,10 @@ def excluir_usuario(
     )
 
     if not usuario:
-        return {
-            "erro": "Usuario nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Usuario nao encontrado"
+        )
 
     db.delete(usuario)
     db.commit()
@@ -115,17 +149,46 @@ def atualizar_usuario(
     )
 
     if not usuario_db:
-        return {
-            "erro": "Usuario nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Usuario nao encontrado"
+        )
 
     usuario_db.nome = usuario.nome
+    email_existente = (
+        db.query(Usuario)
+        .filter(
+            Usuario.email == usuario.email,
+            Usuario.id != usuario_id
+        )
+        .first()
+    )
+
+    if email_existente:
+        raise HTTPException(
+            status_code=409,
+            detail="Email ja cadastrado"
+        )
+
     usuario_db.email = usuario.email
-    usuario_db.senha_hash = usuario.senha_hash
+    usuario_db.senha_hash = gerar_hash(
+        usuario.senha_hash
+    )
     usuario_db.perfil = usuario.perfil
 
-    db.commit()
-    db.refresh(usuario_db)
+    try:
+
+        db.commit()
+        db.refresh(usuario_db)
+
+    except IntegrityError:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="Email ja cadastrado"
+        )
 
     return {
         "id": usuario_db.id,

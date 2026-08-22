@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from database.database import get_db
 from models.usuario import Usuario
@@ -29,17 +30,19 @@ def login(
     )
 
     if not usuario:
-        return {
-            "erro": "Usuário não encontrado"
-        }
+        raise HTTPException(
+            status_code=401,
+            detail="Credenciais invalidas"
+        )
 
     if not verificar_senha(
         form_data.password,
         usuario.senha_hash
     ):
-        return {
-            "erro": "Senha inválida"
-        }
+        raise HTTPException(
+            status_code=401,
+            detail="Credenciais invalidas"
+        )
 
     token = criar_token(
         {

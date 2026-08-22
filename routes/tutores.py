@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from schemas.tutor import TutorCreate
 from database.database import get_db
 from models.tutor import Tutor
@@ -39,16 +41,43 @@ def criar_tutor(
     ),
     db: Session = Depends(get_db)
 ):
+
+    tutor_existente = (
+        db.query(Tutor)
+        .filter(
+            (Tutor.cpf == tutor.cpf) |
+            (Tutor.email == tutor.email)
+        )
+        .first()
+    )
+
+    if tutor_existente:
+        raise HTTPException(
+            status_code=409,
+            detail="CPF ou Email ja cadastrado"
+        )
+
     novo_tutor = Tutor(
         nome=tutor.nome,
         cpf=tutor.cpf,
         telefone=tutor.telefone,
         email=tutor.email
     )
+    
+    try:
 
-    db.add(novo_tutor)
-    db.commit()
-    db.refresh(novo_tutor)
+        db.add(novo_tutor)
+        db.commit()
+        db.refresh(novo_tutor)
+
+    except IntegrityError:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="CPF ou Email ja cadastrado"
+        )
 
     return {
         "id": novo_tutor.id,
@@ -67,6 +96,12 @@ def buscar_tutor(
         .first()
     )
 
+    if not tutor:
+        raise HTTPException(
+            status_code=404,
+            detail="Tutor nao encontrado"
+        )
+    
     return tutor
 
 @router.delete("/{tutor_id}")
@@ -90,9 +125,10 @@ def excluir_tutor(
     )
 
     if not tutor:
-        return {
-            "erro": "Tutor nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Tutor nao encontrado"
+        )
 
     db.delete(tutor)
     db.commit()
@@ -123,17 +159,47 @@ def atualizar_tutor(
     )
 
     if not tutor_db:
-        return {
-        "erro": "Tutor nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Tutor nao encontrado"
+        )
 
+    tutor_existente = (
+        db.query(Tutor)
+        .filter(
+            (
+                (Tutor.cpf == tutor.cpf) |
+                (Tutor.email == tutor.email)
+            ) &
+            (Tutor.id != tutor_id)
+        )
+        .first()
+    )
+
+    if tutor_existente:
+        raise HTTPException(
+            status_code=409,
+            detail="CPF ou Email ja cadastrado"
+        )
+    
     tutor_db.nome = tutor.nome
     tutor_db.cpf = tutor.cpf
     tutor_db.telefone = tutor.telefone
     tutor_db.email = tutor.email
 
-    db.commit()
-    db.refresh(tutor_db)
+    try:
+
+        db.commit()
+        db.refresh(tutor_db)
+
+    except IntegrityError:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="CPF ou Email ja cadastrado"
+            )
 
     return {
         "id": tutor_db.id,

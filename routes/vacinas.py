@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException       
 from sqlalchemy.orm import Session
 from database.database import get_db
 from models.vacina import Vacina
@@ -17,6 +18,9 @@ router = APIRouter(
 
 @router.get("/")
 def listar_vacinas(
+    usuario_logado: str = Depends(
+        obter_usuario_logado
+    ),
     db: Session = Depends(get_db)
 ):
     vacinas = db.query(Vacina).all()
@@ -27,7 +31,7 @@ def criar_vacina(
     vacina: VacinaCreate,
     usuario_logado = Depends(
         exigir_perfil(
-            ["ADMIN", "VETERINARIO"]
+            ["ADMIN", "VETERINARIO", "RECEPCAO"]
         )
     ),
     db: Session = Depends(get_db)
@@ -39,9 +43,10 @@ def criar_vacina(
     )
 
     if not animal:
-        return {
-            "erro": "Animal nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Animal nao encontrado"
+        )   
 
     nova_vacina = Vacina(
         animal_id=vacina.animal_id,
@@ -66,9 +71,18 @@ def buscar_vacina(
 ):
     vacina = (
         db.query(Vacina)
-        .filter(Vacina.id == vacina_id)
+        .filter(
+            Vacina.id == vacina_id
+        )
         .first()
     )
+
+    if not vacina:
+        raise HTTPException(
+            status_code=404,
+            detail="Vacina nao encontrada"
+        )
+
     return vacina
 
 @router.put("/{vacina_id}")
@@ -88,9 +102,23 @@ def atualizar_vacina(
         .first()
     )
     if not vacina_db:
-        return {
-            "erro": "Vacina nao encontrada"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Vacina nao encontrada"
+        )
+
+    animal = (
+        db.query(Animal)
+        .filter(Animal.id == vacina.animal_id)
+        .first()
+    )
+
+    if not animal:
+        raise HTTPException(
+            status_code=404,
+            detail="Animal nao encontrado"
+        )
+    
     vacina_db.animal_id = vacina.animal_id
     vacina_db.nome_vacina = vacina.nome_vacina
     vacina_db.fabricante = vacina.fabricante
@@ -120,9 +148,11 @@ def excluir_vacina(
         .first()
     )
     if not vacina:
-        return {
-            "erro": "Vacina nao encontrada"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Vacina nao encontrada"
+        )
+
     db.delete(vacina)
     db.commit()
 

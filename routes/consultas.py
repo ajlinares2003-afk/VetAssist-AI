@@ -1,9 +1,11 @@
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException   
 from sqlalchemy.orm import Session
 from database.database import get_db
 from models.consulta import Consulta
 from models.animais import Animal
+from models.usuario import Usuario  
 from schemas.consulta import ConsultaCreate
 from datetime import datetime
 from services.security import (
@@ -18,6 +20,9 @@ router = APIRouter(
 
 @router.get("/")
 def listar_consultas(
+    usuario_logado: str = Depends(
+        obter_usuario_logado
+    ),
     db: Session = Depends(get_db)
 ):
     consultas = db.query(Consulta).all()
@@ -40,9 +45,24 @@ def criar_consulta(
     )
 
     if not animal:
-        return {
-            "erro": "Animal nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Animal nao encontrado"
+        )
+
+    usuario = (
+        db.query(Usuario)
+        .filter(
+            Usuario.id == consulta.usuario_id
+        )
+        .first()
+    )
+
+    if not usuario:
+        raise HTTPException(
+            status_code=404,
+            detail="Usuario nao encontrado"
+        )
 
     nova_consulta = Consulta(
         usuario_id=consulta.usuario_id,
@@ -64,6 +84,25 @@ def criar_consulta(
 
     return nova_consulta
 
+@router.get("/{consulta_id}")
+def buscar_consulta(
+    consulta_id: int,
+    db: Session = Depends(get_db)
+):
+    consulta = (
+        db.query(Consulta)
+        .filter(Consulta.id == consulta_id)
+        .first()
+    )
+
+    if not consulta:
+        raise HTTPException(
+            status_code=404,
+            detail="Consulta nao encontrada"
+        )
+
+    return consulta
+
 @router.put("/{consulta_id}")
 def atualizar_consulta(
     consulta_id: int,
@@ -83,9 +122,40 @@ def atualizar_consulta(
     )
 
     if not consulta_db:
-        return {
-            "erro": "Consulta nao encontrada"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Consulta nao encontrada"
+        )
+
+    consulta_db.usuario_id = consulta.usuario_id
+
+    animal = (
+        db.query(Animal)
+        .filter(
+            Animal.id == consulta.animal_id
+        )
+        .first()
+    )
+
+    if not animal:
+        raise HTTPException(
+            status_code=404,
+            detail="Animal nao encontrado"
+        )
+
+    usuario = (
+        db.query(Usuario)
+        .filter(
+            Usuario.id == consulta.usuario_id
+        )
+        .first()
+    )
+
+    if not usuario:
+        raise HTTPException(
+            status_code=404,
+            detail="Usuario nao encontrado"
+        )
 
     consulta_db.usuario_id = consulta.usuario_id
     consulta_db.animal_id = consulta.animal_id
@@ -122,9 +192,10 @@ def excluir_consulta(
     )
 
     if not consulta:
-        return {
-            "erro": "Consulta nao encontrada"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Consulta nao encontrada"
+        )
 
     db.delete(consulta)
     db.commit()

@@ -1,10 +1,15 @@
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from schemas.animais import AnimalCreate
 from database.database import get_db
 from models.animais import Animal
-from services.security import obter_usuario_logado
+from models.tutor import Tutor
+from services.security import (
+    obter_usuario_logado,
+    exigir_perfil
+)
 
 router = APIRouter(
     prefix="/animais",
@@ -25,11 +30,32 @@ def listar_animais(
 @router.post("/")
 def criar_animal(
     animal: AnimalCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            [
+                "ADMIN",
+                "VETERINARIO",
+                "RECEPCAO"
+            ]
+        )
     ),
     db: Session = Depends(get_db)
 ):
+
+    tutor = (
+        db.query(Tutor)
+        .filter(
+            Tutor.id == animal.tutor_id
+        )
+        .first()
+    )
+
+    if not tutor:
+        raise HTTPException(
+            status_code=404,
+            detail="Tutor nao encontrado"
+        )
+
     novo_animal = Animal(
         nome=animal.nome,
         especie=animal.especie,
@@ -37,7 +63,8 @@ def criar_animal(
         sexo=animal.sexo,
         idade=animal.idade,
         peso=animal.peso,
-        tutor_id=animal.tutor_id
+        tutor_id=animal.tutor_id,
+        status=animal.status
     )
 
     db.add(novo_animal)
@@ -61,13 +88,25 @@ def buscar_animal(
         .first()
     )
 
+    if not animal:
+        raise HTTPException(
+            status_code=404,
+            detail="Animal nao encontrado"
+        )
+
     return animal
 
 @router.delete("/{animal_id}")
 def excluir_animal(
     animal_id: int,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            [
+                "ADMIN",
+                "VETERINARIO",
+                "RECEPCAO"
+            ]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -78,9 +117,10 @@ def excluir_animal(
     )
 
     if not animal:
-        return {
-            "erro": "Animal nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Animal nao encontrado"
+        )
 
     db.delete(animal)
     db.commit()
@@ -93,8 +133,14 @@ def excluir_animal(
 def atualizar_animal(
     animal_id: int,
     animal: AnimalCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            [
+                "ADMIN",
+                "VETERINARIO",
+                "RECEPCAO"
+            ]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -105,9 +151,24 @@ def atualizar_animal(
     )
 
     if not animal_db:
-        return {
-            "erro": "Animal nao encontrado"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Animal nao encontrado"
+        )
+
+    tutor = (
+        db.query(Tutor)
+        .filter(
+            Tutor.id == animal.tutor_id
+        )
+        .first()
+    )
+    
+    if not tutor:
+        raise HTTPException(
+            status_code=404,
+            detail="Tutor nao encontrado"
+        )
 
     animal_db.nome = animal.nome
     animal_db.especie = animal.especie
