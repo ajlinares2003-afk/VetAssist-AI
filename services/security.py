@@ -60,20 +60,14 @@ def obter_usuario_logado(
     token: str = Depends(oauth2_scheme)
 ):
     try:
+
         payload = jwt.decode(
             token,
             SECRET_KEY,
             algorithms=[ALGORITHM]
         )
 
-        usuario_id = payload.get("sub")
-        if not usuario_id:
-            raise HTTPException(
-                status_code=401,
-                detail="Token inválido"
-            )
-
-        return usuario_id
+        return payload
 
     except Exception:
 
@@ -81,3 +75,24 @@ def obter_usuario_logado(
             status_code=401,
             detail="Token inválido"
         )
+
+def exigir_perfil(
+    perfis_permitidos: list
+):
+
+    def verificar(
+        usuario=Depends(
+            obter_usuario_logado
+        )
+    ):
+
+        if usuario["perfil"] not in perfis_permitidos:
+
+            raise HTTPException(
+                status_code=403,
+                detail="Acesso negado"
+            )
+
+        return usuario
+
+    return verificar

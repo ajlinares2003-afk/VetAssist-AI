@@ -4,7 +4,11 @@ from sqlalchemy.orm import Session
 from schemas.usuario import UsuarioCreate
 from database.database import get_db
 from models.usuario import Usuario
-from services.security import obter_usuario_logado
+from services.security import (
+    obter_usuario_logado,
+    exigir_perfil,
+    gerar_hash
+)
 
 router = APIRouter(
     prefix="/usuarios",
@@ -34,18 +38,22 @@ def buscar_usuario(
     return usuario
 
 @router.post("/")
-@router.post("/")
 def criar_usuario(
     usuario: UsuarioCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN","VETERINARIO"]
+        )
     ),
+
     db: Session = Depends(get_db)
 ):
     novo_usuario = Usuario(
         nome=usuario.nome,
         email=usuario.email,
-        senha_hash=usuario.senha_hash,
+        senha_hash=gerar_hash(
+           usuario.senha_hash
+        ),
         perfil=usuario.perfil,
         ativo=True
     )
@@ -64,8 +72,10 @@ def criar_usuario(
 @router.delete("/{usuario_id}")
 def excluir_usuario(
     usuario_id: int,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN","VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -91,8 +101,10 @@ def excluir_usuario(
 def atualizar_usuario(
     usuario_id: int,
     usuario: UsuarioCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN","VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):

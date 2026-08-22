@@ -3,7 +3,6 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 from database.database import get_db
 from models.usuario import Usuario
-from schemas.auth import LoginRequest
 from fastapi.security import OAuth2PasswordRequestForm
 from services.security import (
     verificar_senha,
@@ -44,9 +43,10 @@ def login(
 
     token = criar_token(
         {
-            "sub": str(usuario.id)
+            "sub": str(usuario.id),
+            "perfil": usuario.perfil
         }
-    )
+)
 
     return {
         "access_token": token,

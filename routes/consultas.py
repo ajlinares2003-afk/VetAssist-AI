@@ -7,7 +7,8 @@ from models.animais import Animal
 from schemas.consulta import ConsultaCreate
 from datetime import datetime
 from services.security import (
-    obter_usuario_logado
+    obter_usuario_logado,
+    exigir_perfil
 )
 
 router = APIRouter(
@@ -25,8 +26,10 @@ def listar_consultas(
 @router.post("/")
 def criar_consulta(
     consulta: ConsultaCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -65,13 +68,15 @@ def criar_consulta(
 def atualizar_consulta(
     consulta_id: int,
     consulta: ConsultaCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
 
-    consulta = (
+    consulta_db = (
         db.query(Consulta)
         .filter(Consulta.id == consulta_id)
         .first()
@@ -102,8 +107,10 @@ def atualizar_consulta(
 @router.delete("/{consulta_id}")
 def excluir_consulta(
     consulta_id: int,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):

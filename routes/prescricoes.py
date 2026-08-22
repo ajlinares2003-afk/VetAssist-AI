@@ -5,8 +5,10 @@ from database.database import get_db
 from models.prescricao import Prescricao
 from models.consulta import Consulta
 from schemas.prescricao import PrescricaoCreate
-from services.security import obter_usuario_logado
-
+from services.security import (
+    obter_usuario_logado,
+    exigir_perfil
+)
 router = APIRouter(
     prefix="/prescricoes",
     tags=["Prescrições"]
@@ -68,8 +70,10 @@ def buscar_prescricao(
 def atualizar_prescricao(
     prescricao_id: int,
     prescricao: PrescricaoCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -97,8 +101,10 @@ def atualizar_prescricao(
 @router.delete("/{prescricao_id}")
 def excluir_prescricao(
     prescricao_id: int,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):

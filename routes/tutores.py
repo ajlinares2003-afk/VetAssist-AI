@@ -4,7 +4,10 @@ from sqlalchemy.orm import Session
 from schemas.tutor import TutorCreate
 from database.database import get_db
 from models.tutor import Tutor
-from services.security import obter_usuario_logado
+from services.security import (
+    obter_usuario_logado,
+    exigir_perfil
+)
 
 router = APIRouter(
     prefix="/tutores",
@@ -25,8 +28,14 @@ def listar_tutores(
 @router.post("/")
 def criar_tutor(
     tutor: TutorCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            [
+                "ADMIN",
+                "VETERINARIO",
+                "RECEPCAO"
+            ]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -63,8 +72,14 @@ def buscar_tutor(
 @router.delete("/{tutor_id}")
 def excluir_tutor(
     tutor_id: int,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            [
+            "ADMIN",
+            "VETERINARIO",
+            "RECEPCAO"
+            ]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -90,8 +105,14 @@ def excluir_tutor(
 def atualizar_tutor(
     tutor_id: int,
     tutor: TutorCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            [
+            "ADMIN",
+            "VETERINARIO",
+            "RECEPCAO"
+            ]
+        )
     ),
     db: Session = Depends(get_db)
 ):

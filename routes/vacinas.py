@@ -5,7 +5,10 @@ from database.database import get_db
 from models.vacina import Vacina
 from models.animais import Animal
 from schemas.vacina import VacinaCreate
-from services.security import obter_usuario_logado
+from services.security import (
+    obter_usuario_logado,
+    exigir_perfil
+)
 
 router = APIRouter(
     prefix="/vacinas",
@@ -22,8 +25,10 @@ def listar_vacinas(
 @router.post("/")
 def criar_vacina(
     vacina: VacinaCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -70,8 +75,10 @@ def buscar_vacina(
 def atualizar_vacina(
     vacina_id: int,
     vacina: VacinaCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -100,8 +107,10 @@ def atualizar_vacina(
 @router.delete("/{vacina_id}")
 def excluir_vacina(
     vacina_id: int,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):

@@ -5,7 +5,10 @@ from database.database import get_db
 from models.exame import Exame
 from models.consulta import Consulta
 from schemas.exame import ExameCreate
-from services.security import obter_usuario_logado
+from services.security import (
+    obter_usuario_logado,
+    exigir_perfil
+)
 
 router = APIRouter(
     prefix="/exames",
@@ -23,8 +26,10 @@ def listar_exames(
 @router.post("/")
 def criar_exame(
     exame: ExameCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -72,8 +77,10 @@ def buscar_exame(
 def atualizar_exame(
     exame_id: int,
     exame: ExameCreate,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
     db: Session = Depends(get_db)
 ):
@@ -104,10 +111,12 @@ def atualizar_exame(
 @router.delete("/{exame_id}")
 def excluir_exame(
     exame_id: int,
-    usuario_logado: str = Depends(
-        obter_usuario_logado
+    usuario_logado = Depends(
+        exigir_perfil(
+            ["ADMIN", "VETERINARIO"]
+        )
     ),
-    db: Session = Depends(get_db)
+db: Session = Depends(get_db)
 ):
     exame = (
         db.query(Exame)
