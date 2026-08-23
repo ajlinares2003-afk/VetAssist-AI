@@ -1,0 +1,19 @@
+def test_listar_exames(
+    client,
+    token_admin
+):
+    headers = {
+        "Authorization": f"Bearer {token_admin}"
+    }
+
+    response = client.get(
+        "/exames/",
+        headers=headers
+    )
+
+    assert response.status_code == 200
+
+    assert isinstance(
+        response.json(),
+        list
+    )
