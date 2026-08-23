@@ -141,7 +141,7 @@ def excluir_exame(
             ["ADMIN", "VETERINARIO"]
         )
     ),
-db: Session = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     exame = (
         db.query(Exame)

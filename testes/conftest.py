@@ -15,6 +15,21 @@ def client():
 
 
 @pytest.fixture
+def token_admin(client):
+
+    response = client.post(
+        "/auth/login",
+        data={
+            "username": "adilson@email.com",
+            "password": "123456"
+        }
+    )
+
+    assert response.status_code == 200
+
+    return response.json()["access_token"]
+
+@pytest.fixture
 def token_recepcao(client):
 
     response = client.post(

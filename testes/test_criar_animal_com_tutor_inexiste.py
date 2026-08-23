@@ -1,10 +1,10 @@
 def test_criar_animal_com_tutor_inexistente(
     client,
-    token
+    token_recepcao
 ):
 
     headers = {
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {token_recepcao}"
     }
 
     response = client.post(

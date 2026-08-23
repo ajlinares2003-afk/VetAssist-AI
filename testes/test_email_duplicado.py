@@ -1,7 +1,7 @@
-def test_email_duplicado(client, token):
+def test_email_duplicado(client, token_admin):
 
     headers = {
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {token_admin}"
     }
 
     response = client.post(
