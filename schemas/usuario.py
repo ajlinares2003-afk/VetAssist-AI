@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict
 class UsuarioCreate(BaseModel):
     nome: str
     email: str
-    senha_hash: str
+    senha: str
     perfil: str
 
 

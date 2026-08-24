@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from routes.usuarios import router as usuarios_router
 from routes.tutores import router as tutores_router
 from routes.animais import router as animais_router
@@ -14,6 +15,17 @@ app = FastAPI(
     title="VetAssist AI",
     version="0.1.0"
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(usuarios_router)
 app.include_router(tutores_router)
 app.include_router(animais_router)

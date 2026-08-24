@@ -74,7 +74,7 @@ def criar_usuario(
         nome=usuario.nome,
         email=usuario.email,
         senha_hash=gerar_hash(
-            usuario.senha_hash
+            usuario.senha
         ),
         perfil=usuario.perfil,
          ativo=True
@@ -172,7 +172,7 @@ def atualizar_usuario(
 
     usuario_db.email = usuario.email
     usuario_db.senha_hash = gerar_hash(
-        usuario.senha_hash
+        usuario.senha
     )
     usuario_db.perfil = usuario.perfil
 
