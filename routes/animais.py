@@ -23,7 +23,11 @@ def listar_animais(
     ),
     db: Session = Depends(get_db)
 ):
-    animais = db.query(Animal).all()
+    animais = (
+        db.query(Animal)
+        .order_by(Animal.id.desc())
+        .all()
+    )
 
     return animais
 
