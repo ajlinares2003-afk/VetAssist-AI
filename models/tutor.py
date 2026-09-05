@@ -11,6 +11,7 @@ class Tutor(Base):
     __tablename__ = "tutor"
 
     id = Column(BigInteger, primary_key=True, index=True)
+    codigo = Column(String(20), unique=True, index=True, nullable=True) # <- NOVO CAMPO
     nome = Column(String(150), nullable=False)
     cpf = Column(String(14), nullable=False)
     telefone = Column(String(20), nullable=False)

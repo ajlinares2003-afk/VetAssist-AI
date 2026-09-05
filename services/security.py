@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 
 SECRET_KEY = "vetassist-secret-key"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = 480
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/auth/login"

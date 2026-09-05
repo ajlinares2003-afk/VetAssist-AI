@@ -1,6 +1,8 @@
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Optional
 
 class AnimalCreate(BaseModel):
+    codigo: Optional[str] = None  # Opcional na criação
     nome: str = Field(..., min_length=1)
     especie: str
     raca: str = Field(..., min_length=1)
@@ -13,6 +15,7 @@ class AnimalCreate(BaseModel):
 
 class AnimalResponse(BaseModel):
     id: int
+    codigo: Optional[str] = None  # Retornado para o Frontend
     nome: str
     especie: str
     raca: str

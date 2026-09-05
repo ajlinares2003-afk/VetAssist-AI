@@ -1,8 +1,7 @@
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from schemas.animais import AnimalCreate
+from sqlalchemy.exc import IntegrityError
+from schemas.animais import AnimalCreate, AnimalResponse
 from database.database import get_db
 from models.animais import Animal
 from models.tutor import Tutor
@@ -18,9 +17,7 @@ router = APIRouter(
 
 @router.get("/")
 def listar_animais(
-    usuario_logado: str = Depends(
-        obter_usuario_logado
-    ),
+    usuario_logado: str = Depends(obter_usuario_logado),
     db: Session = Depends(get_db)
 ):
     animais = (
@@ -28,39 +25,30 @@ def listar_animais(
         .order_by(Animal.id.desc())
         .all()
     )
-
     return animais
 
 @router.post("/")
 def criar_animal(
     animal: AnimalCreate,
     usuario_logado = Depends(
-        exigir_perfil(
-            [
-                "ADMIN",
-                "VETERINARIO",
-                "RECEPCAO"
-            ]
-        )
+        exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])
     ),
     db: Session = Depends(get_db)
 ):
-
     tutor = (
         db.query(Tutor)
-        .filter(
-            Tutor.id == animal.tutor_id
-        )
+        .filter(Tutor.id == animal.tutor_id)
         .first()
     )
 
     if not tutor:
         raise HTTPException(
             status_code=404,
-            detail="Tutor nao encontrado"
+            detail="Tutor não encontrado."
         )
 
     novo_animal = Animal(
+        codigo=animal.codigo,  # Aceita código manual caso enviado
         nome=animal.nome,
         especie=animal.especie,
         raca=animal.raca,
@@ -72,14 +60,16 @@ def criar_animal(
     )
 
     db.add(novo_animal)
+    db.flush()  # Gera o ID no banco sem fechar a transação
+
+    # Se não foi informado código manual, gera no padrão PET-0001
+    if not novo_animal.codigo:
+        novo_animal.codigo = f"PET-{novo_animal.id:04d}"
+
     db.commit()
     db.refresh(novo_animal)
 
-    return {
-        "id": novo_animal.id,
-        "nome": novo_animal.nome,
-        "tutor_id": novo_animal.tutor_id
-    }
+    return novo_animal
 
 @router.get("/{animal_id}")
 def buscar_animal(
@@ -95,7 +85,7 @@ def buscar_animal(
     if not animal:
         raise HTTPException(
             status_code=404,
-            detail="Animal nao encontrado"
+            detail="Animal não encontrado."
         )
 
     return animal
@@ -104,13 +94,7 @@ def buscar_animal(
 def excluir_animal(
     animal_id: int,
     usuario_logado = Depends(
-        exigir_perfil(
-            [
-                "ADMIN",
-                "VETERINARIO",
-                "RECEPCAO"
-            ]
-        )
+        exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])
     ),
     db: Session = Depends(get_db)
 ):
@@ -123,28 +107,27 @@ def excluir_animal(
     if not animal:
         raise HTTPException(
             status_code=404,
-            detail="Animal nao encontrado"
+            detail="Animal não encontrado."
         )
 
-    db.delete(animal)
-    db.commit()
+    try:
+        db.delete(animal)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não é possível excluir o animal pois existem consultas, vacinas ou prescrições associadas a ele. Altere o status para INATIVO."
+        )
 
-    return {
-        "mensagem": "Animal excluido com sucesso"
-    }
+    return {"mensagem": "Animal excluído com sucesso."}
 
 @router.put("/{animal_id}")
 def atualizar_animal(
     animal_id: int,
     animal: AnimalCreate,
     usuario_logado = Depends(
-        exigir_perfil(
-            [
-                "ADMIN",
-                "VETERINARIO",
-                "RECEPCAO"
-            ]
-        )
+        exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])
     ),
     db: Session = Depends(get_db)
 ):
@@ -157,36 +140,54 @@ def atualizar_animal(
     if not animal_db:
         raise HTTPException(
             status_code=404,
-            detail="Animal nao encontrado"
+            detail="Animal não encontrado."
         )
 
     tutor = (
         db.query(Tutor)
-        .filter(
-            Tutor.id == animal.tutor_id
-        )
+        .filter(Tutor.id == animal.tutor_id)
         .first()
     )
     
     if not tutor:
         raise HTTPException(
             status_code=404,
-            detail="Tutor nao encontrado"
+            detail="Tutor não encontrado."
         )
 
-    animal_db.nome = animal.nome
-    animal_db.especie = animal.especie
-    animal_db.raca = animal.raca
-    animal_db.sexo = animal.sexo
-    animal_db.idade = animal.idade
-    animal_db.peso = animal.peso
-    animal_db.tutor_id = animal.tutor_id
+    # Verifica manualmente se o novo código já está em uso por OUTRO animal
+    if animal.codigo and animal.codigo != animal_db.codigo:
+        codigo_existente = (
+            db.query(Animal)
+            .filter(Animal.codigo == animal.codigo, Animal.id != animal_id)
+            .first()
+        )
+        if codigo_existente:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"O código '{animal.codigo}' já está em uso por outro animal ({codigo_existente.nome})."
+            )
 
-    db.commit()
-    db.refresh(animal_db)
+    try:
+        if animal.codigo:
+            animal_db.codigo = animal.codigo
 
-    return {
-        "id": animal_db.id,
-        "nome": animal_db.nome,
-        "tutor_id": animal_db.tutor_id
-    }
+        animal_db.nome = animal.nome
+        animal_db.especie = animal.especie
+        animal_db.raca = animal.raca
+        animal_db.sexo = animal.sexo
+        animal_db.idade = animal.idade
+        animal_db.peso = animal.peso
+        animal_db.tutor_id = animal.tutor_id
+        animal_db.status = animal.status
+
+        db.commit()
+        db.refresh(animal_db)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"O código '{animal.codigo}' já cadastrado no sistema."
+        )
+
+    return animal_db

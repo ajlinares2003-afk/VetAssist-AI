@@ -8,13 +8,15 @@ from sqlalchemy import Date
 from sqlalchemy import ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-
 from database.database import Base
 
 class Animal(Base):
     __tablename__ = "animal"
 
     id = Column(BigInteger, primary_key=True, index=True)
+    
+    # Campo para o código único do cadastro (ex: PET-0001)
+    codigo = Column(String(20), unique=True, index=True, nullable=True)
 
     nome = Column(String(100), nullable=False)
     especie = Column(String(50), nullable=False)

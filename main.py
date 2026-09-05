@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from database.database import engine, Base
+
 from routes.usuarios import router as usuarios_router
 from routes.tutores import router as tutores_router
 from routes.animais import router as animais_router
@@ -16,10 +19,27 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# Cria as tabelas que ainda não existem no banco de dados
+Base.metadata.create_all(bind=engine)
+
+# Remove a restrição NOT NULL das colunas vitais e adiciona a coluna parecer_copiloto
+with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE consulta ALTER COLUMN frequencia_respiratoria DROP NOT NULL;"))
+        conn.execute(text("ALTER TABLE consulta ALTER COLUMN frequencia_cardiaca DROP NOT NULL;"))
+        conn.execute(text("ALTER TABLE consulta ALTER COLUMN temperatura DROP NOT NULL;"))
+        conn.execute(text("ALTER TABLE consulta ALTER COLUMN peso_atendimento DROP NOT NULL;"))
+        conn.execute(text("ALTER TABLE consulta ADD COLUMN IF NOT EXISTS parecer_copiloto TEXT;"))
+        conn.commit()
+        print("✅ Restrições de banco atualizadas e coluna parecer_copiloto verificada!")
+    except Exception as e:
+        print(f"⚠️ Nota sobre atualizações de banco: {e}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
