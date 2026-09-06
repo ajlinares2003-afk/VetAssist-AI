@@ -10,6 +10,7 @@ from models.vacina import Vacina
 from models.prescricao import Prescricao
 
 from google import genai
+from dotenv import load_dotenv
 
 router = APIRouter(
     prefix="/prontuarios",
@@ -19,7 +20,9 @@ router = APIRouter(
 # Inicializa o cliente da SDK Google GenAI
 # Recomendado: Defina a variável de ambiente GOOGLE_API_KEY no seu sistema/terminal.
 # Se preferir colar direto, substitua 'SUA_CHAVE_API_GEMINI_AQUI' pela sua chave da API.
-GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyC_L7s_WWjK5M7jE-Sn0UvTmiPl3XUlYrQ")
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 

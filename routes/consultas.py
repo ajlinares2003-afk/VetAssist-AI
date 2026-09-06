@@ -1,9 +1,8 @@
 import os
-import time
 import shutil
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from PIL import Image
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
@@ -16,6 +15,7 @@ from schemas.consulta import ConsultaCreate, ConsultaUpdate
 from services.security import obter_usuario_logado, exigir_perfil
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
 
 router = APIRouter(
     prefix="/consultas",
@@ -26,8 +26,9 @@ router = APIRouter(
 UPLOADS_DIR = Path("uploads/exames")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Chave de API do projeto VetAssist AI - Dev 2
-GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY", "AQ.Ab8RN6LMpUCrpnzurot52-2VsxNS4alZS1xAGanNbmVnkkJqzw")
+# Chave de API e cliente oficial do Gemini
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
@@ -117,6 +118,22 @@ async def gerar_sugestoes_copiloto_multimodal(
     2. 🖼️ / 🧪 **Análise do Exame Anexado (se fornecido)**:
     3. 🔍 **Hipóteses Diagnósticas Diferenciais**:
     4. 📋 **Plano Terapêutico & Próximos Passos Sugeridos**:
+
+    AO FINAL DA SUA RESPOSTA, inclua OBRIGATORIAMENTE um bloco de código JSON isolado e válido contendo a lista das prescrições de uso domiciliar (pós-alta) recomendadas especificamente para este caso.
+
+    Siga estritamente esta estrutura JSON (preenchendo com os medicamentos, doses e posologias calculadas para este diagnóstico):
+
+    ```json
+    [
+      {{
+        "medicamento": "Nome do Medicamento e Apresentação Comercial/Concentração",
+        "dosagem": "Dose calculada em mg/kg ou quantidade por tomada",
+        "frequencia": "Intervalo (ex: A cada 12 horas / BID)",
+        "duracao": "Tempo de tratamento (ex: Por 7 dias)",
+        "observacoes": "Instruções de administração para o tutor"
+      }}
+    ]
+    ```
     """
 
     contents = [prompt_texto]
@@ -142,7 +159,6 @@ async def gerar_sugestoes_copiloto_multimodal(
         )
         contents.append(part)
 
-    # Nome exato do modelo oficial Gemini 3.6
     modelo_nome = "gemini-3.6-flash"
 
     try:
@@ -203,7 +219,21 @@ def gerar_sugestoes_copiloto(
     3. 🧪 **Plano Diagnóstico Sugerido**:
     4. ⚠️ **Pontos de Atenção na Semiologia & Alertas**:
 
-    Responda de forma direta, técnica, estruturada e objetiva.
+    AO FINAL DA SUA RESPOSTA, inclua OBRIGATORIAMENTE um bloco de código JSON isolado e válido contendo a lista das prescrições de uso domiciliar (pós-alta) recomendadas especificamente para este caso.
+
+    Siga estritamente esta estrutura JSON:
+
+    ```json
+    [
+      {{
+        "medicamento": "Nome do Medicamento e Apresentação Comercial/Concentração",
+        "dosagem": "Dose calculada em mg/kg ou quantidade por tomada",
+        "frequencia": "Intervalo (ex: A cada 12 horas / BID)",
+        "duracao": "Tempo de tratamento (ex: Por 7 dias)",
+        "observacoes": "Instruções de administração para o tutor"
+      }}
+    ]
+    ```
     """
 
     modelo_nome = "gemini-3.6-flash"

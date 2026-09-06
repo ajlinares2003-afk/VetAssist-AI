@@ -13,6 +13,7 @@ from routes.prescricoes import router as prescricoes_router
 from routes.prontuarios import router as prontuarios_router
 from routes.dashboard import router as dashboard_router
 from routes.auth import router as auth_router
+from routes import triagem
 
 app = FastAPI(
     title="VetAssist AI",
@@ -56,6 +57,7 @@ app.include_router(prescricoes_router)
 app.include_router(prontuarios_router)
 app.include_router(dashboard_router)
 app.include_router(auth_router)
+app.include_router(triagem.router)
 
 @app.get("/")
 def home():
