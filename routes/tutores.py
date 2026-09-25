@@ -48,11 +48,17 @@ def criar_tutor(
             )
 
     novo_tutor = Tutor(
-        codigo=tutor.codigo,  # Aceita código manual caso enviado
+        codigo=tutor.codigo,
         nome=tutor.nome,
         cpf=tutor.cpf,
         telefone=tutor.telefone,
-        email=tutor.email
+        email=tutor.email,
+        cep=tutor.cep,
+        rua=tutor.rua,
+        complemento=tutor.complemento, # <-- Novo campo
+        bairro=tutor.bairro,
+        cidade=tutor.cidade,
+        estado=tutor.estado
     )
 
     try:
@@ -176,6 +182,12 @@ def atualizar_tutor(
     tutor_db.cpf = tutor.cpf
     tutor_db.telefone = tutor.telefone
     tutor_db.email = tutor.email
+    tutor_db.cep = tutor.cep
+    tutor_db.rua = tutor.rua
+    tutor_db.complemento = tutor.complemento
+    tutor_db.bairro = tutor.bairro
+    tutor_db.cidade = tutor.cidade
+    tutor_db.estado = tutor.estado
 
     try:
         db.commit()

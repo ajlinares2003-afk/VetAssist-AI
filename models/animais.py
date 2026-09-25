@@ -1,7 +1,6 @@
 from sqlalchemy import Column
 from sqlalchemy import BigInteger
 from sqlalchemy import String
-from sqlalchemy import Integer
 from sqlalchemy import DECIMAL
 from sqlalchemy import TIMESTAMP
 from sqlalchemy import Date
@@ -23,7 +22,7 @@ class Animal(Base):
     raca = Column(String(100))
     sexo = Column(String(20), nullable=False)
 
-    idade = Column(Integer)
+    idade = Column(DECIMAL(4, 1))
     peso = Column(DECIMAL(5, 2))
 
     tutor_id = Column(
@@ -53,9 +52,14 @@ class Animal(Base):
         back_populates="animal",
         cascade="all, delete"
     )
+    
     data_nascimento = Column(Date)
-    cor = Column(String(20))
+    cor = Column(String(50))     # Ajustado para 50 caracteres
     microchip = Column(String(100))
+    
+    # Novos campos integrados corretamente
+    castrado = Column(String(3), nullable=True)
+    porte = Column(String(20), nullable=True)
 
     status = Column(
         String(50),

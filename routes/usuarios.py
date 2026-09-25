@@ -1,11 +1,10 @@
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from schemas.usuario import UsuarioCreate
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from database.database import get_db
-from models.usuario import Usuario
+from models.usuario import Usuario, PerfilUsuarioEnum
+from schemas.usuario import UsuarioCreate
 from services.security import (
     obter_usuario_logado,
     exigir_perfil,
@@ -14,185 +13,177 @@ from services.security import (
 
 router = APIRouter(
     prefix="/usuarios",
-    tags=["Usuarios"]
+    tags=["Usuarios & Perfis"]
 )
+
 
 @router.get("/")
 def listar_usuarios(
-    usuario_logado: str = Depends(
-        obter_usuario_logado
-    ),
+    usuario_logado = Depends(exigir_perfil(["ADMIN", "RECEPCAO", "VETERINARIO", "TRIAGEM"])),
     db: Session = Depends(get_db)
 ):
-    usuarios = db.query(Usuario).all()
+    usuarios = db.query(Usuario).order_by(Usuario.id.asc()).all()
+    for u in usuarios:
+        u.senha_hash = None
     return usuarios
+
 
 @router.get("/{usuario_id}")
 def buscar_usuario(
     usuario_id: int,
+    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
     db: Session = Depends(get_db)
 ):
-    usuario = (
-        db.query(Usuario)
-        .filter(Usuario.id == usuario_id)
-        .first()
-    )
+    usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario:
         raise HTTPException(
             status_code=404,
-            detail="Usuario nao encontrado"
+            detail="Usuário não encontrado."
         )
+    usuario.senha_hash = None
     return usuario
+
 
 @router.post("/")
 def criar_usuario(
     usuario: UsuarioCreate,
-    usuario_logado = Depends(
-        exigir_perfil(
-            ["ADMIN","VETERINARIO"]
-        )
-    ),
-
+    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
     db: Session = Depends(get_db)
 ):
-
-    usuario_existente = (
-        db.query(Usuario)
-        .filter(
-            Usuario.email == usuario.email
-        )
-        .first()
-    )
-
+    email_limpo = usuario.email.strip().lower()
+    
+    usuario_existente = db.query(Usuario).filter(Usuario.email == email_limpo).first()
     if usuario_existente:
         raise HTTPException(
             status_code=409,
-            detail="Email ja cadastrado"
+            detail="Já existe um usuário cadastrado com este e-mail."
         )
 
-    novo_usuario = Usuario(
-        nome=usuario.nome,
-        email=usuario.email,
-        senha_hash=gerar_hash(
-            usuario.senha
-        ),
-        perfil=usuario.perfil,
-         ativo=True
-    )
-    
-    try:
+    # Trata conversão de perfil para String/Enum sem falhas
+    perfil_str = usuario.perfil.upper() if isinstance(usuario.perfil, str) else usuario.perfil.value
+    crmv_valor = getattr(usuario, 'crmv', None)
+    if crmv_valor and isinstance(crmv_valor, str):
+        crmv_valor = crmv_valor.strip() or None
 
+    try:
+        novo_usuario = Usuario(
+            nome=usuario.nome.strip(),
+            email=email_limpo,
+            senha_hash=gerar_hash(usuario.senha),
+            perfil=perfil_str,
+            crmv=crmv_valor if perfil_str == "VETERINARIO" else None,
+            ativo=True
+        )
         db.add(novo_usuario)
         db.commit()
         db.refresh(novo_usuario)
 
+        return {
+            "id": novo_usuario.id,
+            "nome": novo_usuario.nome,
+            "email": novo_usuario.email,
+            "perfil": str(novo_usuario.perfil),
+            "crmv": getattr(novo_usuario, 'crmv', None)
+        }
     except IntegrityError:
-
         db.rollback()
-
         raise HTTPException(
             status_code=409,
-            detail="Email ja cadastrado"
+            detail="Já existe um usuário cadastrado com este e-mail."
         )
-
-    return {
-        "id": novo_usuario.id,
-        "nome": novo_usuario.nome,
-        "email": novo_usuario.email,
-        "perfil": novo_usuario.perfil
-    }
-
-@router.delete("/{usuario_id}")
-def excluir_usuario(
-    usuario_id: int,
-    usuario_logado = Depends(
-        exigir_perfil(
-            ["ADMIN","VETERINARIO"]
-        )
-    ),
-    db: Session = Depends(get_db)
-):
-    usuario = (
-        db.query(Usuario)
-        .filter(Usuario.id == usuario_id)
-        .first()
-    )
-
-    if not usuario:
+    except SQLAlchemyError as err:
+        db.rollback()
         raise HTTPException(
-            status_code=404,
-            detail="Usuario nao encontrado"
+            status_code=400,
+            detail=f"Erro no banco de dados: {str(err.__cause__ or err)}"
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro interno no servidor: {str(e)}"
         )
 
-    db.delete(usuario)
-    db.commit()
-
-    return {
-        "mensagem": "Usuario excluido com sucesso"
-    }
 
 @router.put("/{usuario_id}")
 def atualizar_usuario(
     usuario_id: int,
     usuario: UsuarioCreate,
-    usuario_logado = Depends(
-        exigir_perfil(
-            ["ADMIN","VETERINARIO"]
-        )
-    ),
+    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
     db: Session = Depends(get_db)
 ):
-    usuario_db = (
-        db.query(Usuario)
-        .filter(Usuario.id == usuario_id)
-        .first()
-    )
-
+    usuario_db = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario_db:
         raise HTTPException(
             status_code=404,
-            detail="Usuario nao encontrado"
+            detail="Usuário não encontrado."
         )
 
-    usuario_db.nome = usuario.nome
-    email_existente = (
-        db.query(Usuario)
-        .filter(
-            Usuario.email == usuario.email,
-            Usuario.id != usuario_id
-        )
-        .first()
-    )
+    email_limpo = usuario.email.strip().lower()
+    email_existente = db.query(Usuario).filter(
+        Usuario.email == email_limpo,
+        Usuario.id != usuario_id
+    ).first()
 
     if email_existente:
         raise HTTPException(
             status_code=409,
-            detail="Email ja cadastrado"
+            detail="Já existe outro usuário cadastrado com este e-mail."
         )
 
-    usuario_db.email = usuario.email
-    usuario_db.senha_hash = gerar_hash(
-        usuario.senha
-    )
-    usuario_db.perfil = usuario.perfil
+    perfil_str = usuario.perfil.upper() if isinstance(usuario.perfil, str) else usuario.perfil.value
+    crmv_valor = getattr(usuario, 'crmv', None)
+    if crmv_valor and isinstance(crmv_valor, str):
+        crmv_valor = crmv_valor.strip() or None
+
+    usuario_db.nome = usuario.nome.strip()
+    usuario_db.email = email_limpo
+    if usuario.senha and usuario.senha.strip():
+        usuario_db.senha_hash = gerar_hash(usuario.senha)
+    usuario_db.perfil = perfil_str
+    usuario_db.crmv = crmv_valor if perfil_str == "VETERINARIO" else None
 
     try:
-
         db.commit()
         db.refresh(usuario_db)
-
     except IntegrityError:
-
         db.rollback()
-
         raise HTTPException(
             status_code=409,
-            detail="Email ja cadastrado"
+            detail="Já existe outro usuário cadastrado com este e-mail."
+        )
+    except SQLAlchemyError as err:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Erro ao atualizar no banco: {str(err.__cause__ or err)}"
         )
 
     return {
         "id": usuario_db.id,
         "nome": usuario_db.nome,
         "email": usuario_db.email,
-        "perfil": usuario_db.perfil
+        "perfil": str(usuario_db.perfil),
+        "crmv": getattr(usuario_db, 'crmv', None)
+    }
+
+
+@router.delete("/{usuario_id}")
+def excluir_usuario(
+    usuario_id: int,
+    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
+    db: Session = Depends(get_db)
+):
+    usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
+    if not usuario:
+        raise HTTPException(
+            status_code=404,
+            detail="Usuário não encontrado."
+        )
+
+    db.delete(usuario)
+    db.commit()
+
+    return {
+        "mensagem": "Usuário excluído com sucesso."
     }

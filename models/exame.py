@@ -28,7 +28,7 @@ class Exame(Base):
     )
 
     nome_exame = Column(
-        String(150),
+        Text, 
         nullable=False
     )
 

@@ -1,0 +1,23 @@
+OK - 1 - Incluir endereço no cadastro de tutores, checar ou calcular os últimos dois dígitos do CPF.
+OK - 2 - Em cadastro de Animais Incluir a informação se o animal é castrado sim ou não, cor, e porte (pequeno/médio/grande.
+OK - 3 - Na tela de check-in (recepção) ocultar também a coluna Temperatura, e Ações, incluir botão editar e excluir.
+OK - 4 - No campo Veterinário responsável não mostrar usuário com perfil de Administrador, somente perfil de Veterinário.
+Ok - 5 - Em atendimento criar um campo chamado principais suspeita gerada pela IA.
+ok - 5.1 - Verificar exames desnecessário em novos atendimentos, 
+5.2 - Erro ao excluir Controle de Vacinação
+?? 6 - Em atendimento ao clicar no Analisar atendimento + Exames, poderia também além informar a necessidade cirúrgica, informar a necessidade internação.
+7 - Em internação no campo Motivo da Internação / Diagnóstico poderia já sair o motivo da internação gerada pela IA na tela atendimento.
+8 - Nos pedidos de exame informar o preparo para os exames, Ex. Necessário Jejum de 8h e etc.
+9 - No menu mudar para ordem cronológica de atendimento. 1. Dashboard 2.Tutores 3.Animais 4. Checkin 5. Internação / UTI 6. Financeiro & Caixa.
+10 - verificar pq não puxa os dados da triagem, somente perfil de veterinário
+ok - 11 - Corrigir as ordens dos exames do mais recente para o mais antigo.
+
+<MdLocalHospital size={22} color={indicacaoCirurgia ? "#d97706" : "#64748b"} />
+<MdPrint size={18} style={{ flexShrink: 0 }} /> Imprimir / PDF
+
+
+Senha: Banco de dados na Nuvem
+*** Muito Importante Não pode esquecer: MatheusLinares98
+postgresql://postgres:[MatheusLinares98]@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
+
+

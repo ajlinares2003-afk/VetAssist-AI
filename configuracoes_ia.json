@@ -1,0 +1,5 @@
+{
+    "groq_model_1": "openai/gpt-oss-120b",
+    "groq_model_2": "qwen/qwen3.8-27b",
+    "gemini_model": "gemini-3.6-flash"
+}
