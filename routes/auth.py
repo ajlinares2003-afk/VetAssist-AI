@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from database.database import get_db
 from models.usuario import Usuario
 from services.security import (
@@ -15,15 +15,27 @@ router = APIRouter(
 )
 
 class LoginSchema(BaseModel):
-    email: str
-    senha: str
+    email: str | None = None
+    senha: str | None = None
+    username: str | None = None
+    password: str | None = None
 
 @router.post("/login")
 def login(
     dados: LoginSchema,
     db: Session = Depends(get_db)
 ):
-    email_limpo = dados.email.strip().lower()
+    # Aceita tanto email/senha quanto username/password do frontend
+    email_input = dados.email or dados.username
+    senha_input = dados.senha or dados.password
+
+    if not email_input or not senha_input:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="E-mail/usuário e senha são obrigatórios"
+        )
+
+    email_limpo = email_input.strip().lower()
     
     usuario = (
         db.query(Usuario)
@@ -31,22 +43,14 @@ def login(
         .first()
     )
 
-    if not usuario:
+    if not usuario or not verificar_senha(senha_input, usuario.senha_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="E-mail ou senha incorretos"
         )
 
-    if not verificar_senha(dados.senha, usuario.senha_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="E-mail ou senha incorretos"
-        )
-
-    # Garante a extração correta da string do Enum de perfil
     perfil_str = usuario.perfil.value if hasattr(usuario.perfil, "value") else str(usuario.perfil)
 
-    # Cria o token contendo o ID e o Perfil do usuário
     token = criar_token(
         {
             "sub": str(usuario.id),
@@ -55,7 +59,6 @@ def login(
         }
     )
 
-    # Retorna o token e os dados do usuário para o frontend salvar no localStorage
     return {
         "access_token": token,
         "token_type": "bearer",
