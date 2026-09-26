@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from database.database import engine, Base
 
-# 1. IMPORTA PRIMEIRO OS MODELOS BASE NECESSÁRIOS (ANIMAL)
+# 1. IMPORTA PRIMEIRO OS MODELOS BASE NECESSÁRIOS
 from models.animais import Animal
 from models.usuario import Usuario
 from models.agendamento import Agendamento
@@ -34,10 +34,14 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# Cria as tabelas que ainda não existem no banco de dados
-Base.metadata.create_all(bind=engine)
+# 1. GARANTE A CRIAÇÃO DE TODAS AS TABELAS NO SUPABASE PRIMEIRO
+try:
+    Base.metadata.create_all(bind=engine)
+    print("✅ Todas as tabelas foram criadas/verificadas com sucesso no banco de dados!")
+except Exception as e:
+    print(f"⚠️ Erro ao criar tabelas: {e}")
 
-# Remove a restrição NOT NULL das colunas vitais e adiciona a coluna parecer_copiloto
+# 2. APLICA AJUSTES OPCIONAIS DE COLUNAS DE FORMA ISOLADA
 with engine.connect() as conn:
     try:
         conn.execute(text("ALTER TABLE consulta ALTER COLUMN frequencia_respiratoria DROP NOT NULL;"))
@@ -48,7 +52,8 @@ with engine.connect() as conn:
         conn.commit()
         print("✅ Restrições de banco atualizadas e coluna parecer_copiloto verificada!")
     except Exception as e:
-        print(f"⚠️ Nota sobre atualizações de banco: {e}")
+        conn.rollback()
+        print(f"⚠️ Nota sobre atualizações de colunas: {e}")
 
 app.add_middleware(
     CORSMiddleware,
