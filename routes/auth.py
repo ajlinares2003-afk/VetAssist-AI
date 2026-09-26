@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel, EmailStr
 from database.database import get_db
 from models.usuario import Usuario
 from services.security import (
@@ -14,27 +14,33 @@ router = APIRouter(
     tags=["Autenticação"]
 )
 
+class LoginSchema(BaseModel):
+    email: str
+    senha: str
+
 @router.post("/login")
 def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+    dados: LoginSchema,
     db: Session = Depends(get_db)
 ):
+    email_limpo = dados.email.strip().lower()
+    
     usuario = (
         db.query(Usuario)
-        .filter(Usuario.email == form_data.username)
+        .filter(Usuario.email == email_limpo)
         .first()
     )
 
     if not usuario:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciais inválidas"
+            detail="E-mail ou senha incorretos"
         )
 
-    if not verificar_senha(form_data.password, usuario.senha_hash):
+    if not verificar_senha(dados.senha, usuario.senha_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciais inválidas"
+            detail="E-mail ou senha incorretos"
         )
 
     # Garante a extração correta da string do Enum de perfil
