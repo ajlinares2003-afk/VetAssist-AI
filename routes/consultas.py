@@ -9,7 +9,8 @@ from PIL import Image
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from database.database import get_db
+from sqlalchemy import text
+from database.database import get_db, SessionLocal
 from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario  
@@ -32,24 +33,36 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 load_dotenv()
 
-# Configuração de todas as chaves de IA
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client_groq = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
-GEMINI_API_KEY_PRIMARY = os.getenv("GEMINI_API_KEY_PRIMARY")
-GEMINI_API_KEY_SECONDARY = os.getenv("GEMINI_API_KEY_SECONDARY")
-GEMINI_API_KEY_TERTIARY = os.getenv("GEMINI_API_KEY_TERTIARY")
-GEMINI_API_KEY_QUATERNARY = os.getenv("GEMINI_API_KEY_QUATERNARY")
-
-chaves_gemini = [
-    GEMINI_API_KEY_PRIMARY, 
-    GEMINI_API_KEY_SECONDARY, 
-    GEMINI_API_KEY_TERTIARY, 
-    GEMINI_API_KEY_QUATERNARY
-]
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client_openai = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
+    db = SessionLocal()
+    try:
+        if "groq" in provedor_desejado:
+            chave_nome = "groq_api_key_2" if "2" in provedor_desejado else "groq_api_key_1"
+            modelo_chave = "groq_model_2" if "2" in provedor_desejado else "groq_model_1"
+            
+            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = :c"), {"c": modelo_chave}).fetchone()
+            r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = :c"), {"c": chave_nome}).fetchone()
+            
+            modelo = r_mod[0] if r_mod and r_mod[0] else ("qwen/qwen3.8-27b" if "2" in provedor_desejado else "openai/gpt-oss-120b")
+            key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
+            api_key = key_db or os.getenv("GROQ_API_KEY")
+            
+            client = Groq(api_key=api_key) if api_key else None
+            return "groq", client, modelo
+        else:
+            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
+            r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_api_key'")).fetchone()
+            
+            modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.6-flash"
+            key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
+            api_key = key_db or os.getenv("GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
+            
+            return "gemini", api_key, modelo
+    finally:
+        db.close()
 
 class ConsultaCreate(BaseModel):
     codigo: Optional[str] = None
@@ -228,12 +241,13 @@ async def gerar_sugestoes_copiloto_multimodal(
     texto_resp = ""
     provedor_usado = ""
 
-    # 1. Tenta a Groq via SDK Oficial
-    if client_groq:
+    # 1. Tenta a Groq (Modelo 1 configurado)
+    prov_g1, client_g1, mod_g1 = obter_config_ia_dinamica("groq_1")
+    if client_g1:
         try:
-            print("🚀 Acionando motor via GROQ (SDK Oficial - Qwen 3.8 27B)...")
-            response_groq = client_groq.chat.completions.create(
-                model="qwen/qwen3.8-27b",
+            print(f"🚀 Acionando motor via GROQ 1 ({mod_g1})...")
+            response_groq = client_g1.chat.completions.create(
+                model=mod_g1,
                 messages=[
                     {"role": "system", "content": "Você é o Copiloto Clínico de Inteligência Artificial do VetAssist AI."},
                     {"role": "user", "content": prompt_texto}
@@ -244,37 +258,56 @@ async def gerar_sugestoes_copiloto_multimodal(
             texto_resp = response_groq.choices[0].message.content
             if texto_resp:
                 sucesso = True
-                provedor_usado = "Groq (Qwen 3.8)"
+                provedor_usado = f"Groq ({mod_g1})"
         except Exception as e:
-            print(f"⚠️ Erro Groq: {e}")
+            print(f"⚠️ Erro Groq 1: {e}")
 
-    # 2. Se a Groq falhar, testa sequencialmente as 4 chaves do Gemini
+    # 2. Se falhar, tenta a Groq (Modelo 2 configurado)
     if not sucesso:
-        for idx, chave in enumerate(chaves_gemini):
-            if not chave:
-                continue
+        prov_g2, client_g2, mod_g2 = obter_config_ia_dinamica("groq_2")
+        if client_g2:
             try:
-                print(f"🔄 Tentando Gemini (Chave {idx+1})...")
-                temp_client = genai.Client(api_key=chave)
+                print(f"🚀 Acionando motor via GROQ 2 ({mod_g2})...")
+                response_groq = client_g2.chat.completions.create(
+                    model=mod_g2,
+                    messages=[
+                        {"role": "system", "content": "Você é o Copiloto Clínico de Inteligência Artificial do VetAssist AI."},
+                        {"role": "user", "content": prompt_texto}
+                    ],
+                    max_tokens=2500,
+                    temperature=0.1
+                )
+                texto_resp = response_groq.choices[0].message.content
+                if texto_resp:
+                    sucesso = True
+                    provedor_usado = f"Groq ({mod_g2})"
+            except Exception as e:
+                print(f"⚠️ Erro Groq 2: {e}")
+
+    # 3. Se a Groq falhar, tenta o Gemini dinâmico
+    if not sucesso:
+        _, api_key_gemini, mod_gemini = obter_config_ia_dinamica("gemini")
+        if api_key_gemini:
+            try:
+                print(f"🔄 Tentando Gemini dinâmico ({mod_gemini})...")
+                temp_client = genai.Client(api_key=api_key_gemini)
                 contents = [prompt_texto]
                 if file_bytes and not base64_image:
                     contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
 
                 response = temp_client.models.generate_content(
-                    model="gemini-3.6-flash",
+                    model=mod_gemini,
                     contents=contents,
                     config=config_geracao,
                 )
                 if response and response.text:
                     texto_resp = response.text
                     sucesso = True
-                    provedor_usado = f"Gemini (Chave {idx+1})"
-                    break
+                    provedor_usado = f"Gemini ({mod_gemini})"
             except Exception as e:
-                print(f"⚠️ Gemini Chave {idx+1} falhou: {str(e)}")
-                continue
+                print(f"⚠️ Erro Gemini dinâmico: {str(e)}")
 
-    # 3. Se o Gemini falhar em todas as chaves, tenta a OpenAI
+    # 4. Fallback final OpenAI
     if not sucesso and client_openai:
         try:
             print("🌐 Acionando fallback OpenAI...")
@@ -291,9 +324,7 @@ async def gerar_sugestoes_copiloto_multimodal(
         except Exception as e:
             print(f"⚠️ Erro OpenAI: {e}")
 
-    # 4. Tratamento sem Contingência Mockada
     if not sucesso or not texto_resp:
-        print("❌ Todos os provedores/chaves de IA falharam. Lançando HTTPException...")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="⚠️ Os serviços de IA estão temporariamente indisponíveis (limite de cota ou sobrecarga). Por favor, tente novamente em alguns instantes."
@@ -351,14 +382,8 @@ def sugerir_classificacao_asa(
         "observacoes_pos": ""
     }
 
-# =========================================================================
-# ROTA PÚBLICA DO PAINEL (POSICIONADA ANTES DE /{consulta_id})
-# =========================================================================
 @router.get("/painel-chamadas")
-def listar_chamadas_painel(
-    db: Session = Depends(get_db)
-):
-    # Traz atendimentos ativos ordenando primeiro quem está Em Triagem / Em Atendimento
+def listar_chamadas_painel(db: Session = Depends(get_db)):
     consultas_ativas = db.query(Consulta).filter(
         Consulta.status.in_([
             "Aguardando Triagem (Recepção)",
@@ -369,7 +394,6 @@ def listar_chamadas_painel(
             "Em Vacinação"
         ])
     ).order_by(
-        # Prioriza no topo quem está em chamada ativa
         Consulta.status.in_(["Em Triagem", "Em Atendimento"]).desc(),
         Consulta.id.desc()
     ).limit(10).all()
@@ -386,7 +410,6 @@ def listar_chamadas_painel(
             elif hasattr(animal, 'tutor_nome') and animal.tutor_nome:
                 nome_tutor = animal.tutor_nome
 
-        # Define o local/sala baseado na etapa
         if c.status == "Em Triagem":
             sala_atribuida = "Sala de Triagem"
             etapa = "🩺 Triagem"
@@ -410,9 +433,6 @@ def listar_chamadas_painel(
 
     return resultado
 
-# =========================================================================
-# ROTA SINCRONIZADA DA FILA DE TRIAGEM
-# =========================================================================
 @router.get("/fila-triagem")
 def listar_fila_triagem(
     db: Session = Depends(get_db),
@@ -445,9 +465,6 @@ def listar_fila_triagem(
         })
     return resultado
 
-# =========================================================================
-# ROTAS GERAIS E DINÂMICAS DE CONSULTA
-# =========================================================================
 @router.get("/")
 def listar_consultas(
     usuario_logado: str = Depends(obter_usuario_logado),
