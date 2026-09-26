@@ -22,6 +22,9 @@ pwd_context = CryptContext(
 def gerar_hash(
     senha: str
 ):
+    # Garante que a senha não excede o limite de 72 bytes do bcrypt
+    if isinstance(senha, str):
+        senha = senha.encode('utf-8')[:72].decode('utf-8', errors='ignore')
     return pwd_context.hash(senha)
 
 def verificar_senha(
