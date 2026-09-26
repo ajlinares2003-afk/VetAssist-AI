@@ -47,7 +47,6 @@ def buscar_usuario(
 @router.post("/")
 def criar_usuario(
     usuario: UsuarioCreate,
-    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
     db: Session = Depends(get_db)
 ):
     email_limpo = usuario.email.strip().lower()
