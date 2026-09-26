@@ -1,4 +1,5 @@
 from pydantic import BaseModel, ConfigDict
+from typing import Optional
 
 
 class UsuarioCreate(BaseModel):
@@ -6,6 +7,7 @@ class UsuarioCreate(BaseModel):
     email: str
     senha: str
     perfil: str
+    crmv: Optional[str] = None
 
 
 class UsuarioResponse(BaseModel):
@@ -13,6 +15,7 @@ class UsuarioResponse(BaseModel):
     nome: str
     email: str
     perfil: str
+    crmv: Optional[str] = None
 
     model_config = ConfigDict(
         from_attributes=True
