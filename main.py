@@ -3,14 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from database.database import engine, Base
 
-# 1. IMPORTA PRIMEIRO OS MODELOS BASE NECESSÁRIOS
-from models.animais import Animal
+# IMPORTAÇÃO DE TODOS OS MODELOS PARA O SQLALCHEMY RECONHECER E CRIAR AS TABELAS
 from models.usuario import Usuario
+from models.tutor import Tutor
+from models.animais import Animal
 from models.agendamento import Agendamento
-from models.configuracao import Base
-
-# 2. DEPOIS IMPORTA O MODELO DEPENDENTE
+from models.configuracao import ConfiguracaoSistema
+from models.consulta import Consulta
 from models.prontuario import ProntuarioSalvo
+from models.vacina import Vacina
+from models.exame import Exame
+from models.prescricao import Prescricao, ItemPrescricao
+from models.triagem import Triagem
+from models.internacao import Internacao, EvolucaoInternacao
+from models.financeiro import TransacaoFinanceira
+from models.cirurgia import Cirurgia
 
 from routes.usuarios import router as usuarios_router
 from routes.tutores import router as tutores_router
