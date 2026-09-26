@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from database.database import engine, Base
 
-# IMPORTAÇÃO DE TODOS OS MODELOS PARA O SQLALCHEMY RECONHECER E CRIAR AS TABELAS
+# IMPORTAÇÃO DE TODOS OS MODELOS VÁLIDOS PARA CRIAR AS TABELAS NO SUPABASE
 from models.usuario import Usuario
 from models.tutor import Tutor
 from models.animais import Animal
@@ -17,7 +17,6 @@ from models.prescricao import Prescricao, ItemPrescricao
 from models.triagem import Triagem
 from models.internacao import Internacao, EvolucaoInternacao
 from models.financeiro import TransacaoFinanceira
-from models.cirurgia import Cirurgia
 
 from routes.usuarios import router as usuarios_router
 from routes.tutores import router as tutores_router
