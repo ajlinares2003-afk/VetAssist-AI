@@ -47,7 +47,6 @@ def buscar_usuario(
 @router.post("/")
 def criar_usuario(
     usuario: UsuarioCreate,
-    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
     db: Session = Depends(get_db)
 ):
     email_limpo = usuario.email.strip().lower()
@@ -59,7 +58,6 @@ def criar_usuario(
             detail="Já existe um usuário cadastrado com este e-mail."
         )
 
-    # Trata conversão de perfil para String/Enum sem falhas
     perfil_str = usuario.perfil.upper() if isinstance(usuario.perfil, str) else usuario.perfil.value
     crmv_valor = getattr(usuario, 'crmv', None)
     if crmv_valor and isinstance(crmv_valor, str):
