@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from database.database import get_db
+from database.database import get_db, SessionLocal
 from models.tutor import Tutor
 from models.animais import Animal
 from models.consulta import Consulta
@@ -26,8 +26,32 @@ router = APIRouter(
     tags=["Dashboard"]
 )
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client_groq = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
+    db = SessionLocal()
+    try:
+        if "groq" in provedor_desejado:
+            chave_nome = "groq_api_key_2" if "2" in provedor_desejado else "groq_api_key_1"
+            modelo_chave = "groq_model_2" if "2" in provedor_desejado else "groq_model_1"
+            
+            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = :c"), {"c": modelo_chave}).fetchone()
+            r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = :c"), {"c": chave_nome}).fetchone()
+            
+            modelo = r_mod[0] if r_mod and r_mod[0] else ("qwen/qwen3.8-27b" if "2" in provedor_desejado else "openai/gpt-oss-120b")
+            key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
+            api_key = key_db or os.getenv("GROQ_API_KEY")
+            
+            client = Groq(api_key=api_key) if api_key else None
+            return client, modelo
+        else:
+            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
+            r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_api_key'")).fetchone()
+            
+            modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.6-flash"
+            key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
+            api_key = key_db or os.getenv("GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
+            return api_key, modelo
+    finally:
+        db.close()
 
 
 class ResumoDiaRequest(BaseModel):
@@ -46,11 +70,9 @@ def obter_metricas_dashboard(
 ):
     hoje = date.today()
 
-    # 1. Totais Clínicos Globais
     total_pacientes = db.query(Animal).count()
     consultas_hoje = db.query(Consulta).filter(func.date(Consulta.data_consulta) == hoje).count()
     
-    # 2. Agendamentos de Hoje
     agendamentos_hoje_query = db.query(Agendamento).filter(func.date(Agendamento.data_horario) == hoje).order_by(Agendamento.data_horario.asc()).all()
     total_agendamentos = len(agendamentos_hoje_query)
 
@@ -75,7 +97,6 @@ def obter_metricas_dashboard(
             "status": ag.status
         })
 
-    # 3. Ocupação da UTI / Internação
     leitos_totais = 10
     internados = db.query(Internacao).filter(Internacao.status == "INTERNADO").all()
     total_internados = len(internados)
@@ -83,7 +104,6 @@ def obter_metricas_dashboard(
     taxa_ocupacao = round((total_internados / leitos_totais) * 100, 1) if leitos_totais > 0 else 0
     leitos_disponiveis = max(0, leitos_totais - total_internados)
 
-    # 4. Lista de Pacientes em Leito Ativo
     pacientes_criticos = []
     for i in internados:
         animal = db.query(Animal).filter(Animal.id == i.animal_id).first()
@@ -102,7 +122,6 @@ def obter_metricas_dashboard(
 
     criticos_count = sum(1 for p in pacientes_criticos if p["nivel_criticidade"] in ["ALTO", "CRÍTICO", "EMERGÊNCIA"])
 
-    # 5. Distribuição da Fila de Triagem por Nível de Prioridade
     consultas_agendadas = db.query(Consulta).filter(Consulta.status.in_(["AGENDADA", "EM_ATENDIMENTO", "Aguardando Triagem (Recepção)"])).all()
     
     triagem_prioridades = {
@@ -123,7 +142,6 @@ def obter_metricas_dashboard(
         else:
             triagem_prioridades["NAO_URGENTE"] += 1
 
-    # 6. Histórico de Atendimentos nos Últimos 7 Dias
     historico_7_dias = []
     dias_semana_map = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
     for d in range(6, -1, -1):
@@ -179,10 +197,11 @@ def gerar_resumo_do_dia(
     - Escreva de 2 a 3 frases em Português, de forma profissional e direta.
     """
 
-    if client_groq:
+    client_g1, mod_g1 = obter_config_ia_dinamica("groq_1")
+    if client_g1:
         try:
-            res = client_groq.chat.completions.create(
-                model="qwen/qwen3.8-27b",
+            res = client_g1.chat.completions.create(
+                model=mod_g1,
                 messages=[{"role": "user", "content": prompt_resumo}],
                 max_tokens=220,
                 temperature=0.3
@@ -214,10 +233,11 @@ def assistente_ia_resposta(
     Responda em no máximo 3 frases concisas e diretas em Português.
     """
 
-    if client_groq:
+    client_g1, mod_g1 = obter_config_ia_dinamica("groq_1")
+    if client_g1:
         try:
-            res = client_groq.chat.completions.create(
-                model="qwen/qwen3.8-27b",
+            res = client_g1.chat.completions.create(
+                model=mod_g1,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=250,
                 temperature=0.2
