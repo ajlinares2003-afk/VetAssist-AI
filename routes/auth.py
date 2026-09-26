@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from database.database import get_db
 from models.usuario import Usuario
 from services.security import (
@@ -14,28 +14,12 @@ router = APIRouter(
     tags=["Autenticação"]
 )
 
-class LoginSchema(BaseModel):
-    email: str | None = None
-    senha: str | None = None
-    username: str | None = None
-    password: str | None = None
-
 @router.post("/login")
 def login(
-    dados: LoginSchema,
+    form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    # Aceita tanto email/senha quanto username/password do frontend
-    email_input = dados.email or dados.username
-    senha_input = dados.senha or dados.password
-
-    if not email_input or not senha_input:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="E-mail/usuário e senha são obrigatórios"
-        )
-
-    email_limpo = email_input.strip().lower()
+    email_limpo = form_data.username.strip().lower()
     
     usuario = (
         db.query(Usuario)
@@ -43,7 +27,7 @@ def login(
         .first()
     )
 
-    if not usuario or not verificar_senha(senha_input, usuario.senha_hash):
+    if not usuario or not verificar_senha(form_data.password, usuario.senha_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="E-mail ou senha incorretos"
