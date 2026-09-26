@@ -71,22 +71,21 @@ def testar_modelo_ia(payload: dict):
     modelo = str(payload.get("modelo", ""))
     db = SessionLocal()
     try:
-        if provedor == "groq_1":
-            api_key = obter_chave_armazenada(db, "groq_api_key_1", "GROQ_API_KEY")
-            client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=api_key)
+        if "groq" in provedor:
+            # Seleciona a chave correta com base no modelo ou no campo enviado
+            chave_nome = "groq_api_key_2" if ("qwen" in modelo.lower() or "2" in provedor) else "groq_api_key_1"
+            api_key = obter_chave_armazenada(db, chave_nome, "GROQ_API_KEY")
+            
+            client = OpenAI(
+                base_url="https://api.groq.com/openai/v1",
+                api_key=api_key
+            )
             completion = client.chat.completions.create(
                 model=modelo,
                 messages=[{"role": "user", "content": "Responda apenas: 'Conexao bem sucedida!'"}]
             )
             return {"sucesso": True, "resposta": completion.choices[0].message.content}
-        elif provedor == "groq_2":
-            api_key = obter_chave_armazenada(db, "groq_api_key_2", "GROQ_API_KEY")
-            client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=api_key)
-            completion = client.chat.completions.create(
-                model=modelo,
-                messages=[{"role": "user", "content": "Responda apenas: 'Conexao bem sucedida!'"}]
-            )
-            return {"sucesso": True, "resposta": completion.choices[0].message.content}
+            
         elif provedor == "gemini":
             api_key = obter_chave_armazenada(db, "gemini_api_key", "GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
             genai.configure(api_key=api_key)
