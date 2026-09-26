@@ -1,7 +1,7 @@
 from datetime import datetime, UTC
 from datetime import timedelta
 from jose import jwt
-from passlib.context import CryptContext
+import bcrypt
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi.security import OAuth2PasswordBearer
@@ -14,27 +14,23 @@ oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/auth/login"
 )
 
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto"
-)
-
-def gerar_hash(
-    senha: str
-):
-    # Garante que a senha não excede o limite de 72 bytes do bcrypt
+def gerar_hash(senha: str) -> str:
+    # Garante o limite de 72 bytes do bcrypt e gera o hash de forma segura
     if isinstance(senha, str):
-        senha = senha.encode('utf-8')[:72].decode('utf-8', errors='ignore')
-    return pwd_context.hash(senha)
+        senha_bytes = senha.encode('utf-8')[:72]
+    else:
+        senha_bytes = str(senha).encode('utf-8')[:72]
+    
+    hashed = bcrypt.hashpw(senha_bytes, bcrypt.gensalt())
+    return hashed.decode('utf-8')
 
-def verificar_senha(
-    senha,
-    senha_hash
-):
-    return pwd_context.verify(
-        senha,
-        senha_hash
-    )
+def verificar_senha(senha: str, senha_hash: str) -> bool:
+    try:
+        senha_bytes = senha.encode('utf-8')[:72]
+        hash_bytes = senha_hash.encode('utf-8')
+        return bcrypt.checkpw(senha_bytes, hash_bytes)
+    except Exception:
+        return False
 
 def criar_token(
     dados: dict
