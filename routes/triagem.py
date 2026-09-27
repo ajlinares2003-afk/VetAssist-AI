@@ -51,7 +51,7 @@ def listar_fila_triagem(
             "pet": animal.nome if animal else "Paciente",
             "especie": animal.especie if animal else "-",
             "queixa_principal": c.queixa_principal,
-            "peso_atendimento": c.peso_atendimento if hasattr(c, 'peso_atendimento') else getattr(c, 'peso', None),
+            "peso_atendimento": getattr(c, 'peso_atendimento', None),
             "temperatura": c.temperatura,
             "frequencia_cardiaca": c.frequencia_cardiaca,
             "frequencia_respiratoria": c.frequencia_respiratoria,
@@ -75,5 +75,14 @@ def criar_triagem(
     consulta.frequencia_cardiaca = triagem.frequencia_cardiaca
     consulta.frequencia_respiratoria = triagem.frequencia_respiratoria
     
+    if triagem.peso is not None:
+        if hasattr(consulta, 'peso_atendimento'):
+            consulta.peso_atendimento = triagem.peso
+        
+        # Opcional: Atualiza também o peso oficial do animal se desejar
+        animal = db.query(Animal).filter(Animal.id == consulta.animal_id).first()
+        if animal and hasattr(animal, 'peso'):
+            animal.peso = triagem.peso
+
     db.commit()
     return {"mensagem": "Triagem concluída com sucesso!"}

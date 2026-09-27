@@ -137,6 +137,21 @@ def chamar_paciente_consulta(
     db.refresh(consulta_db)
     return {"mensagem": "Paciente chamado com sucesso!", "status": consulta_db.status}
 
+@router.put("/{consulta_id}/iniciar-triagem")
+def iniciar_triagem_consulta(
+    consulta_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    consulta_db = db.query(Consulta).filter(Consulta.id == consulta_id).first()
+    if not consulta_db:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    
+    consulta_db.status = "Em Triagem"
+    db.commit()
+    db.refresh(consulta_db)
+    return {"mensagem": "Triagem iniciada com sucesso!", "status": consulta_db.status}
+
 @router.get("/painel-chamadas")
 def listar_chamadas_painel(db: Session = Depends(get_db)):
     consultas_ativas = db.query(Consulta).filter(
