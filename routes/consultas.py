@@ -122,6 +122,21 @@ async def upload_anexo_exame(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo: {str(e)}")
 
+@router.put("/{consulta_id}/chamar")
+def chamar_paciente_consulta(
+    consulta_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    consulta_db = db.query(Consulta).filter(Consulta.id == consulta_id).first()
+    if not consulta_db:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    
+    consulta_db.status = "Chamando para Triagem"
+    db.commit()
+    db.refresh(consulta_db)
+    return {"mensagem": "Paciente chamado com sucesso!", "status": consulta_db.status}
+
 @router.get("/painel-chamadas")
 def listar_chamadas_painel(db: Session = Depends(get_db)):
     consultas_ativas = db.query(Consulta).filter(
