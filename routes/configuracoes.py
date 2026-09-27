@@ -3,7 +3,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import os
 import traceback
-import google.generativeai as genai
+from google import genai
 from openai import OpenAI
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
@@ -52,7 +52,6 @@ def atualizar_configuracoes_ia(payload: dict):
     try:
         for chave, valor in payload.items():
             if valor is not None:
-                # Se for chave mascarada, não sobrescrevemos a original se não foi alterada
                 if "api_key" in str(chave) and str(valor).startswith("****"):
                     continue
                 db.execute(text("DELETE FROM configuracoes_sistema WHERE chave = :c"), {"c": str(chave)})
@@ -72,7 +71,6 @@ def testar_modelo_ia(payload: dict):
     db = SessionLocal()
     try:
         if "groq" in provedor:
-            # Seleciona a chave correta com base no modelo ou no campo enviado
             chave_nome = "groq_api_key_2" if ("qwen" in modelo.lower() or "2" in provedor) else "groq_api_key_1"
             api_key = obter_chave_armazenada(db, chave_nome, "GROQ_API_KEY")
             
@@ -88,9 +86,13 @@ def testar_modelo_ia(payload: dict):
             
         elif provedor == "gemini":
             api_key = obter_chave_armazenada(db, "gemini_api_key", "GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(modelo)
-            response = model.generate_content("Responda apenas: 'Conexao bem sucedida!'")
+            
+            # Utiliza o cliente atualizado da biblioteca google-genai
+            client_gemini = genai.Client(api_key=api_key)
+            response = client_gemini.models.generate_content(
+                model=modelo,
+                contents="Responda apenas: 'Conexao bem sucedida!'"
+            )
             return {"sucesso": True, "resposta": response.text}
         else:
             return {"sucesso": False, "erro": "Provedor desconhecido"}
