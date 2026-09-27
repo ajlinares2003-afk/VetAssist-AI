@@ -33,7 +33,7 @@ class CheckinTriagemDiretaCreate(BaseModel):
     frequencia_cardiaca: Optional[int] = None
     frequencia_respiratoria: Optional[int] = None
     tpc_segundos: Optional[int] = None
-    mucosas: Optional[str] = "Normocoradas"  # <-- Novo campo adicionado
+    mucosas: Optional[str] = "Normocoradas"
     desidratacao_percentual: Optional[int] = None
     justificativa_risco: Optional[str] = None
 
@@ -46,7 +46,41 @@ class AvaliacaoIaTriagemRequest(BaseModel):
     frequencia_cardiaca: Optional[int] = None
     frequencia_respiratoria: Optional[int] = None
     tpc_segundos: Optional[int] = None
-    mucosas: Optional[str] = "Normocoradas"  # <-- Novo campo adicionado
+    mucosas: Optional[str] = "Normocoradas"
+
+
+@router.get("/fila-triagem")
+def listar_fila_triagem(
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    consultas_aguardando = db.query(Consulta).filter(
+        Consulta.status.in_([
+            "AGUARDANDO_TRIAGEM",
+            "Aguardando Triagem (Recepção)",
+            "Aguardando Triagem",
+            "AGUARDANDO_VACINA",
+            "Aguardando Vacina"
+        ])
+    ).order_by(Consulta.id.asc()).all()
+
+    resultado = []
+    for c in consultas_aguardando:
+        animal = db.query(Animal).filter(Animal.id == c.animal_id).first()
+        resultado.append({
+            "id": c.id,
+            "codigo": c.codigo or f"CNS-{c.id:04d}",
+            "animal_id": c.animal_id,
+            "pet": animal.nome if animal else "Paciente",
+            "especie": animal.especie if animal else "-",
+            "queixa_principal": c.queixa_principal,
+            "peso_atendimento": c.peso_atendimento if hasattr(c, 'peso_atendimento') else getattr(c, 'peso', None),
+            "temperatura": c.temperatura,
+            "frequencia_cardiaca": c.frequencia_cardiaca,
+            "frequencia_respiratoria": c.frequencia_respiratoria,
+            "status": c.status
+        })
+    return resultado
 
 
 @router.post("/avaliar-ia")
@@ -55,14 +89,12 @@ def avaliar_triagem_com_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    # 1. Identifica a espécie real do animal no banco de dados
     especie_paciente = dados.especie or "Felino"
     if dados.animal_id:
         animal = db.query(Animal).filter(Animal.id == dados.animal_id).first()
         if animal and animal.especie:
             especie_paciente = animal.especie
 
-    # 2. Prompt especializado incluindo TPC e Mucosas
     prompt_triagem = f"""
     Você é o Assistente Especialista em Triagem Clínica Veterinária do sistema VetAssist AI (Protocolo Manchester).
     Sua tarefa é avaliar os sinais vitais e a mucosa do paciente da espécie: {especie_paciente}.
@@ -72,7 +104,7 @@ def avaliar_triagem_com_ia(
     - Frequência Cardíaca (FC): 120 a 180 bpm para felinos / 70 a 140 bpm para cães
     - Frequência Respiratória (FR): 20 a 30 mpm
     - TPC: <= 2 segundos (Normal)
-    - Mucosas: Normocoradas / Rosadas (Normal). Mucosas pálidas, cianóticas ou icpéricas indicam urgência.
+    - Mucosas: Normocoradas / Rosadas (Normal). Mucosas pálidas, cianóticas ou ictericas indicam urgência.
 
     DADOS DO ATENDIMENTO ATUAL:
     - Espécie do Paciente: {especie_paciente}
@@ -113,7 +145,6 @@ def avaliar_triagem_com_ia(
         except Exception as e:
             print(f"Erro ao avaliar IA na Triagem: {e}")
 
-    # Fallback determinístico
     return {
         "classificacao_risco": "VERDE",
         "nivel_texto": "Pouco Urgente",
