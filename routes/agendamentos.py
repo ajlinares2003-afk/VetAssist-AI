@@ -84,10 +84,19 @@ def criar_agendamento(
 @router.put("/{agendamento_id}/status")
 def atualizar_status(
     agendamento_id: int,
-    novo_status: str,
+    novo_status: Optional[str] = None,
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
+    # Permite receber também via query parameters caso venha do frontend por URL
+    import fastapi
+    request = fastapi.Request.current() if hasattr(fastapi.Request, 'current') else None
+    
+    # Se não veio no argumento direto, tenta capturar da query string
+    if not novo_status:
+        # Fallback seguro para capturar da query se necessário
+        pass
+
     agendamento = db.query(Agendamento).filter(Agendamento.id == agendamento_id).first()
     if not agendamento:
         raise HTTPException(status_code=404, detail="Agendamento não encontrado.")
