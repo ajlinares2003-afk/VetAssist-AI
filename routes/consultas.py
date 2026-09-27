@@ -1,586 +1,613 @@
-import os
-import shutil
-import time
-import base64
-from io import BytesIO
-from pathlib import Path
-from typing import List, Optional
-from PIL import Image
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from database.database import get_db, SessionLocal
-from models.consulta import Consulta
-from models.animais import Animal
-from models.usuario import Usuario  
-from schemas.consulta import ConsultaUpdate
-from services.security import obter_usuario_logado, exigir_perfil
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
-from groq import Groq
-from openai import OpenAI
-from dotenv import load_dotenv
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { 
+  MdMedicalServices, 
+  MdAutoAwesome,
+  MdRefresh,
+  MdAddCircle,
+  MdClose,
+  MdCampaign
+} from "react-icons/md";
+import api from "../api/api";
+import Layout from "../components/Layout";
 
-router = APIRouter(
-    prefix="/consultas",
-    tags=["Consultas"]
-)
+const CORES_MANCHESTER = {
+  VERMELHO: { nome: "Emergência", bg: "#fee2e2", text: "#991b1b", border: "#fca5a5", badge: "🔴 0 min" },
+  LARANJA: { nome: "Muito Urgente", bg: "#ffedd5", text: "#c2410c", border: "#fdba74", badge: "🟠 10 min" },
+  AMARELO: { nome: "Urgente", bg: "#fef9c3", text: "#a16207", border: "#fde047", badge: "🟡 60 min" },
+  VERDE: { nome: "Pouco Urgente", bg: "#dcfce7", text: "#15803d", border: "#86efac", badge: "🟢 120 min" },
+  AZUL: { nome: "Não Urgente", bg: "#e0f2fe", text: "#0369a1", border: "#7dd3fc", badge: "🔵 240 min" },
+};
 
-UPLOADS_DIR = Path("uploads/exames")
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+function Triagem() {
+  const navigate = useNavigate();
 
-load_dotenv()
+  const [atendimentosPendentes, setAtendimentosPendentes] = useState([]);
+  const [animais, setAnimais] = useState([]);
+  const [atendimentoSelecionado, setAtendimentoSelecionado] = useState(null);
+  const [mostrarModalNovoCheckin, setMostrarModalNovoCheckin] = useState(false);
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client_openai = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+  // Form de sinais vitais / Check-in
+  const [animalIdDireto, setAnimalIdDireto] = useState("");
+  const [peso, setPeso] = useState("");
+  const [temperatura, setTemperatura] = useState("");
+  const [frequenciaCardiaca, setFrequenciaCardiaca] = useState("");
+  const [frequenciaRespiratoria, setFrequenciaRespiratoria] = useState("");
+  const [tpcSegundos, setTpcSegundos] = useState("");
+  const [mucosas, setMucosas] = useState("Normocoradas");
+  const [desidratacao, setDesidratacao] = useState("");
+  const [queixaPrincipal, setQueixaPrincipal] = useState("");
+  const [classificacaoRisco, setClassificacaoRisco] = useState("VERDE");
+  const [justificativa, setJustificativa] = useState("");
 
-def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
-    db = SessionLocal()
-    try:
-        if "groq" in provedor_desejado:
-            chave_nome = "groq_api_key_2" if "2" in provedor_desejado else "groq_api_key_1"
-            modelo_chave = "groq_model_2" if "2" in provedor_desejado else "groq_model_1"
-            
-            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = :c"), {"c": modelo_chave}).fetchone()
-            r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = :c"), {"c": chave_nome}).fetchone()
-            
-            modelo = r_mod[0] if r_mod and r_mod[0] else ("qwen/qwen3.8-27b" if "2" in provedor_desejado else "openai/gpt-oss-120b")
-            key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
-            api_key = key_db or os.getenv("GROQ_API_KEY")
-            
-            client = Groq(api_key=api_key) if api_key else None
-            return "groq", client, modelo
-        else:
-            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
-            r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_api_key'")).fetchone()
-            
-            modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.6-flash"
-            key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
-            api_key = key_db or os.getenv("GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
-            
-            return "gemini", api_key, modelo
-    finally:
-        db.close()
+  const [mensagem, setMensagem] = useState({ tipo: "", texto: "" });
+  const [carregando, setCarregando] = useState(false);
+  const [atualizandoSilencioso, setAtualizandoSilencioso] = useState(false);
 
-class ConsultaCreate(BaseModel):
-    codigo: Optional[str] = None
-    animal_id: int
-    usuario_id: Optional[int] = None
-    status: Optional[str] = "AGUARDANDO_TRIAGEM"
-    queixa_principal: Optional[str] = "Check-in de rotina / Recepção"
-    historico_clinico: Optional[str] = None
-    sintomas: Optional[str] = None
-    exame_fisico: Optional[str] = None
-    suspeita_diagnostica: Optional[str] = None
-    peso_atendimento: Optional[float] = None
-    temperatura: Optional[float] = None
-    frequencia_cardiaca: Optional[int] = None
-    frequencia_respiratoria: Optional[int] = None
-    parecer_copiloto: Optional[str] = None
-    observacoes: Optional[str] = None
-    indicacao_cirurgia: Optional[bool] = False
-    justificativa_cirurgica: Optional[str] = None
-    solicitar_exames_preventivos: Optional[bool] = False
+  useEffect(() => {
+    carregarDados(true);
 
-class CopilotoRequest(BaseModel):
-    animal_id: Optional[int] = None
-    especie: Optional[str] = "Não informada"
-    raca: Optional[str] = "SRD"
-    idade: Optional[str] = None
-    peso: Optional[str] = None
-    queixa_principal: str
-    sintomas: Optional[str] = None
-    exame_fisico: Optional[str] = None
-    temperatura: Optional[str] = None
-    frequencia_cardiaca: Optional[int] = None
-    frequencia_respiratoria: Optional[int] = None
+    const intervalo = setInterval(() => {
+      carregarDados(false);
+    }, 5000);
 
-class SugestaoAsaRequest(BaseModel):
-    queixa_principal: str
-    historico_clinico: Optional[str] = None
-    exame_fisico: Optional[str] = None
-    temperatura: Optional[float] = None
-    frequencia_cardiaca: Optional[int] = None
-    frequencia_respiratoria: Optional[int] = None
+    return () => clearInterval(intervalo);
+  }, []);
 
-@router.post("/upload-anexo")
-async def upload_anexo_exame(
-    file: UploadFile = File(...),
-    usuario_logado = Depends(obter_usuario_logado)
-):
-    try:
-        caminho_arquivo = UPLOADS_DIR / f"{file.filename}"
-        with open(caminho_arquivo, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        return {
-            "mensagem": "Arquivo enviado com sucesso!",
-            "nome_arquivo": file.filename,
-            "caminho": str(caminho_arquivo)
+  useEffect(() => {
+    if (atendimentoSelecionado || animalIdDireto) {
+      sugerirClassificacaoLocal();
+    }
+  }, [temperatura, frequenciaCardiaca, frequenciaRespiratoria, tpcSegundos, mucosas]);
+
+  const carregarDados = async (loaderPrincipal = false) => {
+    if (loaderPrincipal) {
+      setCarregando(true);
+    } else {
+      setAtualizandoSilencioso(true);
+    }
+
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) return navigate("/");
+
+      const config = { headers: { Authorization: `Bearer ${token}` } };
+
+      const [resFila, resAnimais] = await Promise.all([
+        api.get("/triagem/fila-triagem", config),
+        api.get("/animais/", config),
+      ]);
+
+      setAnimais(resAnimais.data || []);
+      setAtendimentosPendentes(resFila.data || []);
+    } catch (err) {
+      console.error("Erro ao carregar fila de triagem:", err);
+    } finally {
+      setCarregando(false);
+      setAtualizandoSilencioso(false);
+    }
+  };
+
+  const obterNomeAnimal = (animalId) => {
+    const a = animais.find((item) => item.id === animalId);
+    return a ? `${a.nome} (${a.codigo || `PET-${a.id}`})` : `-`;
+  };
+
+  const limparFormulario = () => {
+    setAnimalIdDireto("");
+    setPeso("");
+    setTemperatura("");
+    setFrequenciaCardiaca("");
+    setFrequenciaRespiratoria("");
+    setTpcSegundos("");
+    setMucosas("Normocoradas");
+    setDesidratacao("");
+    setQueixaPrincipal("");
+    setClassificacaoRisco("VERDE");
+    setJustificativa("");
+  };
+
+  const chamarPaciente = async (consulta, e) => {
+    e.stopPropagation();
+    try {
+      const token = localStorage.getItem("token");
+      await api.put(
+        `/consultas/${consulta.id}`,
+        { ...consulta, status: "Chamando para Triagem" },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setMensagem({ tipo: "sucesso", texto: `📢 Chamando ${obterNomeAnimal(consulta.animal_id)} no painel!` });
+      carregarDados(false);
+    } catch (err) {
+      console.error("Erro ao chamar paciente:", err);
+      setMensagem({ tipo: "erro", texto: "Erro ao emitir chamada para o paciente." });
+    }
+  };
+
+  const selecionarParaTriagem = async (consulta) => {
+    setAtendimentoSelecionado(consulta);
+    setQueixaPrincipal(consulta.queixa_principal || "");
+    setPeso(consulta.peso_atendimento || "");
+    setTemperatura(consulta.temperatura || "");
+    setFrequenciaCardiaca(consulta.frequencia_cardiaca || "");
+    setFrequenciaRespiratoria(consulta.frequencia_respiratoria || "");
+
+    // Atualiza o status para "Em Triagem" (para o som parar e mudar o painel)
+    try {
+      const token = localStorage.getItem("token");
+      await api.put(
+        `/consultas/${consulta.id}`,
+        { ...consulta, status: "Em Triagem" },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+    } catch (err) {
+      console.warn("Aviso ao atualizar status para Em Triagem:", err);
+    }
+  };
+
+  const sugerirClassificacaoLocal = () => {
+    const temp = parseFloat(temperatura);
+    const fc = parseInt(frequenciaCardiaca);
+    const fr = parseInt(frequenciaRespiratoria);
+    const tpc = parseInt(tpcSegundos);
+
+    if (temp > 40.5 || temp < 37.0 || fc > 220 || mucosas === "Cianóticas" || tpc > 3) {
+      setClassificacaoRisco("VERMELHO");
+      setJustificativa("Alteração severa de parâmetros vitais ou perfusão (Emergência imediata).");
+    } else if (temp >= 39.8 || temp <= 37.5 || fc > 180 || mucosas === "Hipocoradas / Pálidas") {
+      setClassificacaoRisco("LARANJA");
+      setJustificativa("Sinais vitais alterados com risco de descompensação.");
+    } else if (temp >= 39.3 || fc > 160) {
+      setClassificacaoRisco("AMARELO");
+      setJustificativa("Parâmetros moderadamente alterados.");
+    } else {
+      setClassificacaoRisco("VERDE");
+      setJustificativa("Sinais vitais, TPC e coloração de mucosas normais para a espécie.");
+    }
+  };
+
+  const sugerirClassificacaoIA = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const config = { headers: { Authorization: `Bearer ${token}` } };
+      
+      const animalAlvo = atendimentoSelecionado 
+        ? animais.find(a => a.id === atendimentoSelecionado.animal_id)
+        : animais.find(a => a.id === Number(animalIdDireto));
+
+      const payloadIA = {
+        animal_id: animalAlvo?.id || null,
+        especie: animalAlvo?.especie || "Felino",
+        queixa_principal: queixaPrincipal || "Consulta de rotina",
+        temperatura: temperatura ? parseFloat(temperatura) : null,
+        frequencia_cardiaca: frequenciaCardiaca ? parseInt(frequenciaCardiaca) : null,
+        frequencia_respiratoria: frequenciaRespiratoria ? parseInt(frequenciaRespiratoria) : null,
+        tpc_segundos: tpcSegundos ? parseInt(tpcSegundos) : null,
+        mucosas: mucosas || "Normocoradas"
+      };
+
+      const res = await api.post("/triagem/avaliar-ia", payloadIA, config);
+      if (res.data && res.data.classificacao_risco) {
+        setClassificacaoRisco(res.data.classificacao_risco);
+        setJustificativa(res.data.justificativa || "");
+        return;
+      }
+    } catch (err) {
+      console.warn("Aviso ao consultar IA na Triagem:", err);
+    }
+    sugerirClassificacaoLocal();
+  };
+
+  const salvarTriagemExistente = async () => {
+    if (!queixaPrincipal) {
+      setMensagem({ tipo: "erro", texto: "Informe a queixa principal do paciente." });
+      return;
+    }
+
+    try {
+      setCarregando(true);
+      const token = localStorage.getItem("token");
+      const config = { headers: { Authorization: `Bearer ${token}` } };
+
+      const animalIdAlvo = atendimentoSelecionado.animal_id;
+
+      if (animalIdAlvo && peso !== "" && peso !== null) {
+        const animalEncontrado = animais.find((a) => a.id === Number(animalIdAlvo));
+        if (animalEncontrado) {
+          try {
+            await api.put(
+              `/animais/${animalIdAlvo}`,
+              { ...animalEncontrado, peso: parseFloat(peso) },
+              config
+            );
+          } catch (errAnimal) {
+            console.warn("Aviso ao atualizar peso oficial:", errAnimal);
+          }
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo: {str(e)}")
+      }
 
-@router.post("/sugestoes-copiloto-multimodal")
-async def gerar_sugestoes_copiloto_multimodal(
-    queixa_principal: str = Form(...),
-    animal_id: Optional[int] = Form(None),
-    especie: Optional[str] = Form("Não informada"),
-    raca: Optional[str] = Form("SRD"),
-    idade: Optional[str] = Form(None),
-    peso: Optional[str] = Form(None),
-    sintomas: Optional[str] = Form(None),
-    exame_fisico: Optional[str] = Form(None),
-    temperatura: Optional[str] = Form(None),
-    frequencia_cardiaca: Optional[int] = Form(None),
-    frequencia_respiratoria: Optional[int] = Form(None),
-    solicitar_exames_preventivos: Optional[str] = Form("false"),
-    file: Optional[UploadFile] = File(None),
-    usuario_logado = Depends(obter_usuario_logado),
-    db: Session = Depends(get_db)
-):
-    if not queixa_principal or not queixa_principal.strip():
-        raise HTTPException(status_code=400, detail="A queixa principal é obrigatória para consultar o copiloto.")
+      const payload = {
+        consulta_id: atendimentoSelecionado.id,
+        peso: peso ? parseFloat(peso) : null,
+        temperatura: temperatura ? parseFloat(temperatura) : null,
+        frequencia_cardiaca: frequenciaCardiaca ? parseInt(frequenciaCardiaca) : null,
+        frequencia_respiratoria: frequenciaRespiratoria ? parseInt(frequenciaRespiratoria) : null,
+        tpc_segundos: tpcSegundos ? parseInt(tpcSegundos) : null,
+        mucosas: mucosas || "Normocoradas",
+        desidratacao_percentual: desidratacao ? parseInt(desidratacao) : null,
+        queixa_principal: queixaPrincipal,
+        classificacao_risco: classificacaoRisco,
+        justificativa_risco: justificativa,
+      };
 
-    if animal_id:
-        animal = db.query(Animal).filter(Animal.id == animal_id).first()
-        if animal:
-            especie = animal.especie or especie
-            raca = animal.raca or raca
-            idade = f"{animal.idade} anos" if animal.idade else idade
-            peso = f"{animal.peso} kg" if animal.peso else peso
+      await api.post("/triagem/", payload, config);
 
-    exames_desejados = str(solicitar_exames_preventivos).lower() == "true"
-    diretriz_exames = (
-        "O tutor SOLICITOU exames preventivos/check-up nesta visita. No plano diagnóstico, recomende explicitamente exames laboratoriais preventivos de rotina (como Hemograma Completo + Plaquetas e Ureia e Creatinina) para que o sistema possa listá-los."
-        if exames_desejados else
-        "O tutor NÃO solicitou exames preventivos (procedimento estritamente profilático/vacinação). Não recomende exames laboratoriais de rotina caso o paciente esteja hígido."
-    )
+      setMensagem({ tipo: "sucesso", texto: "✅ Triagem concluída com sucesso!" });
+      setAtendimentoSelecionado(null);
+      limparFormulario();
+      carregarDados(true);
+    } catch (err) {
+      setMensagem({ tipo: "erro", texto: `❌ ${err.response?.data?.detail || "Erro ao salvar triagem."}` });
+    } finally {
+      setCarregando(false);
+    }
+  };
 
-    prompt_texto = f"""
-    Você é o Copiloto Clínico de Inteligência Artificial do sistema VetAssist AI, especialista em Medicina Interna Veterinária, Diagnóstico por Imagem e Patologia Clínica.
-    Sua função é auxiliar o médico veterinário durante a consulta, fornecendo triagem rápida, hipóteses diagnósticas e interpretação de exames/imagens.
-
-    DADOS DO PACIENTE E ATENDIMENTO:
-    - Espécie: {especie}
-    - Raça: {raca}
-    - Idade: {idade or 'Não informada'}
-    - Peso: {peso or 'Não informado'}
-    - Queixa Principal: {queixa_principal}
-    - Sintomas / Histórico: {sintomas or 'Não informados'}
-    - Exame Físico: {exame_fisico or 'Não informado'}
-    - Sinais Vitais: Temp: {temperatura or '-'} °C | FC: {frequencia_cardiaca or '-'} bpm | FR: {frequencia_respiratoria or '-'} mpm
-    - DIRETRIZ SOBRE EXAMES: {diretriz_exames}
-
-    ORIENTAÇÕES SOBRE EXAMES E PRESCRIÇÕES:
-    1. Forneça um plano diagnóstico abrangente.
-    2. NÃO se limite a 2 ou 3 exames. Quando o quadro clínico ou a investigação exigir, recomende MAIS DE 5 EXAMES na lista (ex: Hemograma Completo + Plaquetas, Ureia e Creatinina, ALT e AST, Fosfatase Alcalina, Ultrassonografia Abdominal Total, Radiografia Torácica, Urinálise, Eletrolitograma, etc.).
-    3. Na lista de prescrições, inclua os medicamentos necessários para suporte, sintomáticos, antibioticoterapia ou analgesia.
-
-    ESTRUTURA DA RESPOSTA (seja direto, técnico, conciso e bem fundamentado):
-    1. 🚨 **Triagem & Nível de Urgência**:
-    2. 🖼️ / 🧪 **Análise do Exame Anexado (se fornecido)**:
-    3. 🔍 **Hipóteses Diagnósticas Diferenciais**:
-    4. 📋 **Plano Terapêutico & Próximos Passos Sugeridos**.
-
-    AO FINAL DA SUA RESPOSTA, inclua OBRIGATORIAMENTE um bloco de código JSON isolado e válido contendo a indicação cirúrgica, a suspeita diagnóstica principal, exames sugeridos e prescrições.
-
-    Siga estritamente esta estrutura JSON:
-    ```json
-    {{
-      "indicacao_cirurgia": false,
-      "justificativa_cirurgica": "Sem indicação cirúrgica.",
-      "suspeita_diagnostica": "Descreva a principal suspeita aqui",
-      "exames_sugeridos": [
-        "Hemograma Completo + Plaquetas",
-        "Ureia e Creatinina",
-        "ALT (TGP) e AST (TGO)",
-        "Fosfatase Alcalina (FA) e Gama GT",
-        "Ultrassonografia Abdominal Total",
-        "Urinálise Tipo I (EAS)",
-        "Eletrolitograma (Na, K, Cl)"
-      ],
-      "prescricoes": [
-        {{
-          "medicamento": "Nome do Medicamento",
-          "dosagem": "Dosagem",
-          "frequencia": "Frequência",
-          "duracao": "Duração",
-          "observacoes": "Observações"
-        }}
-      ]
-    }}
-    ```
-    """
-
-    file_bytes = None
-    mime_type = "image/jpeg"
-    base64_image = None
-
-    if file:
-        file_bytes = await file.read()
-        mime_type = file.content_type or "image/jpeg"
-        if mime_type.startswith("image/"):
-            try:
-                img = Image.open(BytesIO(file_bytes))
-                img.thumbnail((1024, 1024))
-                output_buffer = BytesIO()
-                img.save(output_buffer, format="JPEG", quality=80)
-                file_bytes = output_buffer.getvalue()
-                base64_image = base64.b64encode(file_bytes).decode("utf-8")
-            except Exception:
-                pass
-
-    config_geracao = types.GenerateContentConfig(
-        temperature=0.1,
-        max_output_tokens=2500
-    )
-
-    sucesso = False
-    texto_resp = ""
-    provedor_usado = ""
-
-    # 1. Tenta a Groq (Modelo 1 configurado)
-    prov_g1, client_g1, mod_g1 = obter_config_ia_dinamica("groq_1")
-    if client_g1:
-        try:
-            print(f"🚀 Acionando motor via GROQ 1 ({mod_g1})...")
-            response_groq = client_g1.chat.completions.create(
-                model=mod_g1,
-                messages=[
-                    {"role": "system", "content": "Você é o Copiloto Clínico de Inteligência Artificial do VetAssist AI."},
-                    {"role": "user", "content": prompt_texto}
-                ],
-                max_tokens=2500,
-                temperature=0.1
-            )
-            texto_resp = response_groq.choices[0].message.content
-            if texto_resp:
-                sucesso = True
-                provedor_usado = f"Groq ({mod_g1})"
-        except Exception as e:
-            print(f"⚠️ Erro Groq 1: {e}")
-
-    # 2. Se falhar, tenta a Groq (Modelo 2 configurado)
-    if not sucesso:
-        prov_g2, client_g2, mod_g2 = obter_config_ia_dinamica("groq_2")
-        if client_g2:
-            try:
-                print(f"🚀 Acionando motor via GROQ 2 ({mod_g2})...")
-                response_groq = client_g2.chat.completions.create(
-                    model=mod_g2,
-                    messages=[
-                        {"role": "system", "content": "Você é o Copiloto Clínico de Inteligência Artificial do VetAssist AI."},
-                        {"role": "user", "content": prompt_texto}
-                    ],
-                    max_tokens=2500,
-                    temperature=0.1
-                )
-                texto_resp = response_groq.choices[0].message.content
-                if texto_resp:
-                    sucesso = True
-                    provedor_usado = f"Groq ({mod_g2})"
-            except Exception as e:
-                print(f"⚠️ Erro Groq 2: {e}")
-
-    # 3. Se a Groq falhar, tenta o Gemini dinâmico
-    if not sucesso:
-        _, api_key_gemini, mod_gemini = obter_config_ia_dinamica("gemini")
-        if api_key_gemini:
-            try:
-                print(f"🔄 Tentando Gemini dinâmico ({mod_gemini})...")
-                temp_client = genai.Client(api_key=api_key_gemini)
-                contents = [prompt_texto]
-                if file_bytes and not base64_image:
-                    contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
-
-                response = temp_client.models.generate_content(
-                    model=mod_gemini,
-                    contents=contents,
-                    config=config_geracao,
-                )
-                if response and response.text:
-                    texto_resp = response.text
-                    sucesso = True
-                    provedor_usado = f"Gemini ({mod_gemini})"
-            except Exception as e:
-                print(f"⚠️ Erro Gemini dinâmico: {str(e)}")
-
-    # 4. Fallback final OpenAI
-    if not sucesso and client_openai:
-        try:
-            print("🌐 Acionando fallback OpenAI...")
-            response_openai = client_openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt_texto}],
-                max_tokens=2500,
-                temperature=0.1
-            )
-            texto_resp = response_openai.choices[0].message.content
-            if texto_resp:
-                sucesso = True
-                provedor_usado = "OpenAI"
-        except Exception as e:
-            print(f"⚠️ Erro OpenAI: {e}")
-
-    if not sucesso or not texto_resp:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="⚠️ Os serviços de IA estão temporariamente indisponíveis (limite de cota ou sobrecarga). Por favor, tente novamente em alguns instantes."
-        )
-
-    indicacao_ia = False
-    justificativa_ia = ""
-    suspeita_ia = ""
-    exames_sugeridos_ia = []
-
-    try:
-        import json
-        if "```json" in texto_resp:
-            bloco = texto_resp.split("```json")[1].split("```")[0].strip()
-            parsed = json.loads(bloco)
-            if isinstance(parsed, dict):
-                indicacao_ia = parsed.get("indicacao_cirurgia", False)
-                justificativa_ia = parsed.get("justificativa_cirurgica", "")
-                suspeita_ia = parsed.get("suspeita_diagnostica", "")
-                exames_sugeridos_ia = parsed.get("exames_sugeridos", [])
-    except Exception as e:
-        print(f"Aviso ao realizar parse do JSON da IA: {e}")
-
-    return {
-        "sugestoes": texto_resp,
-        "indicacao_cirurgia": indicacao_ia,
-        "justificativa_cirurgica": justificativa_ia,
-        "suspeita_diagnostica": suspeita_ia,
-        "exames_sugeridos": exames_sugeridos_ia,
-        "provedor": provedor_usado
+  const salvarCheckinETriagemDireta = async (e) => {
+    e.preventDefault();
+    if (!animalIdDireto || !queixaPrincipal) {
+      setMensagem({ tipo: "erro", texto: "Selecione o paciente e informe a queixa principal." });
+      return;
     }
 
-@router.post("/sugestoes-copiloto")
-def gerar_sugestoes_copiloto(
-    dados: CopilotoRequest,
-    usuario_logado = Depends(obter_usuario_logado),
-    db: Session = Depends(get_db)
-):
-    if not dados.queixa_principal or not dados.queixa_principal.strip():
-        raise HTTPException(status_code=400, detail="A queixa principal é obrigatória para consultar o copiloto.")
-    return {"sugestoes": "Utilize a análise multimodal na tela de atendimento."}
+    try {
+      setCarregando(true);
+      const token = localStorage.getItem("token");
+      const config = { headers: { Authorization: `Bearer ${token}` } };
 
-@router.post("/sugerir-asa")
-def sugerir_classificacao_asa(
-    dados: SugestaoAsaRequest,
-    usuario_logado = Depends(exigir_perfil(["ADMIN", "VETERINARIO"])),
-    db: Session = Depends(get_db)
-):
-    return {
-        "classificacao_asa": "ASA I - Paciente Saudável",
-        "justificativa": "Baseado nos parâmetros padrão.",
-        "indicacao_cirurgia": False,
-        "justificativa_cirurgica": "",
-        "descricao_tecnica": "",
-        "observacoes_pos": ""
+      const payload = {
+        animal_id: Number(animalIdDireto),
+        queixa_principal: queixaPrincipal,
+        classificacao_risco: classificacaoRisco,
+        peso: peso ? parseFloat(peso) : null,
+        temperatura: temperatura ? parseFloat(temperatura) : null,
+        frequencia_cardiaca: frequenciaCardiaca ? parseInt(frequenciaCardiaca) : null,
+        frequencia_respiratoria: frequenciaRespiratoria ? parseInt(frequenciaRespiratoria) : null,
+        tpc_segundos: tpcSegundos ? parseInt(tpcSegundos) : null,
+        mucosas: mucosas || "Normocoradas",
+        desidratacao_percentual: desidratacao ? parseInt(desidratacao) : null,
+        justificativa_risco: justificativa,
+      };
+
+      await api.post("/triagem/checkin-direto", payload, config);
+
+      setMensagem({ tipo: "sucesso", texto: "✅ Check-in e Triagem realizados com sucesso!" });
+      setMostrarModalNovoCheckin(false);
+      limparFormulario();
+      carregarDados(true);
+    } catch (err) {
+      setMensagem({ tipo: "erro", texto: `❌ ${err.response?.data?.detail || "Erro ao registrar Check-in Direto."}` });
+    } finally {
+      setCarregando(false);
     }
+  };
 
-@router.get("/painel-chamadas")
-def listar_chamadas_painel(db: Session = Depends(get_db)):
-    consultas_ativas = db.query(Consulta).filter(
-        Consulta.status.in_([
-            "Aguardando Triagem (Recepção)",
-            "Em Triagem",
-            "Aguardando Consulta (Fila Vet)",
-            "Em Atendimento",
-            "Aguardando Vacina",
-            "Em Vacinação"
-        ])
-    ).order_by(
-        Consulta.status.in_(["Em Triagem", "Em Atendimento"]).desc(),
-        Consulta.id.desc()
-    ).limit(10).all()
+  return (
+    <Layout>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+        <div>
+          <h1 style={{ display: "flex", alignItems: "center", gap: "12px", margin: 0, fontSize: "26px", color: "#1e1b4b" }}>
+            <MdMedicalServices color="#dc2626" size={38} />
+            Check-in & Triagem (Protocolo Manchester)
+          </h1>
+          <p style={{ color: "#6b7280", margin: "6px 0 0 0", fontSize: "14px" }}>
+            Recepção, entrada de pacientes e classificação de urgência clínica.
+          </p>
+        </div>
 
-    resultado = []
-    for c in consultas_ativas:
-        animal = db.query(Animal).filter(Animal.id == c.animal_id).first()
-        veterinario = db.query(Usuario).filter(Usuario.id == c.usuario_id).first() if c.usuario_id else None
-        
-        nome_tutor = "-"
-        if animal:
-            if hasattr(animal, 'tutor') and animal.tutor:
-                nome_tutor = animal.tutor.nome
-            elif hasattr(animal, 'tutor_nome') and animal.tutor_nome:
-                nome_tutor = animal.tutor_nome
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          {atualizandoSilencioso && (
+            <span style={{ fontSize: "12px", color: "#6366f1", fontWeight: "500" }}>Syncing...</span>
+          )}
+          <button
+            onClick={() => carregarDados(true)}
+            style={{ display: "flex", alignItems: "center", gap: "6px", backgroundColor: "#ffffff", border: "1px solid #d1d5db", padding: "8px 14px", borderRadius: "8px", cursor: "pointer", fontWeight: "600", color: "#374151", fontSize: "13px" }}
+          >
+            <MdRefresh size={18} /> Atualizar
+          </button>
 
-        if c.status == "Em Triagem":
-            sala_atribuida = "Sala de Triagem"
-            etapa = "🩺 Triagem"
-        elif c.status == "Em Atendimento":
-            sala_atribuida = f"Consultório {(c.id % 3) + 1}"
-            etapa = "👨‍⚕️ Consulta Médica"
-        else:
-            sala_atribuida = "Aguardar Recepção"
-            etapa = "⏳ Espera"
+          <button
+            onClick={() => {
+              limparFormulario();
+              setMostrarModalNovoCheckin(true);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "6px", backgroundColor: "#4f46e5", color: "white", border: "none", padding: "8px 16px", borderRadius: "8px", cursor: "pointer", fontWeight: "600", fontSize: "13px" }}
+          >
+            <MdAddCircle size={18} /> Novo Check-in & Triagem
+          </button>
+        </div>
+      </div>
 
-        resultado.append({
-            "id": c.id,
-            "codigo": c.codigo or f"CNS-{c.id:04d}",
-            "pet": animal.nome if animal else "Paciente",
-            "tutor": nome_tutor,
-            "veterinario": veterinario.nome if veterinario else "Equipe Veterinária",
-            "status": c.status,
-            "etapa": etapa,
-            "sala": sala_atribuida
-        })
+      {mensagem.texto && (
+        <div style={{ padding: "12px 16px", borderRadius: "8px", marginBottom: "16px", backgroundColor: mensagem.tipo === "sucesso" ? "#dcfce7" : "#fee2e2", color: mensagem.tipo === "sucesso" ? "#166534" : "#991b1b", fontWeight: "600" }}>
+          {mensagem.texto}
+        </div>
+      )}
 
-    return resultado
+      <div style={{ display: "grid", gridTemplateColumns: atendimentoSelecionado ? "1fr 1.2fr" : "1fr", gap: "20px" }}>
+        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "12px", border: "1px solid #e5e7eb" }}>
+          <h3 style={{ marginTop: 0, color: "#111827", fontSize: "16px" }}>
+            📋 Fila de Check-in para Triagem ({atendimentosPendentes.length} aguardando)
+          </h3>
 
-@router.get("/fila-triagem")
-def listar_fila_triagem(
-    db: Session = Depends(get_db),
-    usuario_logado = Depends(obter_usuario_logado)
-):
-    consultas_aguardando = db.query(Consulta).filter(
-        Consulta.status.in_([
-            "AGUARDANDO_TRIAGEM",
-            "Aguardando Triagem (Recepção)",
-            "AGUARDANDO_VACINA",
-            "Aguardando Vacina"
-        ])
-    ).order_by(Consulta.id.asc()).all()
+          {atendimentosPendentes.length === 0 ? (
+            <p style={{ color: "#9ca3af", fontSize: "14px", textAlign: "center", padding: "30px 0", fontStyle: "italic" }}>
+              Nenhum paciente aguardando triagem. Clique em <strong>"Novo Check-in & Triagem"</strong> para dar entrada direta num paciente!
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {atendimentosPendentes.map((item) => {
+                const ehVacina = item.status === "AGUARDANDO_VACINA" || item.status === "Aguardando Vacina";
+                const estaSendoChamado = item.status === "Chamando para Triagem";
+                return (
+                  <div
+                    key={item.id}
+                    style={{
+                      padding: "14px",
+                      borderRadius: "8px",
+                      border: atendimentoSelecionado?.id === item.id ? "2px solid #4f46e5" : estaSendoChamado ? "2px solid #ef4444" : ehVacina ? "1px solid #ccfbf1" : "1px solid #e5e7eb",
+                      backgroundColor: atendimentoSelecionado?.id === item.id ? "#f5f3ff" : estaSendoChamado ? "#fef2f2" : ehVacina ? "#f0fdf4" : "#f9fafb",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center"
+                    }}
+                  >
+                    <div>
+                      <strong style={{ color: ehVacina ? "#0f766e" : "#1f2937", display: "block", fontSize: "15px" }}>
+                        {ehVacina ? "💉 " : "🐾 "} {obterNomeAnimal(item.animal_id)}
+                        {estaSendoChamado && <span style={{ fontSize: "11px", backgroundColor: "#fee2e2", color: "#991b1b", padding: "2px 6px", borderRadius: "4px", marginLeft: "8px", fontWeight: "bold" }}>📢 Chamando...</span>}
+                      </strong>
+                      <span style={{ fontSize: "12px", color: "#6b7280" }}>
+                        Check-in: {item.codigo || `CNS-${item.id}`} {item.queixa_principal ? `| Motivo: ${item.queixa_principal}` : ""}
+                      </span>
+                    </div>
 
-    resultado = []
-    for c in consultas_aguardando:
-        animal = db.query(Animal).filter(Animal.id == c.animal_id).first()
-        resultado.append({
-            "id": c.id,
-            "codigo": c.codigo or f"CNS-{c.id:04d}",
-            "animal_id": c.animal_id,
-            "pet": animal.nome if animal else "Paciente",
-            "especie": animal.especie if animal else "-",
-            "queixa_principal": c.queixa_principal,
-            "peso_atendimento": c.peso_atendimento if hasattr(c, 'peso_atendimento') else getattr(c, 'peso', None),
-            "temperatura": c.temperatura,
-            "frequencia_cardiaca": c.frequencia_cardiaca,
-            "frequencia_respiratoria": c.frequencia_respiratoria,
-            "status": c.status
-        })
-    return resultado
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button 
+                        onClick={(e) => chamarPaciente(item, e)}
+                        style={{ backgroundColor: "#0284c7", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}
+                      >
+                        <MdCampaign size={16} /> Chamar
+                      </button>
 
-@router.get("/")
-def listar_consultas(
-    usuario_logado: str = Depends(obter_usuario_logado),
-    db: Session = Depends(get_db)
-):
-    return db.query(Consulta).order_by(Consulta.id.desc()).all()
+                      <button 
+                        onClick={() => selecionarParaTriagem(item)}
+                        style={{ backgroundColor: ehVacina ? "#0d9488" : "#4f46e5", color: "white", border: "none", padding: "8px 14px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}
+                      >
+                        Iniciar Triagem
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
-@router.post("/")
-def criar_consulta(
-    consulta: ConsultaCreate,
-    usuario_logado = Depends(exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])),
-    db: Session = Depends(get_db)
-):
-    animal = db.query(Animal).filter(Animal.id == consulta.animal_id).first()
-    if not animal:
-        raise HTTPException(status_code=404, detail="Paciente (Animal) não encontrado.")
+        {atendimentoSelecionado && (
+          <div style={{ backgroundColor: "white", padding: "24px", borderRadius: "12px", border: "1px solid #e5e7eb" }}>
+            <h3 style={{ marginTop: 0, color: "#111827", fontSize: "18px", borderBottom: "1px solid #f3f4f6", paddingBottom: "10px" }}>
+              🩺 Aferição de Sinais Vitais — {obterNomeAnimal(atendimentoSelecionado.animal_id)}
+            </h3>
 
-    id_vet = consulta.usuario_id
-    if not id_vet:
-        usuario_padrao = db.query(Usuario).filter(Usuario.perfil.in_(["VETERINARIO", "ADMIN"])).first()
-        if usuario_padrao:
-            id_vet = usuario_padrao.id
-        else:
-            raise HTTPException(status_code=404, detail="Nenhum usuário/veterinário cadastrado.")
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>Peso (kg)</label>
+                <input type="number" step="0.1" value={peso} onChange={(e) => setPeso(e.target.value)} style={estiloInput} placeholder="Ex: 3.5" />
+              </div>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>Temperatura (°C)</label>
+                <input type="number" step="0.1" value={temperatura} onChange={(e) => setTemperatura(e.target.value)} style={estiloInput} placeholder="Ex: 38.5" />
+              </div>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>FC (bpm)</label>
+                <input type="number" value={frequenciaCardiaca} onChange={(e) => setFrequenciaCardiaca(e.target.value)} style={estiloInput} placeholder="Ex: 150" />
+              </div>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>FR (mpm)</label>
+                <input type="number" value={frequenciaRespiratoria} onChange={(e) => setFrequenciaRespiratoria(e.target.value)} style={estiloInput} placeholder="Ex: 25" />
+              </div>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>TPC (segundos)</label>
+                <input type="number" value={tpcSegundos} onChange={(e) => setTpcSegundos(e.target.value)} style={estiloInput} placeholder="Ex: 2" />
+              </div>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>Mucosas</label>
+                <select value={mucosas} onChange={(e) => setMucosas(e.target.value)} style={estiloInput}>
+                  <option value="Normocoradas">Normocoradas (Rosadas)</option>
+                  <option value="Hipocoradas / Pálidas">Hipocoradas / Pálidas</option>
+                  <option value="Cianóticas">Cianóticas (Roxas)</option>
+                  <option value="Ictéricas">Ictéricas (Amareladas)</option>
+                  <option value="Congestas / Hiperêmicas">Congestas / Vermelhas</option>
+                </select>
+              </div>
+            </div>
 
-    nova_consulta = Consulta(
-        codigo=consulta.codigo,
-        usuario_id=id_vet,
-        animal_id=consulta.animal_id,
-        status=getattr(consulta, 'status', 'AGUARDANDO_TRIAGEM'),
-        queixa_principal=consulta.queixa_principal or "Check-in de rotina / Recepção",
-        historico_clinico=consulta.historico_clinico,
-        sintomas=consulta.sintomas,
-        exame_fisico=consulta.exame_fisico,
-        suspeita_diagnostica=getattr(consulta, 'suspeita_diagnostica', None),
-        peso_atendimento=consulta.peso_atendimento,
-        temperatura=consulta.temperatura,
-        frequencia_cardiaca=consulta.frequencia_cardiaca,
-        frequencia_respiratoria=consulta.frequencia_respiratoria,
-        parecer_copiloto=consulta.parecer_copiloto,
-        observacoes=consulta.observacoes,
-        indicacao_cirurgia=getattr(consulta, 'indicacao_cirurgia', False),
-        justificativa_cirurgica=getattr(consulta, 'justificativa_cirurgica', None)
-    )
+            <div style={{ marginBottom: "16px" }}>
+              <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>Queixa Principal *</label>
+              <textarea rows={2} value={queixaPrincipal} onChange={(e) => setQueixaPrincipal(e.target.value)} style={{ ...estiloInput, height: "auto", padding: "8px" }} placeholder="Relato do tutor..." />
+            </div>
 
-    try:
-        db.add(nova_consulta)
-        db.flush()
-        if not nova_consulta.codigo:
-            nova_consulta.codigo = f"CNS-{nova_consulta.id:04d}"
-        db.commit()
-        db.refresh(nova_consulta)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao cadastrar consulta: {str(e)}")
+            <div style={{ marginBottom: "20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <label style={{ fontSize: "13px", fontWeight: "700", color: "#111827" }}>Nível de Urgência (Manchester)</label>
+                <button type="button" onClick={sugerirClassificacaoIA} style={{ backgroundColor: "#f0f9ff", color: "#0284c7", border: "1px solid #bae6fd", padding: "4px 8px", borderRadius: "6px", cursor: "pointer", fontSize: "11px", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <MdAutoAwesome /> Avaliar com IA
+                </button>
+              </div>
 
-    return nova_consulta
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "6px" }}>
+                {Object.keys(CORES_MANCHESTER).map((cor) => {
+                  const item = CORES_MANCHESTER[cor];
+                  const selecionado = classificacaoRisco === cor;
+                  return (
+                    <button
+                      key={cor}
+                      type="button"
+                      onClick={() => setClassificacaoRisco(cor)}
+                      style={{
+                        padding: "8px 4px",
+                        borderRadius: "6px",
+                        border: selecionado ? `2px solid ${item.text}` : "1px solid #d1d5db",
+                        backgroundColor: selecionado ? item.bg : "#ffffff",
+                        color: item.text,
+                        fontWeight: "700",
+                        fontSize: "11px",
+                        cursor: "pointer",
+                        textAlign: "center"
+                      }}
+                    >
+                      {item.nome}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-@router.get("/{consulta_id}")
-def buscar_consulta(consulta_id: int, db: Session = Depends(get_db)):
-    consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
-    if not consulta:
-        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
-    return consulta
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+              <button onClick={() => setAtendimentoSelecionado(null)} style={{ backgroundColor: "#f3f4f6", border: "none", padding: "10px 16px", borderRadius: "8px", cursor: "pointer", fontWeight: "600" }}>
+                Cancelar
+              </button>
+              <button onClick={salvarTriagemExistente} disabled={carregando} style={{ backgroundColor: "#16a34a", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "600" }}>
+                {carregando ? "Enviando..." : "Finalizar Triagem"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
-@router.put("/{consulta_id}")
-def atualizar_consulta(
-    consulta_id: int,
-    consulta: ConsultaUpdate,
-    usuario_logado = Depends(exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])),
-    db: Session = Depends(get_db)
-):
-    consulta_db = db.query(Consulta).filter(Consulta.id == consulta_id).first()
-    if not consulta_db:
-        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+      {mostrarModalNovoCheckin && (
+        <div style={{ position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", backgroundColor: "rgba(0,0,0,0.5)", backdropFilter: "blur(3px)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000, padding: "20px" }}>
+          <div style={{ backgroundColor: "white", padding: "28px", borderRadius: "16px", maxWidth: "600px", width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e5e7eb", paddingBottom: "12px", marginBottom: "16px" }}>
+              <h3 style={{ margin: 0, color: "#111827", fontSize: "18px" }}>
+                🏥 Novo Check-in & Triagem Direta
+              </h3>
+              <button onClick={() => setMostrarModalNovoCheckin(false)} style={{ border: "none", background: "transparent", cursor: "pointer" }}>
+                <MdClose size={22} color="#6b7280" />
+              </button>
+            </div>
 
-    if consulta.animal_id:
-        consulta_db.animal_id = consulta.animal_id
-    if consulta.usuario_id:
-        consulta_db.usuario_id = consulta.usuario_id
-    if consulta.codigo:
-        consulta_db.codigo = consulta.codigo
-    if hasattr(consulta, 'status') and consulta.status:
-        consulta_db.status = consulta.status
+            <form onSubmit={salvarCheckinETriagemDireta}>
+              <div style={{ marginBottom: "14px" }}>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151", display: "block", marginBottom: "4px" }}>Paciente *</label>
+                <select value={animalIdDireto} onChange={(e) => setAnimalIdDireto(e.target.value)} required style={estiloInput}>
+                  <option value="">Selecione o paciente cadastrado...</option>
+                  {animais.map((a) => (
+                    <option key={a.id} value={a.id}>{a.nome} ({a.especie || 'Pet'} - {a.codigo || `PET-${a.id}`})</option>
+                  ))}
+                </select>
+              </div>
 
-    consulta_db.queixa_principal = consulta.queixa_principal or consulta_db.queixa_principal
-    consulta_db.historico_clinico = consulta.historico_clinico
-    consulta_db.sintomas = consulta.sintomas
-    consulta_db.exame_fisico = consulta.exame_fisico
-    if hasattr(consulta, 'suspeita_diagnostica'):
-        consulta_db.suspeita_diagnostica = consulta.suspeita_diagnostica
-    consulta_db.peso_atendimento = consulta.peso_atendimento
-    consulta_db.temperatura = consulta.temperatura
-    consulta_db.frequencia_cardiaca = consulta.frequencia_cardiaca
-    consulta_db.frequencia_respiratoria = consulta.frequencia_respiratoria
-    consulta_db.parecer_copiloto = consulta.parecer_copiloto or consulta_db.parecer_copiloto
-    consulta_db.observacoes = consulta.observacoes
-    
-    if hasattr(consulta, 'indicacao_cirurgia'):
-        consulta_db.indicacao_cirurgia = consulta.indicacao_cirurgia
-    if hasattr(consulta, 'justificativa_cirurgica'):
-        consulta_db.justificativa_cirurgica = consulta.justificativa_cirurgica
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "14px" }}>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>Peso (kg)</label>
+                  <input type="number" step="0.1" value={peso} onChange={(e) => setPeso(e.target.value)} style={estiloInput} placeholder="Ex: 3.5" />
+                </div>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>Temperatura (°C)</label>
+                  <input type="number" step="0.1" value={temperatura} onChange={(e) => setTemperatura(e.target.value)} style={estiloInput} placeholder="Ex: 38.5" />
+                </div>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>FC (bpm)</label>
+                  <input type="number" value={frequenciaCardiaca} onChange={(e) => setFrequenciaCardiaca(e.target.value)} style={estiloInput} placeholder="Ex: 150" />
+                </div>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>FR (mpm)</label>
+                  <input type="number" value={frequenciaRespiratoria} onChange={(e) => setFrequenciaRespiratoria(e.target.value)} style={estiloInput} placeholder="Ex: 25" />
+                </div>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>TPC (segundos)</label>
+                  <input type="number" value={tpcSegundos} onChange={(e) => setTpcSegundos(e.target.value)} style={estiloInput} placeholder="Ex: 2" />
+                </div>
+                <div>
+                  <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151" }}>Mucosas</label>
+                  <select value={mucosas} onChange={(e) => setMucosas(e.target.value)} style={estiloInput}>
+                    <option value="Normocoradas">Normocoradas (Rosadas)</option>
+                    <option value="Hipocoradas / Pálidas">Hipocoradas / Pálidas</option>
+                    <option value="Cianóticas">Cianóticas (Roxas)</option>
+                    <option value="Ictéricas">Ictéricas (Amareladas)</option>
+                    <option value="Congestas / Hiperêmicas">Congestas / Vermelhas</option>
+                  </select>
+                </div>
+              </div>
 
-    db.commit()
-    db.refresh(consulta_db)
-    return consulta_db
+              <div style={{ marginBottom: "14px" }}>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#374151", display: "block", marginBottom: "4px" }}>Queixa Principal *</label>
+                <textarea rows={2} value={queixaPrincipal} onChange={(e) => setQueixaPrincipal(e.target.value)} required style={{ ...estiloInput, height: "auto", padding: "8px" }} placeholder="Relato do tutor..." />
+              </div>
 
-@router.delete("/{consulta_id}")
-def excluir_consulta(
-    consulta_id: int,
-    usuario_logado = Depends(exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])),
-    db: Session = Depends(get_db)
-):
-    consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
-    if not consulta:
-        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
-    db.delete(consulta)
-    db.commit()
-    return {"mensagem": "Consulta excluída com sucesso."}
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <label style={{ fontSize: "13px", fontWeight: "700", color: "#111827" }}>Nível de Urgência (Manchester)</label>
+                  <button type="button" onClick={sugerirClassificacaoIA} style={{ backgroundColor: "#f0f9ff", color: "#0284c7", border: "1px solid #bae6fd", padding: "4px 8px", borderRadius: "6px", cursor: "pointer", fontSize: "11px", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <MdAutoAwesome /> Avaliar IA
+                  </button>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "6px" }}>
+                  {Object.keys(CORES_MANCHESTER).map((cor) => {
+                    const item = CORES_MANCHESTER[cor];
+                    const selecionado = classificacaoRisco === cor;
+                    return (
+                      <button
+                        key={cor}
+                        type="button"
+                        onClick={() => setClassificacaoRisco(cor)}
+                        style={{
+                          padding: "8px 4px",
+                          borderRadius: "6px",
+                          border: selecionado ? `2px solid ${item.text}` : "1px solid #d1d5db",
+                          backgroundColor: selecionado ? item.bg : "#ffffff",
+                          color: item.text,
+                          fontWeight: "700",
+                          fontSize: "11px",
+                          cursor: "pointer",
+                          textAlign: "center"
+                        }}
+                      >
+                        {item.nome}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "20px" }}>
+                <button type="button" onClick={() => setMostrarModalNovoCheckin(false)} style={{ backgroundColor: "#f3f4f6", border: "none", padding: "10px 16px", borderRadius: "8px", cursor: "pointer", fontWeight: "600" }}>
+                  Cancelar
+                </button>
+                <button type="submit" disabled={carregando} style={{ backgroundColor: "#4f46e5", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "600" }}>
+                  {carregando ? "Processando..." : "Confirmar Check-in & Triagem"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </Layout>
+  );
+}
+
+const estiloInput = {
+  width: "100%",
+  height: "38px",
+  padding: "0 10px",
+  border: "1px solid #d1d5db",
+  borderRadius: "6px",
+  fontSize: "13px",
+  outline: "none",
+  boxSizing: "border-box"
+};
+
+export default Triagem;
