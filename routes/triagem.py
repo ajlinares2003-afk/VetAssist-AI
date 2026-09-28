@@ -97,12 +97,12 @@ def criar_triagem(
     consulta.frequencia_cardiaca = triagem.frequencia_cardiaca
     consulta.frequencia_respiratoria = triagem.frequencia_respiratoria
     
-    # Adicione estas linhas para salvar tpc e mucosas se os campos existirem no modelo Consulta
+    # Persistência robusta de TPC e Mucosas na tabela de Consultas
     if hasattr(consulta, 'tpc_segundos'):
         consulta.tpc_segundos = triagem.tpc_segundos
     if hasattr(consulta, 'mucosas'):
         consulta.mucosas = triagem.mucosas
-    
+
     if triagem.peso is not None:
         if hasattr(consulta, 'peso_atendimento'):
             consulta.peso_atendimento = triagem.peso
@@ -112,4 +112,26 @@ def criar_triagem(
             animal.peso = triagem.peso
 
     db.commit()
+    db.refresh(consulta)
     return {"mensagem": "Triagem concluída com sucesso!"}
+
+@router.get("/consulta/{consulta_id}")
+def buscar_triagem_por_consulta(
+    consulta_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
+    if not consulta:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    
+    return {
+        "consulta_id": consulta.id,
+        "peso": getattr(consulta, 'peso_atendimento', None),
+        "temperatura": consulta.temperatura,
+        "frequencia_cardiaca": consulta.frequencia_cardiaca,
+        "frequencia_respiratoria": consulta.frequencia_respiratoria,
+        "tpc_segundos": getattr(consulta, 'tpc_segundos', None),
+        "mucosas": getattr(consulta, 'mucosas', "Normocoradas"),
+        "observacoes": consulta.observacoes or ""
+    }
