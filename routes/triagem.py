@@ -6,6 +6,7 @@ from models.animais import Animal
 from services.security import obter_usuario_logado
 from pydantic import BaseModel
 from typing import Optional
+from models.triagem import Triagem 
 
 router = APIRouter(
     prefix="/triagem",
@@ -59,17 +60,35 @@ def listar_fila_triagem(
         })
     return resultado
 
+from models.triagem import Triagem  # Certifique-se de que o model Triagem está importado no topo do ficheiro
+
 @router.get("/consulta/{consulta_id}")
 def buscar_triagem_por_consulta(
     consulta_id: int,
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
+    # 1. Procura primeiro na tabela dedicada 'triagem' (onde o Supabase guarda os dados)
+    triagem_db = db.query(Triagem).filter(Triagem.consulta_id == consulta_id).first()
+    
+    if triagem_db:
+        return {
+            "consulta_id": triagem_db.consulta_id,
+            "peso": triagem_db.peso,
+            "temperatura": triagem_db.temperatura,
+            "frequencia_cardiaca": triagem_db.frequencia_cardiaca,
+            "frequencia_respiratoria": triagem_db.frequencia_respiratoria,
+            "tpc_segundos": triagem_db.tpc_segundos,
+            "mucosas": triagem_db.mucosas,
+            "queixa_principal": triagem_db.queixa_principal,
+            "observacoes": getattr(triagem_db, 'observacoes', "")
+        }
+
+    # 2. Fallback caso os dados estejam diretamente na tabela 'Consulta'
     consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
     if not consulta:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
     
-    # Retorna os dados vitais guardados diretamente na consulta ou valores padrão
     return {
         "consulta_id": consulta.id,
         "peso": getattr(consulta, 'peso_atendimento', None),
@@ -77,61 +96,6 @@ def buscar_triagem_por_consulta(
         "frequencia_cardiaca": consulta.frequencia_cardiaca,
         "frequencia_respiratoria": consulta.frequencia_respiratoria,
         "tpc_segundos": getattr(consulta, 'tpc_segundos', 2),
-        "mucosas": getattr(consulta, 'mucosas', "Normocoradas"),
-        "observacoes": consulta.observacoes or ""
-    }
-
-@router.post("/")
-def criar_triagem(
-    triagem: TriagemCreate,
-    db: Session = Depends(get_db),
-    usuario_logado = Depends(obter_usuario_logado)
-):
-    consulta = db.query(Consulta).filter(Consulta.id == triagem.consulta_id).first()
-    if not consulta:
-        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
-    
-    consulta.status = "Aguardando Consulta (Fila Vet)"
-    consulta.queixa_principal = triagem.queixa_principal
-    consulta.temperatura = triagem.temperatura
-    consulta.frequencia_cardiaca = triagem.frequencia_cardiaca
-    consulta.frequencia_respiratoria = triagem.frequencia_respiratoria
-    
-    # Persistência robusta de TPC e Mucosas na tabela de Consultas
-    if hasattr(consulta, 'tpc_segundos'):
-        consulta.tpc_segundos = triagem.tpc_segundos
-    if hasattr(consulta, 'mucosas'):
-        consulta.mucosas = triagem.mucosas
-
-    if triagem.peso is not None:
-        if hasattr(consulta, 'peso_atendimento'):
-            consulta.peso_atendimento = triagem.peso
-        
-        animal = db.query(Animal).filter(Animal.id == consulta.animal_id).first()
-        if animal and hasattr(animal, 'peso'):
-            animal.peso = triagem.peso
-
-    db.commit()
-    db.refresh(consulta)
-    return {"mensagem": "Triagem concluída com sucesso!"}
-
-@router.get("/consulta/{consulta_id}")
-def buscar_triagem_por_consulta(
-    consulta_id: int,
-    db: Session = Depends(get_db),
-    usuario_logado = Depends(obter_usuario_logado)
-):
-    consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
-    if not consulta:
-        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
-    
-    return {
-        "consulta_id": consulta.id,
-        "peso": getattr(consulta, 'peso_atendimento', None),
-        "temperatura": consulta.temperatura,
-        "frequencia_cardiaca": consulta.frequencia_cardiaca,
-        "frequencia_respiratoria": consulta.frequencia_respiratoria,
-        "tpc_segundos": getattr(consulta, 'tpc_segundos', None),
         "mucosas": getattr(consulta, 'mucosas', "Normocoradas"),
         "observacoes": consulta.observacoes or ""
     }
