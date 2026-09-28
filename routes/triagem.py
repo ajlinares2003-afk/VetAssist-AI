@@ -91,9 +91,10 @@ def criar_checkin_triagem_direto(
         raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
 
     try:
-        # 1. Cria a consulta primeiro para gerar o ID oficial
+        # 1. Cria a consulta associando obrigatoriamente o utilizador logado
         nova_consulta = Consulta(
             animal_id=dados.animal_id,
+            usuario_id=usuario_logado.id,  # <-- Correção aplicada aqui!
             queixa_principal=dados.queixa_principal,
             status="Aguardando Consulta (Fila Vet)",
             peso_atendimento=dados.peso,
@@ -105,12 +106,12 @@ def criar_checkin_triagem_direto(
         db.commit()
         db.refresh(nova_consulta)
 
-        # Garante o código da consulta
+        # Garante a geração do código oficial
         if not nova_consulta.codigo:
             nova_consulta.codigo = f"CNS-{nova_consulta.id:04d}"
             db.commit()
 
-        # 2. Cria o registo de triagem obrigatoriamente vinculado ao ID da consulta criada
+        # 2. Regista os dados de triagem vinculados à nova consulta
         triagem_db = Triagem(
             consulta_id=nova_consulta.id,
             peso=dados.peso,
@@ -118,7 +119,7 @@ def criar_checkin_triagem_direto(
             frequencia_cardiaca=dados.frequencia_cardiaca,
             frequencia_respiratoria=dados.frequencia_respiratoria,
             tpc_segundos=dados.tpc_segundos,
-            mucosas=dados.mucosas if hasattr(dados, 'mucosas') else "Normocoradas",
+            mucosas=dados.mucosas,
             desidratacao_percentual=dados.desidratacao_percentual,
             queixa_principal=dados.queixa_principal,
             classificacao_risco=dados.classificacao_risco,
