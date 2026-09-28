@@ -160,12 +160,13 @@ def listar_chamadas_painel(db: Session = Depends(get_db)):
             "Chamando para Triagem",
             "Em Triagem",
             "Aguardando Consulta (Fila Vet)",
+            "Chamando para Consulta",
             "Em Atendimento",
             "Aguardando Vacina",
             "Em Vacinação"
         ])
     ).order_by(
-        Consulta.status.in_(["Chamando para Triagem", "Em Triagem", "Em Atendimento"]).desc(),
+        Consulta.status.in_(["Chamando para Triagem", "Chamando para Consulta", "Em Triagem", "Em Atendimento"]).desc(),
         Consulta.id.desc()
     ).limit(10).all()
 
@@ -184,6 +185,9 @@ def listar_chamadas_painel(db: Session = Depends(get_db)):
         if c.status == "Chamando para Triagem":
             sala_atribuida = "Sala de Triagem"
             etapa = "📢 Chamando para Triagem"
+        elif c.status == "Chamando para Consulta":
+            sala_atribuida = f"Consultório {(c.id % 3) + 1}"
+            etapa = "📢 Chamando para Consulta"
         elif c.status == "Em Triagem":
             sala_atribuida = "Sala de Triagem"
             etapa = "🩺 Triagem"
