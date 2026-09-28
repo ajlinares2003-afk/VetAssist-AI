@@ -90,41 +90,54 @@ def criar_checkin_triagem_direto(
     if not dados.animal_id:
         raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
 
-    nova_consulta = Consulta(
-        animal_id=dados.animal_id,
-        queixa_principal=dados.queixa_principal,
-        status="Aguardando Consulta (Fila Vet)",
-        peso_atendimento=dados.peso,
-        temperatura=dados.temperatura,
-        frequencia_cardiaca=dados.frequencia_cardiaca,
-        frequencia_respiratoria=dados.frequencia_respiratoria
-    )
-    db.add(nova_consulta)
-    db.commit()
-    db.refresh(nova_consulta)
+    try:
+        # 1. Cria a consulta primeiro para gerar o ID oficial
+        nova_consulta = Consulta(
+            animal_id=dados.animal_id,
+            queixa_principal=dados.queixa_principal,
+            status="Aguardando Consulta (Fila Vet)",
+            peso_atendimento=dados.peso,
+            temperatura=dados.temperatura,
+            frequencia_cardiaca=dados.frequencia_cardiaca,
+            frequencia_respiratoria=dados.frequencia_respiratoria
+        )
+        db.add(nova_consulta)
+        db.commit()
+        db.refresh(nova_consulta)
 
-    triagem_db = Triagem(
-        consulta_id=nova_consulta.id,
-        peso=dados.peso,
-        temperatura=dados.temperatura,
-        frequencia_cardiaca=dados.frequencia_cardiaca,
-        frequencia_respiratoria=dados.frequencia_respiratoria,
-        tpc_segundos=dados.tpc_segundos,
-        mucosas=dados.mucosas,
-        desidratacao_percentual=dados.desidratacao_percentual,
-        queixa_principal=dados.queixa_principal,
-        classificacao_risco=dados.classificacao_risco,
-        justificativa_risco=dados.justificativa_risco
-    )
-    db.add(triagem_db)
+        # Garante o código da consulta
+        if not nova_consulta.codigo:
+            nova_consulta.codigo = f"CNS-{nova_consulta.id:04d}"
+            db.commit()
 
-    if dados.peso:
-        animal = db.query(Animal).filter(Animal.id == dados.animal_id).first()
-        if animal:
-            animal.peso = dados.peso
+        # 2. Cria o registo de triagem obrigatoriamente vinculado ao ID da consulta criada
+        triagem_db = Triagem(
+            consulta_id=nova_consulta.id,
+            peso=dados.peso,
+            temperatura=dados.temperatura,
+            frequencia_cardiaca=dados.frequencia_cardiaca,
+            frequencia_respiratoria=dados.frequencia_respiratoria,
+            tpc_segundos=dados.tpc_segundos,
+            mucosas=dados.mucosas if hasattr(dados, 'mucosas') else "Normocoradas",
+            desidratacao_percentual=dados.desidratacao_percentual,
+            queixa_principal=dados.queixa_principal,
+            classificacao_risco=dados.classificacao_risco,
+            justificativa_risco=dados.justificativa_risco
+        )
+        db.add(triagem_db)
 
-    db.commit()
-    return {"mensagem": "Check-in e Triagem Direta realizados com sucesso!", "consulta_id": nova_consulta.id}
+        # 3. Atualiza o peso oficial do animal se fornecido
+        if dados.peso:
+            animal = db.query(Animal).filter(Animal.id == dados.animal_id).first()
+            if animal:
+                animal.peso = dados.peso
+
+        db.commit()
+        return {"mensagem": "Check-in e Triagem Direta realizados com sucesso!", "consulta_id": nova_consulta.id}
+    
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Erro ao salvar no banco: {str(e)}")
 
 @router.get("/fila-triagem")
 def listar_fila_triagem(
