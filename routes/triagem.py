@@ -26,6 +26,61 @@ class TriagemCreate(BaseModel):
     classificacao_risco: str
     justificativa_risco: Optional[str] = None
 
+@router.post("/", status_code=status.HTTP_201_CREATED)
+def criar_ou_atualizar_triagem(
+    dados: TriagemCreate,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    # Verifica se já existe triagem para esta consulta
+    triagem_db = db.query(Triagem).filter(Triagem.consulta_id == dados.consulta_id).first()
+    
+    if triagem_db:
+        # Atualiza a triagem existente
+        triagem_db.peso = dados.peso
+        triagem_db.temperatura = dados.temperatura
+        triagem_db.frequencia_cardiaca = dados.frequencia_cardiaca
+        triagem_db.frequencia_respiratoria = dados.frequencia_respiratoria
+        triagem_db.tpc_segundos = dados.tpc_segundos
+        triagem_db.mucosas = dados.mucosas
+        triagem_db.desidratacao_percentual = dados.desidratacao_percentual
+        triagem_db.queixa_principal = dados.queixa_principal
+        triagem_db.classificacao_risco = dados.classificacao_risco
+        triagem_db.justificativa_risco = dados.justificativa_risco
+    else:
+        # Cria uma nova triagem
+        triagem_db = Triagem(
+            consulta_id=dados.consulta_id,
+            peso=dados.peso,
+            temperatura=dados.temperatura,
+            frequencia_cardiaca=dados.frequencia_cardiaca,
+            frequencia_respiratoria=dados.frequencia_respiratoria,
+            tpc_segundos=dados.tpc_segundos,
+            mucosas=dados.mucosas,
+            desidratacao_percentual=dados.desidratacao_percentual,
+            queixa_principal=dados.queixa_principal,
+            classificacao_risco=dados.classificacao_risco,
+            justificativa_risco=dados.justificativa_risco
+        )
+        db.add(triagem_db)
+
+    # Atualiza também o status da consulta para encaminhar para a fila do veterinário
+    consulta = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
+    if consulta:
+        consulta.status = "Aguardando Consulta (Fila Vet)"
+        if dados.peso:
+            consulta.peso_atendimento = dados.peso
+        if dados.temperatura:
+            consulta.temperatura = dados.temperatura
+        if dados.frequencia_cardiaca:
+            consulta.frequencia_cardiaca = dados.frequencia_cardiaca
+        if dados.frequencia_respiratoria:
+            consulta.frequencia_respiratoria = dados.frequencia_respiratoria
+
+    db.commit()
+    db.refresh(triagem_db)
+    return {"mensagem": "Triagem guardada com sucesso!", "id": triagem_db.id}
+
 @router.get("/fila-triagem")
 def listar_fila_triagem(
     db: Session = Depends(get_db),
