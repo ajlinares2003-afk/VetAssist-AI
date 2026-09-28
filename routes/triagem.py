@@ -14,8 +14,8 @@ router = APIRouter(
 )
 
 class TriagemCreate(BaseModel):
-    consulta_id: Optional[int] = None # Ajustado para opcional no check-in direto
-    animal_id: Optional[int] = None # Adicionado para suportar o check-in direto
+    consulta_id: Optional[int] = None
+    animal_id: Optional[int] = None
     peso: Optional[float] = None
     temperatura: Optional[float] = None
     frequencia_cardiaca: Optional[int] = None
@@ -90,7 +90,6 @@ def criar_checkin_triagem_direto(
     if not dados.animal_id:
         raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
 
-    # 1. Cria a consulta diretamente encaminhada para a fila do veterinário
     nova_consulta = Consulta(
         animal_id=dados.animal_id,
         queixa_principal=dados.queixa_principal,
@@ -104,7 +103,6 @@ def criar_checkin_triagem_direto(
     db.commit()
     db.refresh(nova_consulta)
 
-    # 2. Regista os dados da triagem vinculados à nova consulta criada
     triagem_db = Triagem(
         consulta_id=nova_consulta.id,
         peso=dados.peso,
@@ -120,7 +118,6 @@ def criar_checkin_triagem_direto(
     )
     db.add(triagem_db)
 
-    # 3. Atualiza o peso oficial do animal se fornecido
     if dados.peso:
         animal = db.query(Animal).filter(Animal.id == dados.animal_id).first()
         if animal:
