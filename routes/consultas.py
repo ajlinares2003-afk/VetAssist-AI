@@ -122,6 +122,62 @@ async def upload_anexo_exame(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo: {str(e)}")
 
+@router.post("/sugestoes-copiloto-multimodal")
+async def sugestoes_copiloto_multimodal(
+    queixa_principal: str = Form(...),
+    animal_id: Optional[int] = Form(None),
+    especie: Optional[str] = Form("Não informada"),
+    raca: Optional[str] = Form("SRD"),
+    idade: Optional[str] = Form(None),
+    peso: Optional[str] = Form(None),
+    sintomas: Optional[str] = Form(None),
+    exame_fisico: Optional[str] = Form(None),
+    temperatura: Optional[str] = Form(None),
+    frequencia_cardiaca: Optional[str] = Form(None),
+    frequencia_respiratoria: Optional[str] = Form(None),
+    tpc_segundos: Optional[str] = Form(None),
+    mucosas: Optional[str] = Form(None),
+    solicitar_exames_preventivos: Optional[str] = Form("false"),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    try:
+        # Prompt clínico base estruturado para a IA veterinária
+        prompt_ia = (
+            f"Atue como um médico veterinário especialista e copiloto clínico.\n"
+            f"Analise o caso abaixo e forneça sugestões diagnósticas e terapêuticas:\n"
+            f"- Espécie: {especie}, Raça: {raca}, Idade: {idade}, Peso: {peso}\n"
+            f"- Queixa Principal: {queixa_principal}\n"
+            f"- Sintomas: {sintomas}\n"
+            f"- Exame Físico: {exame_fisico}\n"
+            f"- Parâmetros: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n"
+        )
+
+        provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
+        sugestoes = ""
+        suspeita = "Avaliação clínica recomendada"
+
+        if provedor == "groq" and client_or_key:
+            response = client_or_key.chat.completions.create(
+                model=modelo,
+                messages=[{"role": "user", "content": prompt_ia}],
+                temperature=0.3
+            )
+            sugestoes = response.choices[0].message.content
+        else:
+            sugestoes = "Análise simulada do Copiloto Clínico: Paciente estável, recomenda-se monitorização e exames complementares de rotina."
+
+        return {
+            "sugestoes": sugestoes,
+            "suspeita_diagnostica": suspeita,
+            "indicacao_cirurgia": False,
+            "justificativa_cirurgica": "",
+            "exames_sugeridos": ["Hemograma completo", "Perfil Bioquímico"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar IA: {str(e)}")
+
 @router.put("/{consulta_id}/chamar")
 def chamar_paciente_consulta(
     consulta_id: int,
@@ -132,7 +188,7 @@ def chamar_paciente_consulta(
     if not consulta_db:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
     
-    consulta_db.status = "Chamando para Triagem"
+    consulta_db.status = "Chamando para Consulta"
     db.commit()
     db.refresh(consulta_db)
     return {"mensagem": "Paciente chamado com sucesso!", "status": consulta_db.status}
