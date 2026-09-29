@@ -164,9 +164,11 @@ async def sugestoes_copiloto_multimodal(
             f"- Exame Físico: {exame_fisico}\n"
             f"- Exames/Laudos Anexados: {texto_anexos}\n"
             f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
-            f"Responda estritamente neste formato exato:\n"
-            f"SUSPEITA: [Indique o diagnóstico principal específico e direto, nunca use termos vagos]\n"
-            f"SUGESTOES: [Apresente a análise clínica detalhada, exames recomendados e conduta terapêutica]"
+            f"Instruções obrigatórias para a resposta:\n"
+            f"1. Na análise clínica detalhada, comente explicitamente o estado do TPC e das Mucosas informados.\n"
+            f"2. Responda estritamente no formato:\n"
+            f"SUSPEITA: [Indique o diagnóstico principal]\n"
+            f"SUGESTOES: [Análise clínica detalhada com tópicos, incluindo a avaliação do TPC e mucosas, exames recomendados e conduta terapêutica]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
