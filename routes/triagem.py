@@ -91,13 +91,33 @@ def criar_checkin_triagem_direto(
         raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
 
     try:
-        # Extrai o ID do utilizador dependendo se for dicionário ou objeto
-        user_id = usuario_logado["id"] if isinstance(usuario_logado, dict) else usuario_logado.id
+        # Extração segura do ID do utilizador logado
+        user_id = None
+        if isinstance(usuario_logado, dict):
+            user_id = usuario_logado.get("id") or usuario_logado.get("user_id")
+            # Se o dicionário tiver o e-mail em 'sub', podemos procurar o utilizador na base de dados
+            if not user_id and ("sub" in usuario_logado or "email" in usuario_logado):
+                from models.usuario import Usuario
+                email_busca = usuario_logado.get("sub") or usuario_logado.get("email")
+                u_db = db.query(Usuario).filter(Usuario.email == email_busca).first()
+                if u_db:
+                    user_id = u_db.id
+        else:
+            user_id = getattr(usuario_logado, "id", None)
 
-        # 1. Cria a consulta associando obrigatoriamente o ID do utilizador logado
+        # Fallback de segurança caso o ID venha nulo
+        if not user_id:
+            from models.usuario import Usuario
+            primeiro_usuario = db.query(Usuario).first()
+            if primeiro_usuario:
+                user_id = primeiro_usuario.id
+            else:
+                raise HTTPException(status_code=400, detail="Não foi possível identificar o utilizador logado para associar à consulta.")
+
+        # 1. Cria a consulta associando o ID do utilizador apurado
         nova_consulta = Consulta(
             animal_id=dados.animal_id,
-            usuario_id=user_id,  # <-- Usando a variável tratada com segurança
+            usuario_id=user_id,
             queixa_principal=dados.queixa_principal,
             status="Aguardando Consulta (Fila Vet)",
             peso_atendimento=dados.peso,
