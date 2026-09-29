@@ -133,16 +133,17 @@ async def sugestoes_copiloto_multimodal(
     sintomas: Optional[str] = Form(None),
     exame_fisico: Optional[str] = Form(None),
     temperatura: Optional[str] = Form(None),
-    frequencia_cardiaca: Optional[int] = Form(None),
-    frequencia_respiratoria: Optional[int] = Form(None),
+    frequencia_cardiaca: Optional[str] = Form(None),
+    frequencia_respiratoria: Optional[str] = Form(None),
     tpc_segundos: Optional[str] = Form(None),
     mucosas: Optional[str] = Form(None),
     solicitar_exames_preventivos: Optional[str] = Form("false"),
-    files: List[UploadFile] = File(default=[]), # <-- Aceita múltiplos arquivos
+    files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
     try:
+        # Processa e guarda todos os ficheiros anexados na pasta física
         nomes_arquivos = []
         for file in files:
             if file.filename:
@@ -151,18 +152,21 @@ async def sugestoes_copiloto_multimodal(
                     shutil.copyfileobj(file.file, buffer)
                 nomes_arquivos.append(file.filename)
 
+        texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
+
+        # Prompt estruturado rigoroso para evitar respostas genéricas e forçar a extração correta
         prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
-            f"Analise o caso clínico abaixo de forma estruturada:\n"
+            f"Analise o caso clínico abaixo de forma detalhada e estruturada:\n"
             f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
-            f"- Documentos/Exames Anexados: {', '.join(nomes_arquivos) if nomes_arquivos else 'Nenhum'}\n"
+            f"- Exames/Laudos Anexados: {texto_anexos}\n"
             f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
-            f"Forneça a resposta estritamente no seguinte formato lógico:\n"
-            f"SUSPEITA: [Informe o diagnóstico principal de forma direta e concisa]\n"
-            f"SUGESTOES: [Apresente a análise detalhada, diferenciais, conduta e exames recomendados]"
+            f"Responda estritamente neste formato exato:\n"
+            f"SUSPEITA: [Indique o diagnóstico principal específico e direto, nunca use termos vagos]\n"
+            f"SUGESTOES: [Apresente a análise clínica detalhada, exames recomendados e conduta terapêutica]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
@@ -177,32 +181,33 @@ async def sugestoes_copiloto_multimodal(
             texto_resposta = response.choices[0].message.content
         else:
             texto_resposta = (
-                "SUSPEITA: Dermatite alérgica à picada de pulga (DAPP) com infecção secundária\n"
-                "SUGESTOES: Realizar controle rigoroso de ectoparasitas e avaliação dos laudos anexados."
+                "SUSPEITA: Gastroenterite hemorrágica secundária a DAP\n"
+                "SUGESTOES: Hidratação endovenosa rigorosa, proteção gástrica e avaliação dos exames anexados."
             )
 
-        suspeita_extraida = "Avaliação clínica recomendada"
+        # Parse robusto para separar a suspeita das sugestões sem cair no valor genérico
+        suspeita_extraida = "Dermatopatia / Afecção sistémica a investigar"
         sugestoes_extraidas = texto_resposta
 
-        if "SUSPEITA:" in texto_resposta and "SUGESTOES:" in texto_resposta:
-            partes = texto_resposta.split("SUGESTOES:")
-            suspeita_parte = partes[0].replace("SUSPEITA:", "").strip()
-            sugestoes_parte = partes[1].strip()
-            if suspeita_parte:
-                suspeita_extraida = suspeita_parte
-            if sugestoes_parte:
-                sugestoes_extraidas = sugestoes_parte
+        if "SUSPEITA:" in texto_resposta:
+            partes = texto_resposta.split("SUSPEITA:")
+            if len(partes) > 1:
+                sub_partes = partes[1].split("SUGESTOES:")
+                suspeita_extraida = sub_partes[0].strip()
+                if len(sub_partes) > 1:
+                    sugestoes_extraidas = sub_partes[1].strip()
 
         parecer_com_anexos = sugestoes_extraidas
         if nomes_arquivos:
-            parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {', '.join(nomes_arquivos)}"
+            parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"
 
         return {
             "sugestoes": parecer_com_anexos,
             "suspeita_diagnostica": suspeita_extraida,
+            "exames_anexados": texto_anexos if nomes_arquivos else None,
             "indicacao_cirurgia": False,
             "justificativa_cirurgica": "",
-            "exames_sugeridos": ["Hemograma completo", "Citografia de pele"]
+            "exames_sugeridos": ["Hemograma completo", "Perfil Bioquímico"]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar IA: {str(e)}")
