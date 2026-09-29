@@ -8,12 +8,12 @@ class AnimalCreate(BaseModel):
     raca: str = Field(..., min_length=1)
     sexo: str
     idade: float = Field(ge=0)
-    peso: float = Field(ge=0)
+    peso: Optional[float] = None  # <-- Alterado para opcional
     tutor_id: int
     status: str
-    castrado: Optional[str] = None  # Novo campo
-    cor: Optional[str] = None        # Novo campo
-    porte: Optional[str] = None      # Novo campo
+    castrado: Optional[str] = None
+    cor: Optional[str] = None
+    porte: Optional[str] = None
 
 
 class AnimalResponse(BaseModel):
@@ -24,12 +24,12 @@ class AnimalResponse(BaseModel):
     raca: str
     sexo: str
     idade: float
-    peso: float
+    peso: Optional[float] = None  # <-- Alterado para opcional
     tutor_id: int
     status: str
-    castrado: Optional[str] = None  # Novo campo
-    cor: Optional[str] = None        # Novo campo
-    porte: Optional[str] = None      # Novo campo
+    castrado: Optional[str] = None
+    cor: Optional[str] = None
+    porte: Optional[str] = None
 
     model_config = ConfigDict(
         from_attributes=True
