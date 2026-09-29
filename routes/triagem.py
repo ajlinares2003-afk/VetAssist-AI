@@ -91,10 +91,13 @@ def criar_checkin_triagem_direto(
         raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
 
     try:
-        # 1. Cria a consulta associando obrigatoriamente o utilizador logado
+        # Extrai o ID do utilizador dependendo se for dicionário ou objeto
+        user_id = usuario_logado["id"] if isinstance(usuario_logado, dict) else usuario_logado.id
+
+        # 1. Cria a consulta associando obrigatoriamente o ID do utilizador logado
         nova_consulta = Consulta(
             animal_id=dados.animal_id,
-            usuario_id=usuario_logado.id,  # <-- Correção aplicada aqui!
+            usuario_id=user_id,  # <-- Usando a variável tratada com segurança
             queixa_principal=dados.queixa_principal,
             status="Aguardando Consulta (Fila Vet)",
             peso_atendimento=dados.peso,
