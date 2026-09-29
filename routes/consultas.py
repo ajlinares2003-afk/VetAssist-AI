@@ -154,21 +154,22 @@ async def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
 
-        # Prompt estruturado rigoroso para evitar respostas genéricas e forçar a extração correta
+        # Prompt estruturado rigoroso exigindo menção aos parâmetros vitais e suspeita obrigatória
         prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
-            f"Analise o caso clínico abaixo de forma detalhada e estruturada:\n"
+            f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal:\n"
             f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
             f"- Exames/Laudos Anexados: {texto_anexos}\n"
             f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
-            f"Instruções obrigatórias para a resposta:\n"
-            f"1. Na análise clínica detalhada, comente explicitamente o estado do TPC e das Mucosas informados.\n"
-            f"2. Responda estritamente no formato:\n"
-            f"SUSPEITA: [Indique o diagnóstico principal]\n"
-            f"SUGESTOES: [Análise clínica detalhada com tópicos, incluindo a avaliação do TPC e mucosas, exames recomendados e conduta terapêutica]"
+            f"REGRAS OBRIGATÓRIAS:\n"
+            f"1. Você DEVE fornecer uma suspeita diagnóstica principal (hipótese de trabalho).\n"
+            f"2. Na análise clínica detalhada, comente explicitamente o estado do TPC e das Mucosas informados.\n"
+            f"3. Responda estritamente no formato:\n"
+            f"SUSPEITA: [Nome da doença ou alteração principal de forma direta, sem textos longos]\n"
+            f"SUGESTOES: [Análise clínica dividida por tópicos, conduta e exames]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
@@ -183,21 +184,30 @@ async def sugestoes_copiloto_multimodal(
             texto_resposta = response.choices[0].message.content
         else:
             texto_resposta = (
-                "SUSPEITA: Gastroenterite hemorrágica secundária a DAP\n"
-                "SUGESTOES: Hidratação endovenosa rigorosa, proteção gástrica e avaliação dos exames anexados."
+                "SUSPEITA: Dermatite alérgica a pulga (FAD)\n"
+                "SUGESTOES: Controle imediato de ectoparasitas, banho terapêutico e avaliação dos exames anexados."
             )
 
-        # Parse robusto para separar a suspeita das sugestões sem cair no valor genérico
-        suspeita_extraida = "Dermatopatia / Afecção sistémica a investigar"
+        # Extração limpa e inteligente da suspeita diagnóstica
+        suspeita_extraida = ""
         sugestoes_extraidas = texto_resposta
 
         if "SUSPEITA:" in texto_resposta:
             partes = texto_resposta.split("SUSPEITA:")
             if len(partes) > 1:
                 sub_partes = partes[1].split("SUGESTOES:")
-                suspeita_extraida = sub_partes[0].strip()
+                suspeita_extraida = sub_partes[0].replace("**", "").strip()
                 if len(sub_partes) > 1:
                     sugestoes_extraidas = sub_partes[1].strip()
+
+        # Fallback inteligente se a tag falhar
+        if not suspeita_extraida and texto_resposta:
+            linhas_resp = [l.strip() for l in texto_resposta.split("\n") if l.strip()]
+            if linhas_resp:
+                suspeita_extraida = linhas_resp[0].replace("**", "").replace("-", "").strip()
+
+        if not suspeita_extraida:
+            suspeita_extraida = "Hipótese clínica a esclarecer"
 
         parecer_com_anexos = sugestoes_extraidas
         if nomes_arquivos:
