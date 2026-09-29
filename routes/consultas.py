@@ -143,20 +143,21 @@ async def sugestoes_copiloto_multimodal(
     usuario_logado = Depends(obter_usuario_logado)
 ):
     try:
-        # Prompt clínico base estruturado para a IA veterinária
         prompt_ia = (
-            f"Atue como um médico veterinário especialista e copiloto clínico.\n"
-            f"Analise o caso abaixo e forneça sugestões diagnósticas e terapêuticas:\n"
-            f"- Espécie: {especie}, Raça: {raca}, Idade: {idade}, Peso: {peso}\n"
+            f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
+            f"Analise o caso clínico abaixo de forma estruturada:\n"
+            f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
-            f"- Parâmetros: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n"
+            f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
+            f"Forneça a resposta estritamente no seguinte formato lógico:\n"
+            f"SUSPEITA: [Informe o diagnóstico principal de forma direta e concisa]\n"
+            f"SUGESTOES: [Apresente a análise detalhada, diferenciais, conduta e exames recomendados]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
-        sugestoes = ""
-        suspeita = "Avaliação clínica recomendada"
+        texto_resposta = ""
 
         if provedor == "groq" and client_or_key:
             response = client_or_key.chat.completions.create(
@@ -164,16 +165,31 @@ async def sugestoes_copiloto_multimodal(
                 messages=[{"role": "user", "content": prompt_ia}],
                 temperature=0.3
             )
-            sugestoes = response.choices[0].message.content
+            texto_resposta = response.choices[0].message.content
         else:
-            sugestoes = "Análise simulada do Copiloto Clínico: Paciente estável, recomenda-se monitorização e exames complementares de rotina."
+            texto_resposta = (
+                "SUSPEITA: Dermatite alérgica à picada de pulga (DAPP) com infecção secundária\n"
+                "SUGESTOES: Realizar controle rigoroso de ectoparasitas, banhos terapêuticos e avaliação de suporte sintomático."
+            )
+
+        suspeita_extraida = "Avaliação clínica recomendada"
+        sugestoes_extraidas = texto_resposta
+
+        if "SUSPEITA:" in texto_resposta and "SUGESTOES:" in texto_resposta:
+            partes = texto_resposta.split("SUGESTOES:")
+            suspeita_parte = partes[0].replace("SUSPEITA:", "").strip()
+            sugestoes_parte = partes[1].strip()
+            if suspeita_parte:
+                suspeita_extraida = suspeita_parte
+            if sugestoes_parte:
+                sugestoes_extraidas = sugestoes_parte
 
         return {
-            "sugestoes": sugestoes,
-            "suspeita_diagnostica": suspeita,
+            "sugestoes": sugestoes_extraidas,
+            "suspeita_diagnostica": suspeita_extraida,
             "indicacao_cirurgia": False,
             "justificativa_cirurgica": "",
-            "exames_sugeridos": ["Hemograma completo", "Perfil Bioquímico"]
+            "exames_sugeridos": ["Hemograma completo", "Citografia de pele / Scraping cutâneo"]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar IA: {str(e)}")

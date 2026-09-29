@@ -15,9 +15,14 @@ ok - 11 - Corrigir as ordens dos exames do mais recente para o mais antigo.
 <MdLocalHospital size={22} color={indicacaoCirurgia ? "#d97706" : "#64748b"} />
 <MdPrint size={18} style={{ flexShrink: 0 }} /> Imprimir / PDF
 
+Pele e pelagem: Presença de pulgas visíveis e fezes de pulgas na região lombar. dorso e pescoço.
+Lesões: Alopecia e feridas por arranhão.
+Orelhas: Limpas, sem sinais de ácaro.
+Abdômen: Flácido, sem dor à palpação.
+Linfonodos: Sem alteração.
 
 Senha: Banco de dados na Nuvem
 *** Muito Importante Não pode esquecer: MatheusLinares98
-postgresql://postgres:[MatheusLinares98]@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
-
-
+postgresql://postgres:MatheusLinares98@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
+postgresql+psycopg2://postgres:MatheusLinares98@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
+postgresql+psycopg2://postgres.ucndrmsekpgwijhrvkbz:MatheusLinares98@aws-0-sa-east-1.pooler.supabase.com:5432/postgres
