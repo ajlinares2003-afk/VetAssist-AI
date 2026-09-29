@@ -34,6 +34,7 @@ class Triagem(Base):
     frequencia_respiratoria = Column(Integer, nullable=True)
     tpc_segundos = Column(Integer, nullable=True)
     desidratacao_percentual = Column(Integer, nullable=True)
+    mucosas = Column(Text, nullable=True) 
     
     queixa_principal = Column(Text, nullable=False)
     classificacao_risco = Column(Enum(ClassificacaoRiscoEnum), nullable=False)
@@ -41,5 +42,4 @@ class Triagem(Base):
     
     data_triagem = Column(TIMESTAMP, server_default=func.now(), nullable=False)
 
-    # Relacionamento com a Consulta
     consulta = relationship("Consulta", back_populates="triagem")

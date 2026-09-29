@@ -91,11 +91,9 @@ def criar_checkin_triagem_direto(
         raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
 
     try:
-        # Extração segura do ID do utilizador logado
         user_id = None
         if isinstance(usuario_logado, dict):
             user_id = usuario_logado.get("id") or usuario_logado.get("user_id")
-            # Se o dicionário tiver o e-mail em 'sub', podemos procurar o utilizador na base de dados
             if not user_id and ("sub" in usuario_logado or "email" in usuario_logado):
                 from models.usuario import Usuario
                 email_busca = usuario_logado.get("sub") or usuario_logado.get("email")
@@ -105,16 +103,15 @@ def criar_checkin_triagem_direto(
         else:
             user_id = getattr(usuario_logado, "id", None)
 
-        # Fallback de segurança caso o ID venha nulo
         if not user_id:
             from models.usuario import Usuario
             primeiro_usuario = db.query(Usuario).first()
             if primeiro_usuario:
                 user_id = primeiro_usuario.id
             else:
-                raise HTTPException(status_code=400, detail="Não foi possível identificar o utilizador logado para associar à consulta.")
+                raise HTTPException(status_code=400, detail="Não foi possível identificar o utilizador logado.")
 
-        # 1. Cria a consulta associando o ID do utilizador apurado
+        # 1. Cria a consulta
         nova_consulta = Consulta(
             animal_id=dados.animal_id,
             usuario_id=user_id,
@@ -129,12 +126,11 @@ def criar_checkin_triagem_direto(
         db.commit()
         db.refresh(nova_consulta)
 
-        # Garante a geração do código oficial
         if not nova_consulta.codigo:
             nova_consulta.codigo = f"CNS-{nova_consulta.id:04d}"
             db.commit()
 
-        # 2. Regista os dados de triagem vinculados à nova consulta
+        # 2. Cria a triagem com o campo mucosas incluído com segurança
         triagem_db = Triagem(
             consulta_id=nova_consulta.id,
             peso=dados.peso,
@@ -150,7 +146,6 @@ def criar_checkin_triagem_direto(
         )
         db.add(triagem_db)
 
-        # 3. Atualiza o peso oficial do animal se fornecido
         if dados.peso:
             animal = db.query(Animal).filter(Animal.id == dados.animal_id).first()
             if animal:
