@@ -133,16 +133,24 @@ async def sugestoes_copiloto_multimodal(
     sintomas: Optional[str] = Form(None),
     exame_fisico: Optional[str] = Form(None),
     temperatura: Optional[str] = Form(None),
-    frequencia_cardiaca: Optional[str] = Form(None),
-    frequencia_respiratoria: Optional[str] = Form(None),
+    frequencia_cardiaca: Optional[int] = Form(None),
+    frequencia_respiratoria: Optional[int] = Form(None),
     tpc_segundos: Optional[str] = Form(None),
     mucosas: Optional[str] = Form(None),
     solicitar_exames_preventivos: Optional[str] = Form("false"),
-    file: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File(default=[]), # <-- Aceita múltiplos arquivos
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
     try:
+        nomes_arquivos = []
+        for file in files:
+            if file.filename:
+                caminho_arquivo = UPLOADS_DIR / f"{file.filename}"
+                with open(caminho_arquivo, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
+                nomes_arquivos.append(file.filename)
+
         prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
             f"Analise o caso clínico abaixo de forma estruturada:\n"
@@ -150,6 +158,7 @@ async def sugestoes_copiloto_multimodal(
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
+            f"- Documentos/Exames Anexados: {', '.join(nomes_arquivos) if nomes_arquivos else 'Nenhum'}\n"
             f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
             f"Forneça a resposta estritamente no seguinte formato lógico:\n"
             f"SUSPEITA: [Informe o diagnóstico principal de forma direta e concisa]\n"
@@ -169,7 +178,7 @@ async def sugestoes_copiloto_multimodal(
         else:
             texto_resposta = (
                 "SUSPEITA: Dermatite alérgica à picada de pulga (DAPP) com infecção secundária\n"
-                "SUGESTOES: Realizar controle rigoroso de ectoparasitas, banhos terapêuticos e avaliação de suporte sintomático."
+                "SUGESTOES: Realizar controle rigoroso de ectoparasitas e avaliação dos laudos anexados."
             )
 
         suspeita_extraida = "Avaliação clínica recomendada"
@@ -184,12 +193,16 @@ async def sugestoes_copiloto_multimodal(
             if sugestoes_parte:
                 sugestoes_extraidas = sugestoes_parte
 
+        parecer_com_anexos = sugestoes_extraidas
+        if nomes_arquivos:
+            parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {', '.join(nomes_arquivos)}"
+
         return {
-            "sugestoes": sugestoes_extraidas,
+            "sugestoes": parecer_com_anexos,
             "suspeita_diagnostica": suspeita_extraida,
             "indicacao_cirurgia": False,
             "justificativa_cirurgica": "",
-            "exames_sugeridos": ["Hemograma completo", "Citografia de pele / Scraping cutâneo"]
+            "exames_sugeridos": ["Hemograma completo", "Citografia de pele"]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar IA: {str(e)}")

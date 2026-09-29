@@ -46,6 +46,7 @@ class Consulta(Base):
     frequencia_cardiaca = Column(Integer, nullable=True)
     frequencia_respiratoria = Column(Integer, nullable=True)
     parecer_copiloto = Column(Text, nullable=True)
+    exames_anexados = Column(Text, nullable=True)  # <-- Campo para salvar os nomes dos arquivos anexados no banco
     observacoes = Column(Text, nullable=True)
     indicacao_cirurgia = Column(Boolean, default=False, nullable=True)
     justificativa_cirurgica = Column(Text, nullable=True)
