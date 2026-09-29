@@ -84,27 +84,6 @@ class ConsultaCreate(BaseModel):
     justificativa_cirurgica: Optional[str] = None
     solicitar_exames_preventivos: Optional[bool] = False
 
-class CopilotoRequest(BaseModel):
-    animal_id: Optional[int] = None
-    especie: Optional[str] = "Não informada"
-    raca: Optional[str] = "SRD"
-    idade: Optional[str] = None
-    peso: Optional[str] = None
-    queixa_principal: str
-    sintomas: Optional[str] = None
-    exame_fisico: Optional[str] = None
-    temperatura: Optional[str] = None
-    frequencia_cardiaca: Optional[int] = None
-    frequencia_respiratoria: Optional[int] = None
-
-class SugestaoAsaRequest(BaseModel):
-    queixa_principal: str
-    historico_clinico: Optional[str] = None
-    exame_fisico: Optional[str] = None
-    temperatura: Optional[float] = None
-    frequencia_cardiaca: Optional[int] = None
-    frequencia_respiratoria: Optional[int] = None
-
 @router.post("/upload-anexo")
 async def upload_anexo_exame(
     file: UploadFile = File(...),
@@ -143,7 +122,6 @@ async def sugestoes_copiloto_multimodal(
     usuario_logado = Depends(obter_usuario_logado)
 ):
     try:
-        # Processa e guarda todos os ficheiros anexados na pasta física
         nomes_arquivos = []
         for file in files:
             if file.filename:
@@ -154,7 +132,6 @@ async def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
 
-        # Prompt estruturado rigoroso exigindo menção aos parâmetros vitais e suspeita obrigatória
         prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
             f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal:\n"
@@ -188,7 +165,6 @@ async def sugestoes_copiloto_multimodal(
                 "SUGESTOES: Controle imediato de ectoparasitas, banho terapêutico e avaliação dos exames anexados."
             )
 
-        # Extração limpa e inteligente da suspeita diagnóstica
         suspeita_extraida = ""
         sugestoes_extraidas = texto_resposta
 
@@ -200,7 +176,6 @@ async def sugestoes_copiloto_multimodal(
                 if len(sub_partes) > 1:
                     sugestoes_extraidas = sub_partes[1].strip()
 
-        # Fallback inteligente se a tag falhar
         if not suspeita_extraida and texto_resposta:
             linhas_resp = [l.strip() for l in texto_resposta.split("\n") if l.strip()]
             if linhas_resp:
@@ -237,7 +212,23 @@ def chamar_paciente_consulta(
     consulta_db.status = "Chamando para Consulta"
     db.commit()
     db.refresh(consulta_db)
-    return {"mensagem": "Paciente chamado com sucesso!", "status": consulta_db.status}
+    return {"mensagem": "Paciente chamado para consulta com sucesso!", "status": consulta_db.status}
+
+# ROTA DEDICADA PARA CHAMAR PARA TRIAGEM (CORRIGE A MENSAGEM NO PAINEL)
+@router.put("/{consulta_id}/chamar-triagem")
+def chamar_paciente_triagem(
+    consulta_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    consulta_db = db.query(Consulta).filter(Consulta.id == consulta_id).first()
+    if not consulta_db:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    
+    consulta_db.status = "Chamando para Triagem"
+    db.commit()
+    db.refresh(consulta_db)
+    return {"mensagem": "Paciente chamado para triagem com sucesso!", "status": consulta_db.status}
 
 @router.put("/{consulta_id}/iniciar-triagem")
 def iniciar_triagem_consulta(
@@ -258,7 +249,9 @@ def iniciar_triagem_consulta(
 def listar_chamadas_painel(db: Session = Depends(get_db)):
     consultas_ativas = db.query(Consulta).filter(
         Consulta.status.in_([
+            "AGUARDANDO_TRIAGEM",
             "Aguardando Triagem (Recepção)",
+            "Aguardando Triagem",
             "Chamando para Triagem",
             "Em Triagem",
             "Aguardando Consulta (Fila Vet)",
