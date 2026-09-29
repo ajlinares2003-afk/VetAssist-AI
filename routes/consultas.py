@@ -188,13 +188,22 @@ async def sugestoes_copiloto_multimodal(
         if nomes_arquivos:
             parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"
 
+        # Detecta automaticamente se há indicação cirúrgica no parecer da IA
+        tem_indicacao = any(termo in sugestoes_extraidas.lower() for termo in ["cirurgia", "descompressão", "hemilaminectomia", "corpectomia"])
+        
+        justificativa_cirurgica_texto = ""
+        if tem_indicacao:
+            justificativa_cirurgica_texto = "Se a imagem confirmar compressão medular significativa (extrusão discal ou fratura com canal comprometido), encaminhar para cirurgia de descompressão (hemilaminectomia ou corpectomia) dentro de 24-48 h para otimizar prognóstico."
+        else:
+            justificativa_cirurgica_texto = "Caso a lesão seja mínima e sem compressão crítica, manejo conservador com imobilização, fisioterapia e reabilitação intensiva."
+
         return {
             "sugestoes": parecer_com_anexos,
             "suspeita_diagnostica": suspeita_extraida,
             "exames_anexados": texto_anexos if nomes_arquivos else None,
-            "indicacao_cirurgia": False,
-            "justificativa_cirurgica": "",
-            "exames_sugeridos": ["Hemograma completo", "Perfil Bioquímico"]
+            "indicacao_cirurgia": tem_indicacao,
+            "justificativa_cirurgica": justificativa_cirurgica_texto,
+            "exames_sugeridos": ["Hemograma completo", "Tomografia ou Ressonância"]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar IA: {str(e)}")
@@ -214,7 +223,6 @@ def chamar_paciente_consulta(
     db.refresh(consulta_db)
     return {"mensagem": "Paciente chamado para consulta com sucesso!", "status": consulta_db.status}
 
-# ROTA DEDICADA PARA CHAMAR PARA TRIAGEM (CORRIGE A MENSAGEM NO PAINEL)
 @router.put("/{consulta_id}/chamar-triagem")
 def chamar_paciente_triagem(
     consulta_id: int,
