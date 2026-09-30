@@ -19,6 +19,7 @@ class Animal(Base):
 
     nome = Column(String(100), nullable=False)
     especie = Column(String(50), nullable=False)
+    sub_especie = Column(String(100), nullable=True)  # Novo campo adicionado para a subespécie
     raca = Column(String(100))
     sexo = Column(String(20), nullable=False)
 

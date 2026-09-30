@@ -48,19 +48,20 @@ def criar_animal(
         )
 
     novo_animal = Animal(
-    codigo=animal.codigo,
-    nome=animal.nome,
-    especie=animal.especie,
-    raca=animal.raca,
-    sexo=animal.sexo,
-    idade=animal.idade,
-    peso=animal.peso,
-    tutor_id=animal.tutor_id,
-    status=animal.status,
-    castrado=animal.castrado,
-    cor=animal.cor,
-    porte=animal.porte
-)
+        codigo=animal.codigo,
+        nome=animal.nome,
+        especie=animal.especie,
+        sub_especie=getattr(animal, "sub_especie", None), # Campo sub-espécie incluído com segurança
+        raca=animal.raca,
+        sexo=animal.sexo,
+        idade=animal.idade,
+        peso=getattr(animal, "peso", None),
+        tutor_id=animal.tutor_id,
+        status=animal.status,
+        castrado=animal.castrado,
+        cor=animal.cor,
+        porte=animal.porte
+    )
 
     db.add(novo_animal)
     db.flush()  # Gera o ID no banco sem fechar a transação
@@ -172,19 +173,22 @@ def atualizar_animal(
             )
 
     try:
+        # Atualização de todos os campos incluindo a sub-espécie
         if animal.codigo:
             animal_db.codigo = animal.codigo
-            animal_db.nome = animal.nome
-            animal_db.especie = animal.especie
-            animal_db.raca = animal.raca
-            animal_db.sexo = animal.sexo
-            animal_db.idade = animal.idade
-            animal_db.peso = animal.peso
-            animal_db.tutor_id = animal.tutor_id
-            animal_db.status = animal.status
-            animal_db.castrado = animal.castrado
-            animal_db.cor = animal.cor
-            animal_db.porte = animal.porte
+            
+        animal_db.nome = animal.nome
+        animal_db.especie = animal.especie
+        animal_db.sub_especie = getattr(animal, "sub_especie", None)
+        animal_db.raca = animal.raca
+        animal_db.sexo = animal.sexo
+        animal_db.idade = animal.idade
+        animal_db.peso = getattr(animal, "peso", None)
+        animal_db.tutor_id = animal.tutor_id
+        animal_db.status = animal.status
+        animal_db.castrado = animal.castrado
+        animal_db.cor = animal.cor
+        animal_db.porte = animal.porte
 
         db.commit()
         db.refresh(animal_db)
