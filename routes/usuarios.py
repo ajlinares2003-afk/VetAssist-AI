@@ -31,14 +31,14 @@ def listar_usuarios(
 @router.get("/{usuario_id}")
 def buscar_usuario(
     usuario_id: int,
-    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
+    usuario_logado = Depends(exigir_perfil(["ADMIN", "RECEPCAO"])),
     db: Session = Depends(get_db)
 ):
     usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario:
         raise HTTPException(
             status_code=404,
-            detail="Usuário não encontrado."
+            detail="Utilizador não encontrado."
         )
     usuario.senha_hash = None
     return usuario
@@ -47,7 +47,7 @@ def buscar_usuario(
 @router.post("/")
 def criar_usuario(
     usuario: UsuarioCreate,
-    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
+    usuario_logado = Depends(exigir_perfil(["ADMIN", "RECEPCAO"])), # <-- Permitido para ADMIN e RECEPCAO
     db: Session = Depends(get_db)
 ):
     email_limpo = usuario.email.strip().lower()
@@ -56,7 +56,7 @@ def criar_usuario(
     if usuario_existente:
         raise HTTPException(
             status_code=409,
-            detail="Já existe um usuário cadastrado com este e-mail."
+            detail="Já existe um utilizador cadastrado com este e-mail."
         )
 
     perfil_str = usuario.perfil.upper() if isinstance(usuario.perfil, str) else usuario.perfil.value
@@ -64,7 +64,6 @@ def criar_usuario(
     if crmv_valor and isinstance(crmv_valor, str):
         crmv_valor = crmv_valor.strip() or None
 
-    # Captura o consultório padrão se enviado (geralmente usado para veterinários)
     consultorio_valor = getattr(usuario, 'consultorio_padrao', None)
     if consultorio_valor and isinstance(consultorio_valor, str):
         consultorio_valor = consultorio_valor.strip() or None
@@ -95,7 +94,7 @@ def criar_usuario(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Já existe um usuário cadastrado com este e-mail."
+            detail="Já existe um utilizador cadastrado com este e-mail."
         )
     except SQLAlchemyError as err:
         db.rollback()
@@ -115,14 +114,14 @@ def criar_usuario(
 def atualizar_usuario(
     usuario_id: int,
     usuario: UsuarioCreate,
-    usuario_logado = Depends(exigir_perfil(["ADMIN"])),
+    usuario_logado = Depends(exigir_perfil(["ADMIN", "RECEPCAO"])), # <-- Permitido para ADMIN e RECEPCAO
     db: Session = Depends(get_db)
 ):
     usuario_db = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario_db:
         raise HTTPException(
             status_code=404,
-            detail="Usuário não encontrado."
+            detail="Utilizador não encontrado."
         )
 
     email_limpo = usuario.email.strip().lower()
@@ -134,7 +133,7 @@ def atualizar_usuario(
     if email_existente:
         raise HTTPException(
             status_code=409,
-            detail="Já existe outro usuário cadastrado com este e-mail."
+            detail="Já existe outro utilizador cadastrado com este e-mail."
         )
 
     perfil_str = usuario.perfil.upper() if isinstance(usuario.perfil, str) else usuario.perfil.value
@@ -161,7 +160,7 @@ def atualizar_usuario(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Já existe outro usuário cadastrado com este e-mail."
+            detail="Já existe outro utilizador cadastrado com este e-mail."
         )
     except SQLAlchemyError as err:
         db.rollback()
@@ -190,12 +189,12 @@ def excluir_usuario(
     if not usuario:
         raise HTTPException(
             status_code=404,
-            detail="Usuário não encontrado."
+            detail="Utilizador não encontrado."
         )
 
     db.delete(usuario)
     db.commit()
 
     return {
-        "mensagem": "Usuário excluído com sucesso."
+        "mensagem": "Utilizador excluído com sucesso."
     }

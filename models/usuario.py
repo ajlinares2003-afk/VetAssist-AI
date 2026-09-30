@@ -21,6 +21,7 @@ class Usuario(Base):
     perfil = Column(String(50), default="VETERINARIO", nullable=False)
     
     crmv = Column(String(50), nullable=True)
+    consultorio_padrao = Column(String(50), nullable=True) # <-- ADICIONADO AQUI
     ativo = Column(Boolean, nullable=False, default=True)
     data_cadastro = Column(
         TIMESTAMP,
