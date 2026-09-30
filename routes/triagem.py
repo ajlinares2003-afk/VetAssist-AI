@@ -30,6 +30,51 @@ class TriagemCreate(BaseModel):
     classificacao_risco: str
     justificativa_risco: Optional[str] = None
 
+class AvaliacaoIARequest(BaseModel):
+    animal_id: Optional[int] = None
+    especie: Optional[str] = "Felino"
+    queixa_principal: str
+    temperatura: Optional[float] = None
+    frequencia_cardiaca: Optional[int] = None
+    frequencia_respiratoria: Optional[int] = None
+    tpc_segundos: Optional[int] = None
+    mucosas: Optional[str] = "Normocoradas"
+
+@router.post("/avaliar-ia")
+def avaliar_triagem_ia(
+    dados: AvaliacaoIARequest,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    temp = dados.temperatura or 38.5
+    fc = dados.frequencia_cardiaca or 120
+    tpc = dados.tpc_segundos or 2
+    queixa = (dados.queixa_principal or "").lower()
+
+    termos_graves = ["anorexia", "inchaço", "mandíbula", "sangue", "convulsão", "choque", "apático", "prostrado", "fratura"]
+    tem_termo_grave = any(termo in queixa for termo in termos_graves)
+
+    if temp > 41.0 or temp < 32.0 or fc > 240 or dados.mucosas == "Cianóticas" or tpc > 3:
+        return {
+            "classificacao_risco": "VERMELHO",
+            "justificativa": "Parâmetros vitais indicam risco iminente de vida (Emergência)."
+        }
+    elif (temp > 39.9 or temp < 34.0 or fc > 200 or dados.mucosas == "Hipocoradas / Pálidas") or tem_termo_grave:
+        return {
+            "classificacao_risco": "LARANJA",
+            "justificativa": "Sinais de alerta ou alterações sistêmicas moderadas a graves detectadas."
+        }
+    elif temp > 39.2 or fc > 150:
+        return {
+            "classificacao_risco": "AMARELO",
+            "justificativa": "Parâmetros moderadamente alterados, requer atendimento prioritário."
+        }
+    else:
+        return {
+            "classificacao_risco": "VERDE",
+            "justificativa": "Sinais vitais e queixa clínica estáveis dentro da normalidade (Pouco Urgente)."
+        }
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def criar_ou_atualizar_triagem(
     dados: TriagemCreate,
@@ -68,7 +113,6 @@ def criar_ou_atualizar_triagem(
         )
         db.add(triagem_db)
 
-    # Atualiza a consulta vinculada (Status, Veterinário, Consultório e Sinais Vitais)
     consulta = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
     if consulta:
         consulta.status = "Aguardando Consulta (Fila Vet)"
@@ -101,7 +145,6 @@ def criar_checkin_triagem_direto(
     try:
         user_id = dados.usuario_id
         if not user_id:
-            # Fallback para o usuário logado caso não venha no payload
             if isinstance(usuario_logado, dict):
                 email_busca = usuario_logado.get("sub") or usuario_logado.get("email")
                 if email_busca:
@@ -116,7 +159,6 @@ def criar_checkin_triagem_direto(
             if primeiro_usuario:
                 user_id = primeiro_usuario.id
 
-        # 1. Cria a consulta com o Veterinário e Consultório corretos
         nova_consulta = Consulta(
             animal_id=dados.animal_id,
             usuario_id=user_id,
@@ -136,7 +178,6 @@ def criar_checkin_triagem_direto(
             nova_consulta.codigo = f"CNS-{nova_consulta.id:04d}"
             db.commit()
 
-        # 2. Cria a triagem
         triagem_db = Triagem(
             consulta_id=nova_consulta.id,
             peso=dados.peso,
