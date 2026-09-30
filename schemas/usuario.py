@@ -8,6 +8,7 @@ class UsuarioCreate(BaseModel):
     senha: str
     perfil: str
     crmv: Optional[str] = None
+    consultorio_padrao: Optional[str] = None  # <-- Adicionado aqui
 
 
 class UsuarioResponse(BaseModel):
@@ -16,6 +17,7 @@ class UsuarioResponse(BaseModel):
     email: str
     perfil: str
     crmv: Optional[str] = None
+    consultorio_padrao: Optional[str] = None  # <-- Adicionado aqui também
 
     model_config = ConfigDict(
         from_attributes=True
