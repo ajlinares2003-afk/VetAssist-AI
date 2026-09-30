@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from database.database import get_db
 from models.consulta import Consulta
 from models.animais import Animal
+from models.usuario import Usuario
 from services.security import obter_usuario_logado
 from pydantic import BaseModel
 from typing import Optional
@@ -16,6 +17,8 @@ router = APIRouter(
 class TriagemCreate(BaseModel):
     consulta_id: Optional[int] = None
     animal_id: Optional[int] = None
+    usuario_id: Optional[int] = None       # Vínculo do Veterinário Responsável
+    consultorio: Optional[str] = None     # Consultório Atribuído
     peso: Optional[float] = None
     temperatura: Optional[float] = None
     frequencia_cardiaca: Optional[int] = None
@@ -65,9 +68,14 @@ def criar_ou_atualizar_triagem(
         )
         db.add(triagem_db)
 
+    # Atualiza a consulta vinculada (Status, Veterinário, Consultório e Sinais Vitais)
     consulta = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
     if consulta:
         consulta.status = "Aguardando Consulta (Fila Vet)"
+        if dados.usuario_id:
+            consulta.usuario_id = dados.usuario_id
+        if dados.consultorio:
+            consulta.consultorio = dados.consultorio
         if dados.peso:
             consulta.peso_atendimento = dados.peso
         if dados.temperatura:
@@ -91,30 +99,28 @@ def criar_checkin_triagem_direto(
         raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
 
     try:
-        user_id = None
-        if isinstance(usuario_logado, dict):
-            user_id = usuario_logado.get("id") or usuario_logado.get("user_id")
-            if not user_id and ("sub" in usuario_logado or "email" in usuario_logado):
-                from models.usuario import Usuario
+        user_id = dados.usuario_id
+        if not user_id:
+            # Fallback para o usuário logado caso não venha no payload
+            if isinstance(usuario_logado, dict):
                 email_busca = usuario_logado.get("sub") or usuario_logado.get("email")
-                u_db = db.query(Usuario).filter(Usuario.email == email_busca).first()
-                if u_db:
-                    user_id = u_db.id
-        else:
-            user_id = getattr(usuario_logado, "id", None)
+                if email_busca:
+                    u_db = db.query(Usuario).filter(Usuario.email == email_busca).first()
+                    if u_db:
+                        user_id = u_db.id
+            else:
+                user_id = getattr(usuario_logado, "id", None)
 
         if not user_id:
-            from models.usuario import Usuario
             primeiro_usuario = db.query(Usuario).first()
             if primeiro_usuario:
                 user_id = primeiro_usuario.id
-            else:
-                raise HTTPException(status_code=400, detail="Não foi possível identificar o utilizador logado.")
 
-        # 1. Cria a consulta
+        # 1. Cria a consulta com o Veterinário e Consultório corretos
         nova_consulta = Consulta(
             animal_id=dados.animal_id,
             usuario_id=user_id,
+            consultorio=dados.consultorio,
             queixa_principal=dados.queixa_principal,
             status="Aguardando Consulta (Fila Vet)",
             peso_atendimento=dados.peso,
@@ -130,7 +136,7 @@ def criar_checkin_triagem_direto(
             nova_consulta.codigo = f"CNS-{nova_consulta.id:04d}"
             db.commit()
 
-        # 2. Cria a triagem com o campo mucosas incluído com segurança
+        # 2. Cria a triagem
         triagem_db = Triagem(
             consulta_id=nova_consulta.id,
             peso=dados.peso,

@@ -64,6 +64,11 @@ def criar_usuario(
     if crmv_valor and isinstance(crmv_valor, str):
         crmv_valor = crmv_valor.strip() or None
 
+    # Captura o consultório padrão se enviado (geralmente usado para veterinários)
+    consultorio_valor = getattr(usuario, 'consultorio_padrao', None)
+    if consultorio_valor and isinstance(consultorio_valor, str):
+        consultorio_valor = consultorio_valor.strip() or None
+
     try:
         novo_usuario = Usuario(
             nome=usuario.nome.strip(),
@@ -71,6 +76,7 @@ def criar_usuario(
             senha_hash=gerar_hash(usuario.senha),
             perfil=perfil_str,
             crmv=crmv_valor if perfil_str == "VETERINARIO" else None,
+            consultorio_padrao=consultorio_valor if perfil_str == "VETERINARIO" else None,
             ativo=True
         )
         db.add(novo_usuario)
@@ -82,7 +88,8 @@ def criar_usuario(
             "nome": novo_usuario.nome,
             "email": novo_usuario.email,
             "perfil": str(novo_usuario.perfil),
-            "crmv": getattr(novo_usuario, 'crmv', None)
+            "crmv": getattr(novo_usuario, 'crmv', None),
+            "consultorio_padrao": getattr(novo_usuario, 'consultorio_padrao', None)
         }
     except IntegrityError:
         db.rollback()
@@ -135,12 +142,17 @@ def atualizar_usuario(
     if crmv_valor and isinstance(crmv_valor, str):
         crmv_valor = crmv_valor.strip() or None
 
+    consultorio_valor = getattr(usuario, 'consultorio_padrao', None)
+    if consultorio_valor and isinstance(consultorio_valor, str):
+        consultorio_valor = consultorio_valor.strip() or None
+
     usuario_db.nome = usuario.nome.strip()
     usuario_db.email = email_limpo
     if usuario.senha and usuario.senha.strip():
         usuario_db.senha_hash = gerar_hash(usuario.senha)
     usuario_db.perfil = perfil_str
     usuario_db.crmv = crmv_valor if perfil_str == "VETERINARIO" else None
+    usuario_db.consultorio_padrao = consultorio_valor if perfil_str == "VETERINARIO" else None
 
     try:
         db.commit()
@@ -163,7 +175,8 @@ def atualizar_usuario(
         "nome": usuario_db.nome,
         "email": usuario_db.email,
         "perfil": str(usuario_db.perfil),
-        "crmv": getattr(usuario_db, 'crmv', None)
+        "crmv": getattr(usuario_db, 'crmv', None),
+        "consultorio_padrao": getattr(usuario_db, 'consultorio_padrao', None)
     }
 
 
