@@ -50,30 +50,53 @@ def avaliar_triagem_ia(
     fc = dados.frequencia_cardiaca or 120
     tpc = dados.tpc_segundos or 2
     queixa = (dados.queixa_principal or "").lower()
+    especie = (dados.especie or "").lower()
+
+    # Verifica se é réptil ou animal ectotérmico
+    is_reptil = any(k in especie for k in ["réptil", "reptil", "iguana", "lagarto", "serpente", "tartaruga"])
 
     termos_graves = ["anorexia", "inchaço", "mandíbula", "sangue", "convulsão", "choque", "apático", "prostrado", "fratura"]
     tem_termo_grave = any(termo in queixa for termo in termos_graves)
 
-    if temp > 41.0 or temp < 32.0 or fc > 240 or dados.mucosas == "Cianóticas" or tpc > 3:
-        return {
-            "classificacao_risco": "VERMELHO",
-            "justificativa": "Parâmetros vitais indicam risco iminente de vida (Emergência)."
-        }
-    elif (temp > 39.9 or temp < 34.0 or fc > 200 or dados.mucosas == "Hipocoradas / Pálidas") or tem_termo_grave:
-        return {
-            "classificacao_risco": "LARANJA",
-            "justificativa": "Sinais de alerta ou alterações sistêmicas moderadas a graves detectadas."
-        }
-    elif temp > 39.2 or fc > 150:
-        return {
-            "classificacao_risco": "AMARELO",
-            "justificativa": "Parâmetros moderadamente alterados, requer atendimento prioritário."
-        }
+    if is_reptil:
+        # Lógica tolerante para répteis (32°C é normal, abaixo de 26°C é hipotermia severa)
+        if temp > 40.0 or temp < 24.0 or tpc > 4:
+            return {
+                "classificacao_risco": "VERMELHO",
+                "justificativa": "Parâmetros críticos e incompatíveis com a vida para répteis (Emergência)."
+            }
+        elif temp < 27.0 or tem_termo_grave:
+            return {
+                "classificacao_risco": "LARANJA",
+                "justificativa": "Sinais de hipotermia moderada ou alteração sistêmica detectada (Muito Urgente)."
+            }
+        else:
+            return {
+                "classificacao_risco": "VERDE",
+                "justificativa": "Temperatura e parâmetros vitais dentro da normalidade para a espécie (Pouco Urgente)."
+            }
     else:
-        return {
-            "classificacao_risco": "VERDE",
-            "justificativa": "Sinais vitais e queixa clínica estáveis dentro da normalidade (Pouco Urgente)."
-        }
+        # Lógica padrão para Cães, Gatos e demais mamíferos
+        if temp > 41.0 or temp < 34.0 or fc > 240 or dados.mucosas == "Cianóticas" or tpc > 3:
+            return {
+                "classificacao_risco": "VERMELHO",
+                "justificativa": "Parâmetros vitais indicam risco iminente de vida (Emergência)."
+            }
+        elif (temp > 39.9 or temp < 36.0 or fc > 200 or dados.mucosas == "Hipocoradas / Pálidas") or tem_termo_grave:
+            return {
+                "classificacao_risco": "LARANJA",
+                "justificativa": "Sinais de alerta ou alterações sistêmicas moderadas a graves detectadas."
+            }
+        elif temp > 39.2 or fc > 150:
+            return {
+                "classificacao_risco": "AMARELO",
+                "justificativa": "Parâmetros moderadamente alterados, requer atendimento prioritário."
+            }
+        else:
+            return {
+                "classificacao_risco": "VERDE",
+                "justificativa": "Sinais vitais e queixa clínica estáveis dentro da normalidade (Pouco Urgente)."
+            }
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def criar_ou_atualizar_triagem(
@@ -131,7 +154,7 @@ def criar_ou_atualizar_triagem(
 
     db.commit()
     db.refresh(triagem_db)
-    return {"mensagem": "Triagem guardada com sucesso!", "id": triagem_db.id}
+    return {"mensagem": "Triagem salva com sucesso!", "id": triagem_db.id}
 
 @router.post("/checkin-direto", status_code=status.HTTP_201_CREATED)
 def criar_checkin_triagem_direto(
