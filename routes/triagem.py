@@ -225,7 +225,7 @@ def criar_ou_atualizar_triagem(
         triagem_db.frequencia_respiratoria = dados.frequencia_respiratoria
         triagem_db.tpc_segundos = dados.tpc_segundos
         triagem_db.mucosas = dados.mucosas
-        triagem_db.desidratacao_percentual = dados.desidratacao_percentual
+        triagem_db.desidratacao = dados.desidratacao_percentual  # Mapeado para a coluna 'desidratacao' do banco
         triagem_db.queixa_principal = dados.queixa_principal
         triagem_db.classificacao_risco = dados.classificacao_risco
         triagem_db.justificativa_risco = dados.justificativa_risco
@@ -239,7 +239,7 @@ def criar_ou_atualizar_triagem(
             frequencia_respiratoria=dados.frequencia_respiratoria,
             tpc_segundos=dados.tpc_segundos,
             mucosas=dados.mucosas,
-            desidratacao_percentual=dados.desidratacao_percentual,
+            desidratacao=dados.desidratacao_percentual,  # Mapeado para a coluna 'desidratacao' do banco
             queixa_principal=dados.queixa_principal,
             classificacao_risco=dados.classificacao_risco,
             justificativa_risco=dados.justificativa_risco
@@ -320,7 +320,7 @@ def criar_checkin_triagem_direto(
             frequencia_respiratoria=dados.frequencia_respiratoria,
             tpc_segundos=dados.tpc_segundos,
             mucosas=dados.mucosas,
-            desidratacao_percentual=dados.desidratacao_percentual,
+            desidratacao=dados.desidratacao_percentual,
             queixa_principal=dados.queixa_principal,
             classificacao_risco=dados.classificacao_risco,
             justificativa_risco=dados.justificativa_risco
