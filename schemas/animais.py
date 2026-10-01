@@ -5,6 +5,7 @@ class AnimalCreate(BaseModel):
     codigo: Optional[str] = None
     nome: str = Field(..., min_length=1)
     especie: str
+    sub_especie: Optional[str] = None
     raca: str = Field(..., min_length=1)
     sexo: str
     idade: float = Field(ge=0)
@@ -21,6 +22,7 @@ class AnimalResponse(BaseModel):
     codigo: Optional[str] = None
     nome: str
     especie: str
+    sub_especie: Optional[str] = None
     raca: str
     sexo: str
     idade: float
