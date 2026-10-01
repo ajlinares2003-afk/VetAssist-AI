@@ -9,7 +9,7 @@ from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario
 from services.security import obter_usuario_logado
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from models.triagem import Triagem 
 
@@ -58,44 +58,38 @@ class ReferenciasIARequest(BaseModel):
     porte: Optional[str] = None
     idade: Optional[float] = None
 
+# Modelo Pydantic estruturado para forçar a IA a preencher sem engessar os valores
+class ReferenciasIAResponse(BaseModel):
+    peso_ref: str = Field(description="Faixa de peso normal formatada (Ex: 💡 Ref. Peso: 6.2 - 15.9 kg)")
+    ecc_ref: str = Field(description="ECC ideal formatado (Ex: 💡 Ideal: 5 (Escala 1 a 9))")
+    temperatura: str = Field(description="Temperatura normal formatada (Ex: Normal: 38.2°C - 39.5°C)")
+    fc: str = Field(description="Frequência cardíaca formatada (Ex: 140 - 220 bpm)")
+    fr: str = Field(description="Frequência respiratória formatada (Ex: 20 - 50 mpm)")
+    tpc: str = Field(description="TPC normal formatado (Ex: Até 2s)")
+    mucosas: str = Field(description="Aspecto normal das mucosas formatado (Ex: 💡 Normocoradas)")
+
 @router.post("/referencias-ia")
 def calcular_referencias_ia(
     dados: ReferenciasIARequest,
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    # Captura os dados enviados pelo payload de forma segura dentro da função
     especie = dados.especie or "Desconhecida"
     sub_especie = dados.sub_especie or "Não informada"
     raca = dados.raca or "Sem raça definida"
     porte = dados.porte or "Médio"
     idade = dados.idade or 3.0
 
-    # O prompt agora fica dentro da função, tendo acesso às variáveis locais
     prompt_sistema = (
         "Você é um médico veterinário intensivista e semiologista clínico sênior, especialista em fisiologia "
-        "de pequenos, grandes animais, pets não convencionais, exóticos, animais silvestres e de zoológico. "
-        "Sua tarefa é retornar estritamente um objeto JSON puro (sem blocos de código markdown ou texto adicional) contendo "
-        "as faixas de referência fisiológica e de escore de condição corporal (ECC escala 1 a 9) corretas para o paciente descrito abaixo.\n\n"
-        f"Dados do Paciente:\n"
+        "de pequenos, grandes animais, exóticos, animais silvestres e de zoológico. "
+        "Forneça com absoluta precisão científica e baseada na literatura veterinária oficial as faixas de referência fisiológica e de escore de condição corporal "
+        "(ECC escala 1 a 9) corretas para o paciente abaixo:\n\n"
         f"- Espécie: {especie}\n"
-        f"- Sub-espécie/Tipo: {sub_especie}\n"
+        f"- Sub-espécie: {sub_especie}\n"
         f"- Raça/Variedade: {raca}\n"
         f"- Porte: {porte}\n"
-        f"- Idade: {idade} anos\n\n"
-        "REGRAS OBRIGATÓRIAS PARA O JSON:\n"
-        "1. A chave 'peso_ref' DEVE começar exatamente com '💡 Ref. Peso: ' seguido de uma faixa numérica válida no formato 'X.X - Y.X kg' (Exemplo: '💡 Ref. Peso: 8.0 - 18.0 kg (Caracal adulto)').\n"
-        "2. Retorne APENAS o JSON com as chaves: peso_ref, ecc_ref, temperatura, fc, fr, tpc, mucosas.\n\n"
-        "O JSON retornado deve conter exatamente estas chaves:\n"
-        "{\n"
-        "  \"peso_ref\": \"...\",\n"
-        "  \"ecc_ref\": \"...\",\n"
-        "  \"temperatura\": \"...\",\n"
-        "  \"fc\": \"...\",\n"
-        "  \"fr\": \"...\",\n"
-        "  \"tpc\": \"...\",\n"
-        "  \"mucosas\": \"...\"\n"
-        "}"
+        f"- Idade: {idade} anos\n"
     )
 
     try:
@@ -104,6 +98,7 @@ def calcular_referencias_ia(
             contents=prompt_sistema,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                response_schema=ReferenciasIAResponse,
                 temperature=0.1
             ),
         )
@@ -112,15 +107,15 @@ def calcular_referencias_ia(
         return resultado_ia
 
     except Exception as e:
-        print(f"Erro ao consultar IA para referências: {e}")
+        print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
         return {
-            "peso_ref": f"💡 Ref. Peso: 3.0 - 6.0 kg",
-            "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
-            "temperatura": "Normal: 38.0°C - 39.2°C",
-            "fc": "70 - 160 bpm",
-            "fr": "15 - 30 mpm",
-            "tpc": "Até 2s",
-            "mucosas": "💡 Normocoradas (Rosadas e úmidas)"
+            "peso_ref": "⚠️ Indisponível (Erro na IA)",
+            "ecc_ref": "⚠️ Indisponível",
+            "temperatura": "⚠️ Indisponível",
+            "fc": "⚠️ Indisponível",
+            "fr": "⚠️ Indisponível",
+            "tpc": "⚠️ Indisponível",
+            "mucosas": "⚠️ Indisponível"
         }
 
 @router.post("/avaliar-ia")
@@ -141,7 +136,6 @@ def avaliar_triagem_ia(
     termos_graves = ["anorexia", "inchaço", "mandíbula", "sangue", "convulsão", "choque", "apático", "prostrado", "fratura", "parou"]
     tem_termo_grave = any(termo in queixa for termo in termos_graves)
 
-    # Identificação inteligente genérica baseada em parâmetros críticos e termos graves
     if temp > 41.5 or temp < 32.0 or tpc > 4 or tem_termo_grave:
         return {
             "classificacao_risco": "LARANJA",
@@ -177,7 +171,7 @@ def criar_ou_atualizar_triagem(
         triagem_db.frequencia_respiratoria = dados.frequencia_respiratoria
         triagem_db.tpc_segundos = dados.tpc_segundos
         triagem_db.mucosas = dados.mucosas
-        triagem_db.desidratacao = dados.desidratacao_percentual  # Mapeado para a coluna 'desidratacao' do banco
+        triagem_db.desidratacao = dados.desidratacao_percentual  
         triagem_db.queixa_principal = dados.queixa_principal
         triagem_db.classificacao_risco = dados.classificacao_risco
         triagem_db.justificativa_risco = dados.justificativa_risco
@@ -191,7 +185,7 @@ def criar_ou_atualizar_triagem(
             frequencia_respiratoria=dados.frequencia_respiratoria,
             tpc_segundos=dados.tpc_segundos,
             mucosas=dados.mucosas,
-            desidratacao=dados.desidratacao_percentual,  # Mapeado para a coluna 'desidratacao' do banco
+            desidratacao=dados.desidratacao_percentual,  
             queixa_principal=dados.queixa_principal,
             classificacao_risco=dados.classificacao_risco,
             justificativa_risco=dados.justificativa_risco
