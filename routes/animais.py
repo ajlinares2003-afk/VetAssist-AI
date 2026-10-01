@@ -51,7 +51,7 @@ def criar_animal(
         codigo=animal.codigo,
         nome=animal.nome,
         especie=animal.especie,
-        sub_especie=getattr(animal, "sub_especie", None), # Campo sub-espécie incluído com segurança
+        sub_especie=animal.sub_especie,  # <-- Capturando a subespécie corretamente
         raca=animal.raca,
         sexo=animal.sexo,
         idade=animal.idade,
@@ -64,9 +64,8 @@ def criar_animal(
     )
 
     db.add(novo_animal)
-    db.flush()  # Gera o ID no banco sem fechar a transação
+    db.flush()
 
-    # Se não foi informado código manual, gera no padrão PET-0001
     if not novo_animal.codigo:
         novo_animal.codigo = f"PET-{novo_animal.id:04d}"
 
@@ -159,7 +158,6 @@ def atualizar_animal(
             detail="Tutor não encontrado."
         )
 
-    # Verifica manualmente se o novo código já está em uso por OUTRO animal
     if animal.codigo and animal.codigo != animal_db.codigo:
         codigo_existente = (
             db.query(Animal)
@@ -173,13 +171,12 @@ def atualizar_animal(
             )
 
     try:
-        # Atualização de todos os campos incluindo a sub-espécie
         if animal.codigo:
             animal_db.codigo = animal.codigo
             
         animal_db.nome = animal.nome
         animal_db.especie = animal.especie
-        animal_db.sub_especie = getattr(animal, "sub_especie", None)
+        animal_db.sub_especie = animal.sub_especie  # <-- Atualizando a subespécie corretamente
         animal_db.raca = animal.raca
         animal_db.sexo = animal.sexo
         animal_db.idade = animal.idade
