@@ -20,6 +20,7 @@ class TriagemCreate(BaseModel):
     usuario_id: Optional[int] = None       # Vínculo do Veterinário Responsável
     consultorio: Optional[str] = None     # Consultório Atribuído
     peso: Optional[float] = None
+    ecc: Optional[str] = None             # Escore de Condição Corporal
     temperatura: Optional[float] = None
     frequencia_cardiaca: Optional[int] = None
     frequencia_respiratoria: Optional[int] = None
@@ -35,6 +36,7 @@ class AvaliacaoIARequest(BaseModel):
     especie: Optional[str] = "Felino"
     sub_especie: Optional[str] = None
     raca: Optional[str] = None
+    ecc: Optional[str] = None             # Escore de Condição Corporal para a IA avaliar
     queixa_principal: str
     temperatura: Optional[float] = None
     frequencia_cardiaca: Optional[int] = None
@@ -66,6 +68,7 @@ def calcular_referencias_ia(
     if eh_coelho:
         return {
             "peso_ref": "💡 Ref. Peso: 0.9 - 2.5 kg (Porte Mini/Anão)",
+            "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
             "temperatura": "Normal: 38.5°C - 40.0°C",
             "fc": "180 - 300 bpm (Normal em coelhos)",
             "fr": "30 - 60 mpm (Normal em coelhos)",
@@ -78,6 +81,7 @@ def calcular_referencias_ia(
     if is_reptil:
         return {
             "peso_ref": "💡 Ref. Peso: 1.0 - 4.0 kg",
+            "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
             "temperatura": "Normal: 28°C - 37°C",
             "fc": "60 - 100 bpm (Repouso)",
             "fr": "10 - 30 mpm (Repouso)",
@@ -95,6 +99,7 @@ def calcular_referencias_ia(
 
         return {
             "peso_ref": peso_ref,
+            "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
             "temperatura": "Normal: 38.1°C - 39.2°C",
             "fc": "120 - 220 bpm",
             "fr": f"{fr_faixa}",
@@ -111,6 +116,7 @@ def calcular_referencias_ia(
 
     return {
         "peso_ref": f"💡 Ref. Peso: Variável por raça ({porte or 'Padrão'})",
+        "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
         "temperatura": "Normal: 38.3°C - 39.2°C",
         "fc": "70 - 160 bpm",
         "fr": fr_padrao,
@@ -213,6 +219,7 @@ def criar_ou_atualizar_triagem(
     
     if triagem_db:
         triagem_db.peso = dados.peso
+        triagem_db.ecc = dados.ecc
         triagem_db.temperatura = dados.temperatura
         triagem_db.frequencia_cardiaca = dados.frequencia_cardiaca
         triagem_db.frequencia_respiratoria = dados.frequencia_respiratoria
@@ -226,6 +233,7 @@ def criar_ou_atualizar_triagem(
         triagem_db = Triagem(
             consulta_id=dados.consulta_id,
             peso=dados.peso,
+            ecc=dados.ecc,
             temperatura=dados.temperatura,
             frequencia_cardiaca=dados.frequencia_cardiaca,
             frequencia_respiratoria=dados.frequencia_respiratoria,
@@ -306,6 +314,7 @@ def criar_checkin_triagem_direto(
         triagem_db = Triagem(
             consulta_id=nova_consulta.id,
             peso=dados.peso,
+            ecc=dados.ecc,
             temperatura=dados.temperatura,
             frequencia_cardiaca=dados.frequencia_cardiaca,
             frequencia_respiratoria=dados.frequencia_respiratoria,
@@ -376,6 +385,7 @@ def buscar_triagem_por_consulta(
         return {
             "consulta_id": triagem_db.consulta_id,
             "peso": triagem_db.peso,
+            "ecc": getattr(triagem_db, 'ecc', None),
             "temperatura": triagem_db.temperatura,
             "frequencia_cardiaca": triagem_db.frequencia_cardiaca,
             "frequencia_respiratoria": triagem_db.frequencia_respiratoria,
@@ -392,6 +402,7 @@ def buscar_triagem_por_consulta(
     return {
         "consulta_id": consulta.id,
         "peso": getattr(consulta, 'peso_atendimento', None),
+        "ecc": None,
         "temperatura": consulta.temperatura,
         "frequencia_cardiaca": consulta.frequencia_cardiaca,
         "frequencia_respiratoria": consulta.frequencia_respiratoria,

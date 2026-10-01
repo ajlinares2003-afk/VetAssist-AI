@@ -29,6 +29,7 @@ class Triagem(Base):
     consulta_id = Column(BigInteger, ForeignKey("consulta.id"), nullable=False, unique=True)
     
     peso = Column(Numeric(5, 2), nullable=True)
+    ecc = Column(Text, nullable=True)                  # <--- ADICIONADO: Campo para o Escore de Condição Corporal
     temperatura = Column(Numeric(4, 1), nullable=True)
     frequencia_cardiaca = Column(Integer, nullable=True)
     frequencia_respiratoria = Column(Integer, nullable=True)
