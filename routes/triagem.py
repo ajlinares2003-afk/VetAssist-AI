@@ -1,3 +1,7 @@
+import os
+import json
+from google import genai
+from google.genai import types
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from database.database import get_db
@@ -13,6 +17,9 @@ router = APIRouter(
     prefix="/triagem",
     tags=["Triagem"]
 )
+
+# Inicializa o cliente do Gemini
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 class TriagemCreate(BaseModel):
     consulta_id: Optional[int] = None
@@ -57,72 +64,60 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    especie = (dados.especie or "").lower()
-    sub_especie = (dados.sub_especie or "").lower()
-    raca = (dados.raca or "").lower()
-    porte = (dados.porte or "").lower()
+    especie = dados.especie or "Desconhecida"
+    sub_especie = dados.sub_especie or "Não informada"
+    raca = dados.raca or "Sem raça definida"
+    porte = dados.porte or "Médio"
     idade = dados.idade or 3.0
 
-    # Identificação inteligente para Coelhos / Lagomorfos
-    eh_coelho = "coelho" in especie or "lagomorfo" in especie or "coelho" in sub_especie
-    if eh_coelho:
+    prompt_sistema = (
+        "Você é um médico veterinário intensivista e semiologista clínico sênior, especialista em fisiologia "
+        "de pequenos, grandes animais, pets não convencionais, exóticos, animais silvestres e de zoológico. "
+        "Sua tarefa é retornar estritamente um objeto JSON puro (sem blocos de código markdown ou texto adicional) contendo "
+        "as faixas de referência fisiológica e de escore de condição corporal (ECC escala 1 a 9) corretas para o paciente descrito abaixo, "
+        "considerando rigorosamente as particularidades biológicas da espécie informada (ex: mamíferos exóticos, répteis, roedores, etc.).\n\n"
+        f"Dados do Paciente:\n"
+        f"- Espécie: {especie}\n"
+        f"- Sub-espécie/Tipo: {sub_especie}\n"
+        f"- Raça/Variedade: {raca}\n"
+        f"- Porte: {porte}\n"
+        f"- Idade: {idade} anos\n\n"
+        "O JSON retornado deve conter exatamente estas chaves:\n"
+        "{\n"
+        "  \"peso_ref\": \"string com a faixa de peso esperada (ex: 💡 Ref. Peso: 8.0 - 18.0 kg...)\",\n"
+        "  \"ecc_ref\": \"string com o ECC ideal (ex: 💡 Ideal: 4 a 5 (Escala 1 a 9))\",\n"
+        "  \"temperatura\": \"string com a temperatura normal\",\n"
+        "  \"fc\": \"string com a frequência cardíaca normal\",\n"
+        "  \"fr\": \"string com a frequência respiratória normal\",\n"
+        "  \"tpc\": \"string com o tempo de preenchimento capilar normal\",\n"
+        "  \"mucosas\": \"string com o aspecto normal das mucosas\"\n"
+        "}"
+    )
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt_sistema,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1
+            ),
+        )
+        
+        resultado_ia = json.loads(response.text)
+        return resultado_ia
+
+    except Exception as e:
+        print(f"Erro ao consultar IA para referências: {e}")
         return {
-            "peso_ref": "💡 Ref. Peso: 0.9 - 2.5 kg (Porte Mini/Anão)",
+            "peso_ref": f"💡 Ref. Peso: Avaliação dinâmica para {raca or especie}",
             "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
-            "temperatura": "Normal: 38.5°C - 40.0°C",
-            "fc": "180 - 300 bpm (Normal em coelhos)",
-            "fr": "30 - 60 mpm (Normal em coelhos)",
+            "temperatura": "Normal: 38.0°C - 39.2°C",
+            "fc": "70 - 160 bpm",
+            "fr": "15 - 30 mpm",
             "tpc": "Até 2s",
             "mucosas": "💡 Normocoradas (Rosadas e úmidas)"
         }
-
-    # Identificação para Répteis
-    is_reptil = any(k in especie for k in ["réptil", "reptil", "iguana", "lagarto", "serpente", "tartaruga"])
-    if is_reptil:
-        return {
-            "peso_ref": "💡 Ref. Peso: 1.0 - 4.0 kg",
-            "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
-            "temperatura": "Normal: 28°C - 37°C",
-            "fc": "60 - 100 bpm (Repouso)",
-            "fr": "10 - 30 mpm (Repouso)",
-            "tpc": "Até 3s",
-            "mucosas": "💡 Oral: Rosadas e úmidas"
-        }
-
-    # Identificação para Felinos
-    eh_felino = "felino" in especie or "gato" in especie or "gato" in sub_especie
-    if eh_felino:
-        fr_faixa = "16 - 40 mpm" if ("médio" in porte or "grande" in porte or idade > 7) else "20 - 42 mpm"
-        peso_ref = "💡 Ref. Peso: 3.0 - 5.0 kg (Adulto padrão)"
-        if "grande" in porte or "médio" in porte:
-            peso_ref = "💡 Ref. Peso: 4.0 - 6.5 kg (Porte Médio/Grande)"
-
-        return {
-            "peso_ref": peso_ref,
-            "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
-            "temperatura": "Normal: 38.1°C - 39.2°C",
-            "fc": "120 - 220 bpm",
-            "fr": f"{fr_faixa}",
-            "tpc": "Até 2s",
-            "mucosas": "💡 Normocoradas (Rosadas e úmidas)"
-        }
-
-    # Padrão Canino / Outros Mamíferos
-    fr_padrao = "15 - 30 mpm"
-    if "mini" in porte or "pequeno" in porte:
-        fr_padrao = "20 - 35 mpm (Cães pequenos/toy)"
-    elif "grande" in porte or "gigante" in porte:
-        fr_padrao = "12 - 25 mpm (Cães de grande porte)"
-
-    return {
-        "peso_ref": f"💡 Ref. Peso: Variável por raça ({porte or 'Padrão'})",
-        "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
-        "temperatura": "Normal: 38.3°C - 39.2°C",
-        "fc": "70 - 160 bpm",
-        "fr": fr_padrao,
-        "tpc": "Até 2s",
-        "mucosas": "💡 Normocoradas (Rosadas)"
-    }
 
 @router.post("/avaliar-ia")
 def avaliar_triagem_ia(
@@ -139,72 +134,25 @@ def avaliar_triagem_ia(
     sub_especie = (dados.sub_especie or "").lower()
     raca = (dados.raca or "").lower()
 
-    # Identificação inteligente de Coelhos / Lagomorfos
-    eh_coelho = (
-        "coelho" in especie or 
-        "lagomorfo" in especie or 
-        "coelho" in sub_especie or 
-        "dwarf" in raca or 
-        "lop" in raca or 
-        "netherland" in raca
-    )
-
     termos_graves = ["anorexia", "inchaço", "mandíbula", "sangue", "convulsão", "choque", "apático", "prostrado", "fratura", "parou"]
     tem_termo_grave = any(termo in queixa for termo in termos_graves)
 
-    if eh_coelho:
-        if temp > 40.5 or temp < 37.0 or fc > 320 or fr > 70 or tpc > 3 or (tem_termo_grave and not ("rotina" in queixa or "exame" in queixa)):
-            return {
-                "classificacao_risco": "LARANJA",
-                "justificativa": "Parâmetros vitais alterados ou queixa crítica detectada para a espécie (Coelho)."
-            }
-        else:
-            return {
-                "classificacao_risco": "VERDE",
-                "justificativa": "Parâmetros vitais perfeitamente normais para a espécie (Coelho / Lagomorfo). Frequência cardíaca e respiratória dentro do padrão fisiológico."
-            }
-
-    # Verifica se é réptil ou animal ectotérmico
-    is_reptil = any(k in especie for k in ["réptil", "reptil", "iguana", "lagarto", "serpente", "tartaruga"])
-
-    if is_reptil:
-        if temp > 40.0 or temp < 24.0 or tpc > 4:
-            return {
-                "classificacao_risco": "VERMELHO",
-                "justificativa": "Parâmetros críticos e incompatíveis com a vida para répteis (Emergência)."
-            }
-        elif temp < 27.0 or tem_termo_grave:
-            return {
-                "classificacao_risco": "LARANJA",
-                "justificativa": "Sinais de hipotermia moderada ou alteração sistêmica detectada (Muito Urgente)."
-            }
-        else:
-            return {
-                "classificacao_risco": "VERDE",
-                "justificativa": "Temperatura e parâmetros vitais dentro da normalidade para a espécie (Pouco Urgente)."
-            }
+    # Identificação inteligente genérica baseada em parâmetros críticos e termos graves
+    if temp > 41.5 or temp < 32.0 or tpc > 4 or tem_termo_grave:
+        return {
+            "classificacao_risco": "LARANJA",
+            "justificativa": f"Parâmetros vitais críticos ou queixa de alerta detectada para a espécie ({especie.capitalize()} / {raca}). Requer atenção imediata."
+        }
+    elif temp > 39.5 or fc > 180 or dados.mucosas in ["Cianóticas", "Hipocoradas / Pálidas"]:
+        return {
+            "classificacao_risco": "AMARELO",
+            "justificativa": "Sinais vitais moderadamente alterados ou alterações sistêmicas observadas."
+        }
     else:
-        # Lógica padrão para Cães, Gatos e demais mamíferos
-        if temp > 41.0 or temp < 34.0 or fc > 240 or dados.mucosas == "Cianóticas" or tpc > 3:
-            return {
-                "classificacao_risco": "VERMELHO",
-                "justificativa": "Parâmetros vitais indicam risco iminente de vida (Emergência)."
-            }
-        elif (temp > 39.9 or temp < 36.0 or fc > 200 or dados.mucosas == "Hipocoradas / Pálidas") or tem_termo_grave:
-            return {
-                "classificacao_risco": "LARANJA",
-                "justificativa": "Sinais de alerta ou alterações sistêmicas moderadas a graves detectadas."
-            }
-        elif temp > 39.2 or fc > 150:
-            return {
-                "classificacao_risco": "AMARELO",
-                "justificativa": "Parâmetros moderadamente alterados, requer atendimento prioritário."
-            }
-        else:
-            return {
-                "classificacao_risco": "VERDE",
-                "justificativa": "Sinais vitais e queixa clínica estáveis dentro da normalidade (Pouco Urgente)."
-            }
+        return {
+            "classificacao_risco": "VERDE",
+            "justificativa": f"Parâmetros fisiológicos e queixa clínica estáveis dentro da normalidade para {especie.capitalize()}."
+        }
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def criar_ou_atualizar_triagem(
