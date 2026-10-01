@@ -9,7 +9,7 @@ from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario
 from services.security import obter_usuario_logado
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 from models.triagem import Triagem 
 
@@ -58,16 +58,6 @@ class ReferenciasIARequest(BaseModel):
     porte: Optional[str] = None
     idade: Optional[float] = None
 
-# Modelo Pydantic estruturado para forçar a IA a preencher sem engessar os valores
-class ReferenciasIAResponse(BaseModel):
-    peso_ref: str = Field(description="Faixa de peso normal formatada (Ex: 💡 Ref. Peso: 6.2 - 15.9 kg)")
-    ecc_ref: str = Field(description="ECC ideal formatado (Ex: 💡 Ideal: 5 (Escala 1 a 9))")
-    temperatura: str = Field(description="Temperatura normal formatada (Ex: Normal: 38.2°C - 39.5°C)")
-    fc: str = Field(description="Frequência cardíaca formatada (Ex: 140 - 220 bpm)")
-    fr: str = Field(description="Frequência respiratória formatada (Ex: 20 - 50 mpm)")
-    tpc: str = Field(description="TPC normal formatado (Ex: Até 2s)")
-    mucosas: str = Field(description="Aspecto normal das mucosas formatado (Ex: 💡 Normocoradas)")
-
 @router.post("/referencias-ia")
 def calcular_referencias_ia(
     dados: ReferenciasIARequest,
@@ -81,15 +71,25 @@ def calcular_referencias_ia(
     idade = dados.idade or 3.0
 
     prompt_sistema = (
-        "Você é um médico veterinário intensivista e semiologista clínico sênior, especialista em fisiologia "
+        "És um médico veterinário intensivista e semiologista clínico sénior, especialista em fisiologia "
         "de pequenos, grandes animais, exóticos, animais silvestres e de zoológico. "
-        "Forneça com absoluta precisão científica e baseada na literatura veterinária oficial as faixas de referência fisiológica e de escore de condição corporal "
+        "Fornece com absoluta precisão científica e baseada na literatura veterinária oficial as faixas de referência fisiológica e de escore de condição corporal "
         "(ECC escala 1 a 9) corretas para o paciente abaixo:\n\n"
         f"- Espécie: {especie}\n"
         f"- Sub-espécie: {sub_especie}\n"
         f"- Raça/Variedade: {raca}\n"
         f"- Porte: {porte}\n"
-        f"- Idade: {idade} anos\n"
+        f"- Idade: {idade} anos\n\n"
+        "Retorna estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
+        "{\n"
+        "  \"peso_ref\": \"💡 Ref. Peso: [faixa numérica correta com unidade, ex: 6.2 - 15.9 kg]\",\n"
+        "  \"ecc_ref\": \"💡 Ideal: [valor] (Escala 1 a 9)\",\n"
+        "  \"temperatura\": \"Normal: [faixa]\",\n"
+        "  \"fc\": \"[faixa]\",\n"
+        "  \"fr\": \"[faixa]\",\n"
+        "  \"tpc\": \"[faixa]\",\n"
+        "  \"mucosas\": \"💡 [descrição]\"\n"
+        "}"
     )
 
     try:
@@ -97,26 +97,24 @@ def calcular_referencias_ia(
             model="gemini-2.5-flash",
             contents=prompt_sistema,
             config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=ReferenciasIAResponse,
                 temperature=0.1
             ),
         )
         
-        resultado_ia = json.loads(response.text)
+        texto_resposta = response.text.strip()
+        if texto_resposta.startswith("```json"):
+            texto_resposta = texto_resposta[7:]
+        if texto_resposta.startswith("```"):
+            texto_resposta = texto_resposta[3:]
+        if texto_resposta.endswith("```"):
+            texto_resposta = texto_resposta[:-3]
+            
+        resultado_ia = json.loads(texto_resposta.strip())
         return resultado_ia
 
     except Exception as e:
         print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
-        return {
-            "peso_ref": "⚠️ Indisponível (Erro na IA)",
-            "ecc_ref": "⚠️ Indisponível",
-            "temperatura": "⚠️ Indisponível",
-            "fc": "⚠️ Indisponível",
-            "fr": "⚠️ Indisponível",
-            "tpc": "⚠️ Indisponível",
-            "mucosas": "⚠️ Indisponível"
-        }
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
 
 @router.post("/avaliar-ia")
 def avaliar_triagem_ia(
