@@ -42,6 +42,82 @@ class AvaliacaoIARequest(BaseModel):
     tpc_segundos: Optional[int] = None
     mucosas: Optional[str] = "Normocoradas"
 
+class ReferenciasIARequest(BaseModel):
+    especie: Optional[str] = "Felino"
+    sub_especie: Optional[str] = None
+    raca: Optional[str] = None
+    porte: Optional[str] = None
+    idade: Optional[float] = None
+
+@router.post("/referencias-ia")
+def calcular_referencias_ia(
+    dados: ReferenciasIARequest,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    especie = (dados.especie or "").lower()
+    sub_especie = (dados.sub_especie or "").lower()
+    raca = (dados.raca or "").lower()
+    porte = (dados.porte or "").lower()
+    idade = dados.idade or 3.0
+
+    # Identificação inteligente para Coelhos / Lagomorfos
+    eh_coelho = "coelho" in especie or "lagomorfo" in especie or "coelho" in sub_especie
+    if eh_coelho:
+        return {
+            "peso_ref": "💡 Ref. Peso: 0.9 - 2.5 kg (Porte Mini/Anão)",
+            "temperatura": "Normal: 38.5°C - 40.0°C",
+            "fc": "180 - 300 bpm (Normal em coelhos)",
+            "fr": "30 - 60 mpm (Normal em coelhos)",
+            "tpc": "Até 2s",
+            "mucosas": "💡 Normocoradas (Rosadas e úmidas)"
+        }
+
+    # Identificação para Répteis
+    is_reptil = any(k in especie for k in ["réptil", "reptil", "iguana", "lagarto", "serpente", "tartaruga"])
+    if is_reptil:
+        return {
+            "peso_ref": "💡 Ref. Peso: 1.0 - 4.0 kg",
+            "temperatura": "Normal: 28°C - 37°C",
+            "fc": "60 - 100 bpm (Repouso)",
+            "fr": "10 - 30 mpm (Repouso)",
+            "tpc": "Até 3s",
+            "mucosas": "💡 Oral: Rosadas e úmidas"
+        }
+
+    # Identificação para Felinos
+    eh_felino = "felino" in especie or "gato" in especie or "gato" in sub_especie
+    if eh_felino:
+        fr_faixa = "16 - 40 mpm" if ("médio" in porte or "grande" in porte or idade > 7) else "20 - 42 mpm"
+        peso_ref = "💡 Ref. Peso: 3.0 - 5.0 kg (Adulto padrão)"
+        if "grande" in porte or "médio" in porte:
+            peso_ref = "💡 Ref. Peso: 4.0 - 6.5 kg (Porte Médio/Grande)"
+
+        return {
+            "peso_ref": peso_ref,
+            "temperatura": "Normal: 38.1°C - 39.2°C",
+            "fc": "120 - 220 bpm",
+            "fr": f"{fr_faixa}",
+            "tpc": "Até 2s",
+            "mucosas": "💡 Normocoradas (Rosadas e úmidas)"
+        }
+
+    # Padrão Canino / Outros Mamíferos
+    fr_padrao = "15 - 30 mpm"
+    if "mini" in porte or "pequeno" in porte:
+        fr_padrao = "20 - 35 mpm (Cães pequenos/toy)"
+    elif "grande" in porte or "gigante" in porte:
+        fr_padrao = "12 - 25 mpm (Cães de grande porte)"
+
+    return {
+        "peso_ref": f"💡 Ref. Peso: Variável por raça ({porte or 'Padrão'})",
+        "temperatura": "Normal: 38.3°C - 39.2°C",
+        "fc": "70 - 160 bpm",
+        "fr": fr_padrao,
+        "tpc": "Até 2s",
+        "mucosas": "💡 Normocoradas (Rosadas)"
+    }
+
 @router.post("/avaliar-ia")
 def avaliar_triagem_ia(
     dados: AvaliacaoIARequest,
@@ -71,7 +147,6 @@ def avaliar_triagem_ia(
     tem_termo_grave = any(termo in queixa for termo in termos_graves)
 
     if eh_coelho:
-        # Valores fisiológicos para coelhos (FC até 300 bpm e FR até 60 mpm são normais)
         if temp > 40.5 or temp < 37.0 or fc > 320 or fr > 70 or tpc > 3 or (tem_termo_grave and not ("rotina" in queixa or "exame" in queixa)):
             return {
                 "classificacao_risco": "LARANJA",
