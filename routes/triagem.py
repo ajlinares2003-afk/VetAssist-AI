@@ -33,6 +33,8 @@ class TriagemCreate(BaseModel):
 class AvaliacaoIARequest(BaseModel):
     animal_id: Optional[int] = None
     especie: Optional[str] = "Felino"
+    sub_especie: Optional[str] = None
+    raca: Optional[str] = None
     queixa_principal: str
     temperatura: Optional[float] = None
     frequencia_cardiaca: Optional[int] = None
@@ -48,18 +50,43 @@ def avaliar_triagem_ia(
 ):
     temp = dados.temperatura or 38.5
     fc = dados.frequencia_cardiaca or 120
+    fr = dados.frequencia_respiratoria or 20
     tpc = dados.tpc_segundos or 2
     queixa = (dados.queixa_principal or "").lower()
     especie = (dados.especie or "").lower()
+    sub_especie = (dados.sub_especie or "").lower()
+    raca = (dados.raca or "").lower()
+
+    # Identificação inteligente de Coelhos / Lagomorfos
+    eh_coelho = (
+        "coelho" in especie or 
+        "lagomorfo" in especie or 
+        "coelho" in sub_especie or 
+        "dwarf" in raca or 
+        "lop" in raca or 
+        "netherland" in raca
+    )
+
+    termos_graves = ["anorexia", "inchaço", "mandíbula", "sangue", "convulsão", "choque", "apático", "prostrado", "fratura", "parou"]
+    tem_termo_grave = any(termo in queixa for termo in termos_graves)
+
+    if eh_coelho:
+        # Valores fisiológicos para coelhos (FC até 300 bpm e FR até 60 mpm são normais)
+        if temp > 40.5 or temp < 37.0 or fc > 320 or fr > 70 or tpc > 3 or (tem_termo_grave and not ("rotina" in queixa or "exame" in queixa)):
+            return {
+                "classificacao_risco": "LARANJA",
+                "justificativa": "Parâmetros vitais alterados ou queixa crítica detectada para a espécie (Coelho)."
+            }
+        else:
+            return {
+                "classificacao_risco": "VERDE",
+                "justificativa": "Parâmetros vitais perfeitamente normais para a espécie (Coelho / Lagomorfo). Frequência cardíaca e respiratória dentro do padrão fisiológico."
+            }
 
     # Verifica se é réptil ou animal ectotérmico
     is_reptil = any(k in especie for k in ["réptil", "reptil", "iguana", "lagarto", "serpente", "tartaruga"])
 
-    termos_graves = ["anorexia", "inchaço", "mandíbula", "sangue", "convulsão", "choque", "apático", "prostrado", "fratura"]
-    tem_termo_grave = any(termo in queixa for termo in termos_graves)
-
     if is_reptil:
-        # Lógica tolerante para répteis (32°C é normal, abaixo de 26°C é hipotermia severa)
         if temp > 40.0 or temp < 24.0 or tpc > 4:
             return {
                 "classificacao_risco": "VERMELHO",
