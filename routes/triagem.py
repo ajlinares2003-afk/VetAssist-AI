@@ -71,7 +71,7 @@ def calcular_referencias_ia(
     sub_especie = (dados.sub_especie or "não informada").strip().lower()
     raca = (dados.raca or "sem raça definida").strip().lower()
     porte = (dados.porte or "médio").strip().lower()
-    sexo = (dados.sexo or "indiferente").strip().lower()
+    sexo = (dados.sexo or "não informado").strip().lower()
     idade = dados.idade or 3.0
 
     # 1. TENTA BUSCAR NO CACHE DO SUPABASE PRIMEIRO (considerando o sexo)
@@ -91,161 +91,83 @@ def calcular_referencias_ia(
             "fc": cache_existente.fc,
             "fr": cache_existente.fr,
             "tpc": cache_existente.tpc,
-            "mucosas": cache_existente.mucosas
+            "mucosas": cache_existente.mucosas,
+            "fonte_ref": cache_existente.fonte_ref
         }
 
-    # 2. SE NÃO EXISTIR NO CACHE, ACIONA A IA COM O PROMPT ESPECIALIZADO
-    @router.post("/referencias-ia")
-    def calcular_referencias_ia(
-        dados: ReferenciasIARequest,
-        db: Session = Depends(get_db),
-        usuario_logado = Depends(obter_usuario_logado)
-    ):
-        # Normalizamos as strings para garantir consistência na busca do cache
-        especie = (dados.especie or "desconhecida").strip().lower()
-        sub_especie = (dados.sub_especie or "não informada").strip().lower()
-        raca = (dados.raca or "sem raça definida").strip().lower()
-        porte = (dados.porte or "médio").strip().lower()
-        sexo = (dados.sexo or "indiferente").strip().lower()
-        idade = dados.idade or 3.0
+    # 2. SE NÃO EXISTIR NO CACHE, ACIONA A IA COM O PROMPT REFINADO
+    prompt_sistema = (
+        "Você é médico veterinário intensivista, semiologista clínico sênior e especialista em Medicina de Animais Silvestres, Exóticos e Felinos Selvagens. "
+        "Sua tarefa: fornecer os PARÂMETROS DE REFERÊNCIA FISIOLÓGICAS OFICIAIS, baseados em publicações científicas, manuais reconhecidos e literatura veterinária oficial para o animal abaixo.\n\n"
+        "DADOS DO ANIMAL:\n"
+        f"- Espécie: {especie}\n"
+        f"- Sub-espécie: {sub_especie}\n"
+        f"- Raça/Variedade/Nome Popular: {raca}\n"
+        f"- Sexo: {sexo}\n"
+        f"- Porte: {porte}\n"
+        f"- Idade: {idade} anos\n\n"
+        "INSTRUÇÕES OBRIGATÓRIAS:\n"
+        "1. NÃO generalizar com valores de felinos domésticos — usar valores ESPECÍFICOS da espécie e considerando o sexo informado, lembrando que pode haver divergências entre Machos e Fêmeas.\n"
+        "2. Apresentar diferenciação clara entre repouso/tranquilidade e atendimento clínico/estresse agudo/manuseio. Para felinos selvagens como o Caracal, a Frequência Cardíaca (FC) sob estresse agudo pode disparar e atingir patamares elevados de até 220 bpm.\n"
+        "3. Seguir RIGOROSAMENTE as unidades corretas (frequência respiratória em ir/min, cardíaca em bpm, temperatura em °C).\n"
+        "4. ECC = Escala 1 a 9 (informar o ideal).\n"
+        "5. Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
+        "{\n"
+        "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata da espécie com unidade, ex: 6.2 - 15.9 kg]\",\n"
+        "  \"ecc_ref\": \"💡 Ideal: [valor] (Escala 1 a 9)\",\n"
+        "  \"temperatura\": \"Normal: [Repouso: ... | Clínica: ...]\",\n"
+        "  \"fc\": \"[Repouso: ... | Clínica: valores de até 220 bpm] bpm\",\n"
+        "  \"fr\": \"[Repouso: ... | Clínica: ...] ir/min\",\n"
+        "  \"tpc\": \"[faixa TPC]\",\n"
+        "  \"mucosas\": \"💡 [descrição normal]\",\n"
+        "  \"fonte_ref\": \"📚 Fonte: [Nome do livro, autor ou estudo científico oficial consultado]\"\n"
+        "}"
+    )
 
-        # 1. TENTA BUSCAR NO CACHE DO SUPABASE PRIMEIRO (considerando o sexo)
-        cache_existente = db.query(ReferenciaCache).filter(
-            ReferenciaCache.especie == especie,
-            ReferenciaCache.sub_especie == sub_especie,
-            ReferenciaCache.raca == raca,
-            ReferenciaCache.porte == porte,
-            ReferenciaCache.sexo == sexo
-        ).first()
-
-        if cache_existente:
-            return {
-                "peso_ref": cache_existente.peso_ref,
-                "ecc_ref": cache_existente.ecc_ref,
-                "temperatura": cache_existente.temperatura,
-                "fc": cache_existente.fc,
-                "fr": cache_existente.fr,
-                "tpc": cache_existente.tpc,
-                "mucosas": cache_existente.mucosas
-            }
-
-        # 2. SE NÃO EXISTIR NO CACHE, ACIONA A IA COM O SEU PROMPT MESTRE
-        prompt_sistema = (
-            "Você é médico veterinário intensivista, semiologista clínico sênior e especialista em Medicina de Animais Silvestres, Exóticos e Felinos Selvagens. "
-            "Sua tarefa: fornecer os PARÂMETROS DE REFERÊNCIA FISIOLÓGICAS OFICIAIS, baseados em publicações científicas, manuais reconhecidos e literatura veterinária oficial para o animal abaixo.\n\n"
-            "DADOS DO ANIMAL:\n"
-            f"- Espécie: {especie}\n"
-            f"- Sub-espécie: {sub_especie}\n"
-            f"- Raça/Variedade/Nome Popular: {raca}\n"
-            f"- Sexo: {sexo}\n"
-            f"- Porte: {porte}\n"
-            f"- Idade: {idade} anos\n\n"
-            "INSTRUÇÕES OBRIGATÓRIAS:\n"
-            "1. NÃO generalizar com valores de animais de outras raças ou espécies semelhantes — usar valores ESPECÍFICOS da espécie e considerando o sexo informado, lembrando que pode haver divergências de valores entre Machos e Fêmeas da mesma espécie.\n"
-            "2. Apresentar sempre duas faixas com diferenciação clara entre repouso/tranquilidade/sem manuseio e em situação de atendimento clínico/estresse/com manuseio, considerando o ambiente, odores de outros animais, sendo manipulado por pessoas diferentes do seu tutor.\n"
-            "3. Seguir RIGOROSAMENTE as unidades corretas (frequência respiratória em ir/min, cardíaca em bpm, temperatura em °C).\n"
-            "4. ECC = Escala 1 a 9 (informar o ideal).\n"
-            "5. Informar a FONTE: Nome do Livro, autor, instituição ou estudo científico consultado.\n"
-            "6. Se houver variação entre fontes, apresentar o consenso e a amplitude.\n"
-            "7. Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
-            "{\n"
-            "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata da espécie com unidade, ex: 6.2 - 15.9 kg]\",\n"
-            "  \"ecc_ref\": \"💡 Ideal: [valor] (Escala 1 a 9)\",\n"
-            "  \"temperatura\": \"Normal: [Repouso: ... | Clínica: ...]\",\n"
-            "  \"fc\": \"[Repouso: ... | Clínica: ...] bpm\",\n"
-            "  \"fr\": \"[Repouso: ... | Clínica: ...] ir/min\",\n"
-            "  \"tpc\": \"[faixa TPC]\",\n"
-            "  \"mucosas\": \"💡 [descrição normal] (Fonte: ...)\"\n"
-            "}"
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt_sistema,
+            config=types.GenerateContentConfig(
+                temperature=0.1
+            ),
         )
-
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt_sistema,
-                config=types.GenerateContentConfig(
-                    temperature=0.1
-                ),
-            )
+        
+        texto_resposta = response.text.strip()
+        if texto_resposta.startswith("```json"):
+            texto_resposta = texto_resposta[7:]
+        if texto_resposta.startswith("```"):
+            texto_resposta = texto_resposta[3:]
+        if texto_resposta.endswith("```"):
+            texto_resposta = texto_resposta[:-3]
             
-            texto_resposta = response.text.strip()
-            if texto_resposta.startswith("```json"):
-                texto_resposta = texto_resposta[7:]
-            if texto_resposta.startswith("```"):
-                texto_resposta = texto_resposta[3:]
-            if texto_resposta.endswith("```"):
-                texto_resposta = texto_resposta[:-3]
-                
-            resultado_ia = json.loads(texto_resposta.strip())
+        resultado_ia = json.loads(texto_resposta.strip())
 
-            # 3. SALVA AUTOMATICAMENTE NO CACHE VINCULANDO O SEXO
-            novo_cache = ReferenciaCache(
-                especie=especie,
-                sub_especie=sub_especie,
-                raca=raca,
-                porte=porte,
-                sexo=sexo,
-                peso_ref=resultado_ia.get("peso_ref"),
-                ecc_ref=resultado_ia.get("ecc_ref"),
-                temperatura=resultado_ia.get("temperatura"),
-                fc=resultado_ia.get("fc"),
-                fr=resultado_ia.get("fr"),
-                tpc=resultado_ia.get("tpc"),
-                mucosas=resultado_ia.get("mucosas")
-            )
-            db.add(novo_cache)
-            db.commit()
+        # 3. SALVA AUTOMATICAMENTE NO CACHE VINCULANDO O SEXO E A FONTE
+        novo_cache = ReferenciaCache(
+            especie=especie,
+            sub_especie=sub_especie,
+            raca=raca,
+            porte=porte,
+            sexo=sexo,
+            peso_ref=resultado_ia.get("peso_ref"),
+            ecc_ref=resultado_ia.get("ecc_ref"),
+            temperatura=resultado_ia.get("temperatura"),
+            fc=resultado_ia.get("fc"),
+            fr=resultado_ia.get("fr"),
+            tpc=resultado_ia.get("tpc"),
+            mucosas=resultado_ia.get("mucosas"),
+            fonte_ref=resultado_ia.get("fonte_ref")
+        )
+        db.add(novo_cache)
+        db.commit()
 
-            return resultado_ia
+        return resultado_ia
 
-        except Exception as e:
-            db.rollback()
-            print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
-
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt_sistema,
-                config=types.GenerateContentConfig(
-                    temperature=0.1
-                ),
-            )
-            
-            texto_resposta = response.text.strip()
-            if texto_resposta.startswith("```json"):
-                texto_resposta = texto_resposta[7:]
-            if texto_resposta.startswith("```"):
-                texto_resposta = texto_resposta[3:]
-            if texto_resposta.endswith("```"):
-                texto_resposta = texto_resposta[:-3]
-                
-            resultado_ia = json.loads(texto_resposta.strip())
-
-            # 3. SALVA AUTOMATICAMENTE NO CACHE VINCULANDO O SEXO
-            novo_cache = ReferenciaCache(
-                especie=especie,
-                sub_especie=sub_especie,
-                raca=raca,
-                porte=porte,
-                sexo=sexo,
-                peso_ref=resultado_ia.get("peso_ref"),
-                ecc_ref=resultado_ia.get("ecc_ref"),
-                temperatura=resultado_ia.get("temperatura"),
-                fc=resultado_ia.get("fc"),
-                fr=resultado_ia.get("fr"),
-                tpc=resultado_ia.get("tpc"),
-                mucosas=resultado_ia.get("mucosas")
-            )
-            db.add(novo_cache)
-            db.commit()
-
-            return resultado_ia
-
-        except Exception as e:
-            db.rollback()
-            print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
 
 @router.post("/avaliar-ia")
 def avaliar_triagem_ia(
