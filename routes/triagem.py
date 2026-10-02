@@ -57,6 +57,7 @@ class ReferenciasIARequest(BaseModel):
     sub_especie: Optional[str] = None
     raca: Optional[str] = None
     porte: Optional[str] = None
+    sexo: Optional[str] = None
     idade: Optional[float] = None
 
 @router.post("/referencias-ia")
@@ -70,14 +71,16 @@ def calcular_referencias_ia(
     sub_especie = (dados.sub_especie or "não informada").strip().lower()
     raca = (dados.raca or "sem raça definida").strip().lower()
     porte = (dados.porte or "médio").strip().lower()
+    sexo = (dados.sexo or "indiferente").strip().lower()
     idade = dados.idade or 3.0
 
-    # 1. TENTA BUSCAR NO CACHE DO SUPABASE PRIMEIRO (0ms de latência se já existir)
+    # 1. TENTA BUSCAR NO CACHE DO SUPABASE PRIMEIRO (considerando o sexo)
     cache_existente = db.query(ReferenciaCache).filter(
         ReferenciaCache.especie == especie,
         ReferenciaCache.sub_especie == sub_especie,
         ReferenciaCache.raca == raca,
-        ReferenciaCache.porte == porte
+        ReferenciaCache.porte == porte,
+        ReferenciaCache.sexo == sexo
     ).first()
 
     if cache_existente:
@@ -91,26 +94,31 @@ def calcular_referencias_ia(
             "mucosas": cache_existente.mucosas
         }
 
-    # 2. SE NÃO EXISTIR NO CACHE, ACIONA A IA DO GEMINI DINAMICAMENTE
+    # 2. SE NÃO EXISTIR NO CACHE, ACIONA A IA COM O PROMPT ESPECIALIZADO
     prompt_sistema = (
-        "Você é um médico veterinário intensivista, semiologista clínico sênior e especialista em medicina de animais silvestres, exóticos e felinos selvagens. "
-        "Para a espécie, sub-espécie e raça exata informadas abaixo, forneça com absoluta precisão científica (baseada em literatura zoológica e veterinária oficial para animais silvestres) "
-        "as faixas reais e específicas de referência fisiológica e escore de condição corporal (ECC 1 a 9). "
-        "ATENÇÃO: Não generalize para animais domésticos comuns, se o animal for uma espécie selvagem/exótica específica (como Caracal, Jaguatirica, etc.); use os parâmetros semiológicos reais da espécie selvagem:\n\n"
+        "Você é médico veterinário intensivista, semiologista clínico sênior e especialista em Medicina de Animais Silvestres, Exóticos e Felinos Selvagens. "
+        "Sua tarefa: fornecer os PARÂMETROS FISIOLÓGICOS DE REFERÊNCIA oficiais, baseados em literatura zoológica e veterinária científica reconhecida, para o animal abaixo.\n\n"
+        "DADOS DO ANIMAL:\n"
         f"- Espécie: {especie}\n"
         f"- Sub-espécie: {sub_especie}\n"
         f"- Raça/Variedade/Nome Popular: {raca}\n"
+        f"- Sexo: {sexo}\n"
         f"- Porte: {porte}\n"
         f"- Idade: {idade} anos\n\n"
-        "Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
+        "INSTRUÇÕES OBRIGATÓRIAS:\n"
+        "1. NÃO generalizar com gato doméstico — usar valores ESPECÍFICOS da espécie e sexo informados.\n"
+        "2. Apresentar diferenciação clara entre repouso/tranquilidade e atendimento clínico/estresse quando aplicável.\n"
+        "3. Seguir rigorosamente as unidades corretas (frequência respiratória em ir/min, cardíaca em bpm, temperatura em °C).\n"
+        "4. ECC = Escala 1 a 9 (informar o ideal).\n"
+        "5. Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
         "{\n"
-        "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata da espécie, ex: 6.2 - 15.9 kg]\",\n"
+        "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata da espécie com unidade, ex: 6.2 - 15.9 kg]\",\n"
         "  \"ecc_ref\": \"💡 Ideal: [valor] (Escala 1 a 9)\",\n"
-        "  \"temperatura\": \"Normal: [faixa exata]\",\n"
-        "  \"fc\": \"[faixa exata em bpm]\",\n"
-        "  \"fr\": \"[faixa exata em mpm]\",\n"
+        "  \"temperatura\": \"Normal: [faixa repouso / clínica]\",\n"
+        "  \"fc\": \"[faixa repouso / clínica] bpm\",\n"
+        "  \"fr\": \"[faixa repouso / clínica] ir/min\",\n"
         "  \"tpc\": \"[faixa TPC]\",\n"
-        "  \"mucosas\": \"💡 [descrição]\"\n"
+        "  \"mucosas\": \"💡 [descrição normal]\"\n"
         "}"
     )
 
@@ -133,12 +141,13 @@ def calcular_referencias_ia(
             
         resultado_ia = json.loads(texto_resposta.strip())
 
-        # 3. SALVA AUTOMATICAMENTE NO CACHE PARA AS PRÓXIMAS VEZES
+        # 3. SALVA AUTOMATICAMENTE NO CACHE VINCULANDO O SEXO
         novo_cache = ReferenciaCache(
             especie=especie,
             sub_especie=sub_especie,
             raca=raca,
             porte=porte,
+            sexo=sexo,
             peso_ref=resultado_ia.get("peso_ref"),
             ecc_ref=resultado_ia.get("ecc_ref"),
             temperatura=resultado_ia.get("temperatura"),

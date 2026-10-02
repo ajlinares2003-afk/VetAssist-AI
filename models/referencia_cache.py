@@ -10,6 +10,7 @@ class ReferenciaCache(Base):
     sub_especie = Column(Text, nullable=True)
     raca = Column(Text, nullable=True)
     porte = Column(Text, nullable=True)
+    sexo = Column(Text, nullable=True)
     peso_ref = Column(Text, nullable=True)
     ecc_ref = Column(Text, nullable=True)
     temperatura = Column(Text, nullable=True)
