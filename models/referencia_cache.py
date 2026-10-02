@@ -10,7 +10,7 @@ class ReferenciaCache(Base):
     sub_especie = Column(Text, nullable=True)
     raca = Column(Text, nullable=True)
     porte = Column(Text, nullable=True)
-    sexo = Column(Text, nullable=True)          # <--- Campo para o género/sexo do animal
+    sexo = Column(Text, nullable=True)          # Essencial para o dimorfismo sexual
     peso_ref = Column(Text, nullable=True)
     ecc_ref = Column(Text, nullable=True)
     temperatura = Column(Text, nullable=True)
@@ -18,5 +18,5 @@ class ReferenciaCache(Base):
     fr = Column(Text, nullable=True)
     tpc = Column(Text, nullable=True)
     mucosas = Column(Text, nullable=True)
-    fonte_ref = Column(Text, nullable=True)     # <--- Campo para a rastreabilidade bibliográfica
+    fonte_ref = Column(Text, nullable=True)     # Rastreabilidade bibliográfica
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)

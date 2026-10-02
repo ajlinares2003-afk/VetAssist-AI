@@ -263,78 +263,113 @@ def criar_ou_atualizar_triagem(
     db.refresh(triagem_db)
     return {"mensagem": "Triagem salva com sucesso!", "id": triagem_db.id}
 
-@router.post("/checkin-direto", status_code=status.HTTP_201_CREATED)
-def criar_checkin_triagem_direto(
-    dados: TriagemCreate,
+@router.post("/referencias-ia")
+def calcular_referencias_ia(
+    dados: ReferenciasIARequest,
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    if not dados.animal_id:
-        raise HTTPException(status_code=400, detail="O ID do animal é obrigatório para o check-in direto.")
+    especie = (dados.especie or "desconhecida").strip().lower()
+    sub_especie = (dados.sub_especie or "não informada").strip().lower()
+    raca = (dados.raca or "sem raça definida").strip().lower()
+    porte = (dados.porte or "médio").strip().lower()
+    sexo = (dados.sexo or "não informado").strip().lower()
+    idade = dados.idade or 3.0
+
+    # 1. TENTA BUSCAR NO CACHE DO SUPABASE
+    cache_existente = db.query(ReferenciaCache).filter(
+        ReferenciaCache.especie == especie,
+        ReferenciaCache.sub_especie == sub_especie,
+        ReferenciaCache.raca == raca,
+        ReferenciaCache.porte == porte,
+        ReferenciaCache.sexo == sexo
+    ).first()
+
+    if cache_existente:
+        return {
+            "peso_ref": cache_existente.peso_ref,
+            "ecc_ref": cache_existente.ecc_ref,
+            "temperatura": cache_existente.temperatura,
+            "fc": cache_existente.fc,
+            "fr": cache_existente.fr,
+            "tpc": cache_existente.tpc,
+            "mucosas": cache_existente.mucosas,
+            "fonte_ref": cache_existente.fonte_ref
+        }
+
+    # 2. SE NÃO EXISTIR, ACIONA A IA
+    prompt_sistema = (
+        "Você é médico veterinário intensivista, semiologista clínico sênior e especialista em Medicina de Animais Silvestres, Exóticos e Felinos Selvagens. "
+        "Sua tarefa: fornecer os PARÂMETROS DE REFERÊNCIA FISIOLÓGICAS OFICIAIS, baseados em publicações científicas, manuais reconhecidos e literatura veterinária oficial para o animal abaixo.\n\n"
+        "DADOS DO ANIMAL:\n"
+        f"- Espécie: {especie}\n"
+        f"- Sub-espécie: {sub_especie}\n"
+        f"- Raça/Variedade/Nome Popular: {raca}\n"
+        f"- Sexo: {sexo}\n"
+        f"- Porte: {porte}\n"
+        f"- Idade: {idade} anos\n\n"
+        "INSTRUÇÕES OBRIGATÓRIAS:\n"
+        "1. NÃO generalizar com valores de felinos domésticos — usar valores ESPECÍFICOS da espécie e considerando o sexo informado, lembrando que pode haver divergências entre Machos e Fêmeas.\n"
+        "2. Apresentar diferenciação clara entre repouso/tranquilidade e atendimento clínico/estresse agudo/manuseio. Para felinos selvagens como o Caracal, a Frequência Cardíaca (FC) sob estresse agudo pode disparar e atingir patamares elevados de até 220 bpm.\n"
+        "3. Seguir RIGOROSAMENTE as unidades corretas (frequência respiratória em ir/min, cardíaca em bpm, temperatura em °C).\n"
+        "4. ECC = Escala 1 a 9 (informar o ideal).\n"
+        "5. Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
+        "{\n"
+        "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata da espécie com unidade, ex: 6.2 - 15.9 kg]\",\n"
+        "  \"ecc_ref\": \"💡 Ideal: [valor] (Escala 1 a 9)\",\n"
+        "  \"temperatura\": \"Normal: [Repouso: ... | Clínica: ...]\",\n"
+        "  \"fc\": \"[Repouso: ... | Clínica: valores de até 220 bpm] bpm\",\n"
+        "  \"fr\": \"[Repouso: ... | Clínica: ...] ir/min\",\n"
+        "  \"tpc\": \"[faixa TPC]\",\n"
+        "  \"mucosas\": \"💡 [descrição normal]\",\n"
+        "  \"fonte_ref\": \"📚 Fonte: [Nome do livro, autor ou estudo científico oficial consultado]\"\n"
+        "}"
+    )
 
     try:
-        user_id = dados.usuario_id
-        if not user_id:
-            if isinstance(usuario_logado, dict):
-                email_busca = usuario_logado.get("sub") or usuario_logado.get("email")
-                if email_busca:
-                    u_db = db.query(Usuario).filter(Usuario.email == email_busca).first()
-                    if u_db:
-                        user_id = u_db.id
-            else:
-                user_id = getattr(usuario_logado, "id", None)
-
-        if not user_id:
-            primeiro_usuario = db.query(Usuario).first()
-            if primeiro_usuario:
-                user_id = primeiro_usuario.id
-
-        nova_consulta = Consulta(
-            animal_id=dados.animal_id,
-            usuario_id=user_id,
-            consultorio=dados.consultorio,
-            queixa_principal=dados.queixa_principal,
-            status="Aguardando Consulta (Fila Vet)",
-            peso_atendimento=dados.peso,
-            temperatura=dados.temperatura,
-            frequencia_cardiaca=dados.frequencia_cardiaca,
-            frequencia_respiratoria=dados.frequencia_respiratoria
+        response = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt_sistema,
+            config=types.GenerateContentConfig(
+                temperature=0.1
+            ),
         )
-        db.add(nova_consulta)
-        db.commit()
-        db.refresh(nova_consulta)
+        
+        texto_resposta = response.text.strip()
+        if texto_resposta.startswith("```json"):
+            texto_resposta = texto_resposta[7:]
+        if texto_resposta.startswith("```"):
+            texto_resposta = texto_resposta[3:]
+        if texto_resposta.endswith("```"):
+            texto_resposta = texto_resposta[:-3]
+            
+        resultado_ia = json.loads(texto_resposta.strip())
 
-        if not nova_consulta.codigo:
-            nova_consulta.codigo = f"CNS-{nova_consulta.id:04d}"
-            db.commit()
-
-        triagem_db = Triagem(
-            consulta_id=nova_consulta.id,
-            peso=dados.peso,
-            ecc=dados.ecc,
-            temperatura=dados.temperatura,
-            frequencia_cardiaca=dados.frequencia_cardiaca,
-            frequencia_respiratoria=dados.frequencia_respiratoria,
-            tpc_segundos=dados.tpc_segundos,
-            mucosas=dados.mucosas,
-            desidratacao=dados.desidratacao_percentual,
-            queixa_principal=dados.queixa_principal,
-            classificacao_risco=dados.classificacao_risco,
-            justificativa_risco=dados.justificativa_risco
+        # 3. SALVA NO CACHE
+        novo_cache = ReferenciaCache(
+            especie=especie,
+            sub_especie=sub_especie,
+            raca=raca,
+            porte=porte,
+            sexo=sexo,
+            peso_ref=resultado_ia.get("peso_ref"),
+            ecc_ref=resultado_ia.get("ecc_ref"),
+            temperatura=resultado_ia.get("temperatura"),
+            fc=resultado_ia.get("fc"),
+            fr=resultado_ia.get("fr"),
+            tpc=resultado_ia.get("tpc"),
+            mucosas=resultado_ia.get("mucosas"),
+            fonte_ref=resultado_ia.get("fonte_ref")
         )
-        db.add(triagem_db)
-
-        if dados.peso:
-            animal = db.query(Animal).filter(Animal.id == dados.animal_id).first()
-            if animal:
-                animal.peso = dados.peso
-
+        db.add(novo_cache)
         db.commit()
-        return {"mensagem": "Check-in e Triagem Direta realizados com sucesso!", "consulta_id": nova_consulta.id}
-    
+
+        return resultado_ia
+
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=f"Erro ao salvar no banco: {str(e)}")
+        print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
 
 @router.get("/fila-triagem")
 def listar_fila_triagem(
