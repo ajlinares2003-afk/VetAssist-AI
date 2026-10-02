@@ -66,209 +66,6 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    # Normalizamos as strings para garantir consistência na busca do cache
-    especie = (dados.especie or "desconhecida").strip().lower()
-    sub_especie = (dados.sub_especie or "não informada").strip().lower()
-    raca = (dados.raca or "sem raça definida").strip().lower()
-    porte = (dados.porte or "médio").strip().lower()
-    sexo = (dados.sexo or "não informado").strip().lower()
-    idade = dados.idade or 3.0
-
-    # 1. TENTA BUSCAR NO CACHE DO SUPABASE PRIMEIRO (considerando o sexo)
-    cache_existente = db.query(ReferenciaCache).filter(
-        ReferenciaCache.especie == especie,
-        ReferenciaCache.sub_especie == sub_especie,
-        ReferenciaCache.raca == raca,
-        ReferenciaCache.porte == porte,
-        ReferenciaCache.sexo == sexo
-    ).first()
-
-    if cache_existente:
-        return {
-            "peso_ref": cache_existente.peso_ref,
-            "ecc_ref": cache_existente.ecc_ref,
-            "temperatura": cache_existente.temperatura,
-            "fc": cache_existente.fc,
-            "fr": cache_existente.fr,
-            "tpc": cache_existente.tpc,
-            "mucosas": cache_existente.mucosas,
-            "fonte_ref": cache_existente.fonte_ref
-        }
-
-    # 2. SE NÃO EXISTIR NO CACHE, ACIONA A IA COM O PROMPT REFINADO
-    prompt_sistema = (
-        "Você é médico veterinário intensivista, semiologista clínico sênior e especialista em Medicina de Animais Silvestres, Exóticos e Felinos Selvagens. "
-        "Sua tarefa: fornecer os PARÂMETROS DE REFERÊNCIA FISIOLÓGICAS OFICIAIS, baseados em publicações científicas, manuais reconhecidos e literatura veterinária oficial para o animal abaixo.\n\n"
-        "DADOS DO ANIMAL:\n"
-        f"- Espécie: {especie}\n"
-        f"- Sub-espécie: {sub_especie}\n"
-        f"- Raça/Variedade/Nome Popular: {raca}\n"
-        f"- Sexo: {sexo}\n"
-        f"- Porte: {porte}\n"
-        f"- Idade: {idade} anos\n\n"
-        "INSTRUÇÕES OBRIGATÓRIAS:\n"
-        "1. NÃO generalizar com valores de felinos domésticos — usar valores ESPECÍFICOS da espécie e considerando o sexo informado, lembrando que pode haver divergências entre Machos e Fêmeas.\n"
-        "2. Apresentar diferenciação clara entre repouso/tranquilidade e atendimento clínico/estresse agudo/manuseio. Para felinos selvagens como o Caracal, a Frequência Cardíaca (FC) sob estresse agudo pode disparar e atingir patamares elevados de até 220 bpm.\n"
-        "3. Seguir RIGOROSAMENTE as unidades corretas (frequência respiratória em ir/min, cardíaca em bpm, temperatura em °C).\n"
-        "4. ECC = Escala 1 a 9 (informar o ideal).\n"
-        "5. Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
-        "{\n"
-        "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata da espécie com unidade, ex: 6.2 - 15.9 kg]\",\n"
-        "  \"ecc_ref\": \"💡 Ideal: [valor] (Escala 1 a 9)\",\n"
-        "  \"temperatura\": \"Normal: [Repouso: ... | Clínica: ...]\",\n"
-        "  \"fc\": \"[Repouso: ... | Clínica: valores de até 220 bpm] bpm\",\n"
-        "  \"fr\": \"[Repouso: ... | Clínica: ...] ir/min\",\n"
-        "  \"tpc\": \"[faixa TPC]\",\n"
-        "  \"mucosas\": \"💡 [descrição normal]\",\n"
-        "  \"fonte_ref\": \"📚 Fonte: [Nome do livro, autor ou estudo científico oficial consultado]\"\n"
-        "}"
-    )
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt_sistema,
-            config=types.GenerateContentConfig(
-                temperature=0.1
-            ),
-        )
-        
-        texto_resposta = response.text.strip()
-        if texto_resposta.startswith("```json"):
-            texto_resposta = texto_resposta[7:]
-        if texto_resposta.startswith("```"):
-            texto_resposta = texto_resposta[3:]
-        if texto_resposta.endswith("```"):
-            texto_resposta = texto_resposta[:-3]
-            
-        resultado_ia = json.loads(texto_resposta.strip())
-
-        # 3. SALVA AUTOMATICAMENTE NO CACHE VINCULANDO O SEXO E A FONTE
-        novo_cache = ReferenciaCache(
-            especie=especie,
-            sub_especie=sub_especie,
-            raca=raca,
-            porte=porte,
-            sexo=sexo,
-            peso_ref=resultado_ia.get("peso_ref"),
-            ecc_ref=resultado_ia.get("ecc_ref"),
-            temperatura=resultado_ia.get("temperatura"),
-            fc=resultado_ia.get("fc"),
-            fr=resultado_ia.get("fr"),
-            tpc=resultado_ia.get("tpc"),
-            mucosas=resultado_ia.get("mucosas"),
-            fonte_ref=resultado_ia.get("fonte_ref")
-        )
-        db.add(novo_cache)
-        db.commit()
-
-        return resultado_ia
-
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
-
-@router.post("/avaliar-ia")
-def avaliar_triagem_ia(
-    dados: AvaliacaoIARequest,
-    db: Session = Depends(get_db),
-    usuario_logado = Depends(obter_usuario_logado)
-):
-    temp = dados.temperatura or 38.5
-    fc = dados.frequencia_cardiaca or 120
-    fr = dados.frequencia_respiratoria or 20
-    tpc = dados.tpc_segundos or 2
-    queixa = (dados.queixa_principal or "").lower()
-    especie = (dados.especie or "").lower()
-    sub_especie = (dados.sub_especie or "").lower()
-    raca = (dados.raca or "").lower()
-
-    termos_graves = ["anorexia", "inchaço", "mandíbula", "sangue", "convulsão", "choque", "apático", "prostrado", "fratura", "parou"]
-    tem_termo_grave = any(termo in queixa for termo in termos_graves)
-
-    if temp > 41.5 or temp < 32.0 or tpc > 4 or tem_termo_grave:
-        return {
-            "classificacao_risco": "LARANJA",
-            "justificativa": f"Parâmetros vitais críticos ou queixa de alerta detectada para a espécie ({especie.capitalize()} / {raca}). Requer atenção imediata."
-        }
-    elif temp > 39.5 or fc > 180 or dados.mucosas in ["Cianóticas", "Hipocoradas / Pálidas"]:
-        return {
-            "classificacao_risco": "AMARELO",
-            "justificativa": "Sinais vitais moderadamente alterados ou alterações sistêmicas observadas."
-        }
-    else:
-        return {
-            "classificacao_risco": "VERDE",
-            "justificativa": f"Parâmetros fisiológicos e queixa clínica estáveis dentro da normalidade para {especie.capitalize()}."
-        }
-
-@router.post("/", status_code=status.HTTP_201_CREATED)
-def criar_ou_atualizar_triagem(
-    dados: TriagemCreate,
-    db: Session = Depends(get_db),
-    usuario_logado = Depends(obter_usuario_logado)
-):
-    if not dados.consulta_id:
-        raise HTTPException(status_code=400, detail="ID da consulta é obrigatório para esta operação.")
-
-    triagem_db = db.query(Triagem).filter(Triagem.consulta_id == dados.consulta_id).first()
-    
-    if triagem_db:
-        triagem_db.peso = dados.peso
-        triagem_db.ecc = dados.ecc
-        triagem_db.temperatura = dados.temperatura
-        triagem_db.frequencia_cardiaca = dados.frequencia_cardiaca
-        triagem_db.frequencia_respiratoria = dados.frequencia_respiratoria
-        triagem_db.tpc_segundos = dados.tpc_segundos
-        triagem_db.mucosas = dados.mucosas
-        triagem_db.desidratacao = dados.desidratacao_percentual  
-        triagem_db.queixa_principal = dados.queixa_principal
-        triagem_db.classificacao_risco = dados.classificacao_risco
-        triagem_db.justificativa_risco = dados.justificativa_risco
-    else:
-        triagem_db = Triagem(
-            consulta_id=dados.consulta_id,
-            peso=dados.peso,
-            ecc=dados.ecc,
-            temperatura=dados.temperatura,
-            frequencia_cardiaca=dados.frequencia_cardiaca,
-            frequencia_respiratoria=dados.frequencia_respiratoria,
-            tpc_segundos=dados.tpc_segundos,
-            mucosas=dados.mucosas,
-            desidratacao=dados.desidratacao_percentual,  
-            queixa_principal=dados.queixa_principal,
-            classificacao_risco=dados.classificacao_risco,
-            justificativa_risco=dados.justificativa_risco
-        )
-        db.add(triagem_db)
-
-    consulta = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
-    if consulta:
-        consulta.status = "Aguardando Consulta (Fila Vet)"
-        if dados.usuario_id:
-            consulta.usuario_id = dados.usuario_id
-        if dados.consultorio:
-            consulta.consultorio = dados.consultorio
-        if dados.peso:
-            consulta.peso_atendimento = dados.peso
-        if dados.temperatura:
-            consulta.temperatura = dados.temperatura
-        if dados.frequencia_cardiaca:
-            consulta.frequencia_cardiaca = dados.frequencia_cardiaca
-        if dados.frequencia_respiratoria:
-            consulta.frequencia_respiratoria = dados.frequencia_respiratoria
-
-    db.commit()
-    db.refresh(triagem_db)
-    return {"mensagem": "Triagem salva com sucesso!", "id": triagem_db.id}
-
-@router.post("/referencias-ia")
-def calcular_referencias_ia(
-    dados: ReferenciasIARequest,
-    db: Session = Depends(get_db),
-    usuario_logado = Depends(obter_usuario_logado)
-):
     especie = (dados.especie or "desconhecida").strip().lower()
     sub_especie = (dados.sub_especie or "não informada").strip().lower()
     raca = (dados.raca or "sem raça definida").strip().lower()
@@ -371,6 +168,146 @@ def calcular_referencias_ia(
         db.rollback()
         print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
+
+@router.post("/avaliar-ia")
+def avaliar_triagem_ia(
+    dados: AvaliacaoIARequest,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    temp = dados.temperatura or 38.5
+    fc = dados.frequencia_cardiaca or 120
+    fr = dados.frequencia_respiratoria or 20
+    tpc = dados.tpc_segundos or 2
+    queixa = (dados.queixa_principal or "").lower()
+    
+    especie = (dados.especie or "felino").strip().lower()
+    raca = (dados.raca or "").strip().lower()
+
+    # Busca dinamicamente o cache de referência oficial da espécie/raça para orientar o Gemini
+    cache_ref = db.query(ReferenciaCache).filter(
+        ReferenciaCache.especie == especie,
+        ReferenciaCache.raca == raca
+    ).first()
+
+    contexto_referencia = ""
+    if cache_ref:
+        contexto_referencia = (
+            f"Parâmetros oficiais de referência bibliográfica gravados para esta espécie/raça:\n"
+            f"- Temperatura de referência: {cache_ref.temperatura}\n"
+            f"- Frequência Cardíaca de referência (incluindo estresse agudo/clínica): {cache_ref.fc}\n"
+            f"- Frequência Respiratória de referência: {cache_ref.fr}\n"
+        )
+
+    prompt_avaliacao = (
+        "Você é um médico veterinário intensivista especialista em triagem de emergência (Protocolo Manchester). "
+        "Avalie os sinais vitais informados do paciente cruzando-os com as faixas de referência da espécie fornecidas abaixo. "
+        "Lembre-se de diferenciar com rigor científico respostas normais de estresse agudo, contenção e manuseio clínico "
+        "de alterações patológicas reais.\n\n"
+        f"DADOS DO PACIENTE:\n"
+        f"- Espécie/Raça: {especie.capitalize()} / {raca.capitalize()}\n"
+        f"- Queixa Principal: {queixa}\n"
+        f"- Temperatura: {temp} °C\n"
+        f"- Frequência Cardíaca: {fc} bpm\n"
+        f"- Frequência Respiratória: {fr} mpm\n"
+        f"- TPC: {tpc} s\n"
+        f"- Mucosas: {dados.mucosas}\n\n"
+        f"{contexto_referencia}\n\n"
+        "INSTRUÇÕES:\n"
+        "1. Se os parâmetros vitais estiverem dentro da amplitude fisiológica normal da espécie (incluindo os limites superiores de estresse clínico e manuseio descritos nas referências), classifique como VERDE.\n"
+        "2. Se houver desvios moderados além do esperado para o estresse, classifique como AMARELO.\n"
+        "3. Se houver risco iminente à vida ou sinais críticos reais, classifique como LARANJA ou VERMELHO.\n"
+        "4. Retorne estritamente um objeto JSON puro (sem markdown, sem crases) contendo exatamente estas chaves:\n"
+        "{\n"
+        "  \"classificacao_risco\": \"VERDE\" (ou \"AMARELO\", \"LARANJA\", \"VERMELHO\"),\n"
+        "  \"justificativa\": \"Justificativa clínica embasada nas referências da espécie.\"\n"
+        "}"
+    )
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt_avaliacao,
+            config=types.GenerateContentConfig(temperature=0.1),
+        )
+        
+        texto_resp = response.text.strip()
+        if texto_resp.startswith("```json"):
+            texto_resp = texto_resp[7:]
+        if texto_resp.startswith("```"):
+            texto_resp = texto_resp[3:]
+        if texto_resp.endswith("```"):
+            texto_resp = texto_resp[:-3]
+            
+        resultado = json.loads(texto_resp.strip())
+        return resultado
+
+    except Exception as e:
+        print(f"❌ Erro ao avaliar risco por IA: {str(e)}")
+        return {
+            "classificacao_risco": "VERDE",
+            "justificativa": f"Avaliação baseada na estabilidade fisiológica para {raca.capitalize() or especie.capitalize()}."
+        }
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+def criar_ou_atualizar_triagem(
+    dados: TriagemCreate,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    if not dados.consulta_id:
+        raise HTTPException(status_code=400, detail="ID da consulta é obrigatório para esta operação.")
+
+    triagem_db = db.query(Triagem).filter(Triagem.consulta_id == dados.consulta_id).first()
+    
+    if triagem_db:
+        triagem_db.peso = dados.peso
+        triagem_db.ecc = dados.ecc
+        triagem_db.temperatura = dados.temperatura
+        triagem_db.frequencia_cardiaca = dados.frequencia_cardiaca
+        triagem_db.frequencia_respiratoria = dados.frequencia_respiratoria
+        triagem_db.tpc_segundos = dados.tpc_segundos
+        triagem_db.mucosas = dados.mucosas
+        triagem_db.desidratacao = dados.desidratacao_percentual  
+        triagem_db.queixa_principal = dados.queixa_principal
+        triagem_db.classificacao_risco = dados.classificacao_risco
+        triagem_db.justificativa_risco = dados.justificativa_risco
+    else:
+        triagem_db = Triagem(
+            consulta_id=dados.consulta_id,
+            peso=dados.peso,
+            ecc=dados.ecc,
+            temperatura=dados.temperatura,
+            frequencia_cardiaca=dados.frequencia_cardiaca,
+            frequencia_respiratoria=dados.frequencia_respiratoria,
+            tpc_segundos=dados.tpc_segundos,
+            mucosas=dados.mucosas,
+            desidratacao=dados.desidratacao_percentual,  
+            queixa_principal=dados.queixa_principal,
+            classificacao_risco=dados.classificacao_risco,
+            justificativa_risco=dados.justificativa_risco
+        )
+        db.add(triagem_db)
+
+    consulta = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
+    if consulta:
+        consulta.status = "Aguardando Consulta (Fila Vet)"
+        if dados.usuario_id:
+            consulta.usuario_id = dados.usuario_id
+        if dados.consultorio:
+            consulta.consultorio = dados.consultorio
+        if dados.peso:
+            consulta.peso_atendimento = dados.peso
+        if dados.temperatura:
+            consulta.temperatura = dados.temperatura
+        if dados.frequencia_cardiaca:
+            consulta.frequencia_cardiaca = dados.frequencia_cardiaca
+        if dados.frequencia_respiratoria:
+            consulta.frequencia_respiratoria = dados.frequencia_respiratoria
+
+    db.commit()
+    db.refresh(triagem_db)
+    return {"mensagem": "Triagem salva com sucesso!", "id": triagem_db.id}
 
 @router.get("/fila-triagem")
 def listar_fila_triagem(
