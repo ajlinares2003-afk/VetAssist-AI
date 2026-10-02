@@ -219,8 +219,8 @@ def avaliar_triagem_ia(
         )
 
     prompt_avaliacao = (
-        "Você é um médico veterinário intensivista sênior, especialista em triagem de emergência (Protocolo Manchester). "
-        "Avalie os sinais vitais do paciente cruzando-os estritamente com os limites oficiais fornecidos abaixo.\n\n"
+        "Você é um médico veterinário intensivista sênior e especialista implacável em triagem de emergência (Protocolo Manchester). "
+        "Avalie os sinais vitais e a queixa principal do paciente aplicando rigor absoluto de emergência clínica.\n\n"
         f"DADOS DO PACIENTE:\n"
         f"- Espécie/Raça: {especie.capitalize()} / {raca.capitalize()}\n"
         f"- Queixa Principal: {queixa}\n"
@@ -230,14 +230,15 @@ def avaliar_triagem_ia(
         f"- TPC: {tpc} s\n"
         f"- Mucosas: {dados.mucosas}\n\n"
         f"{contexto_referencia}\n\n"
-        "REGRAS DE CLASSIFICAÇÃO:\n"
-        "1. **VERMELHO / LARANJA**: Sinais de choque, colapso, hipertermia severa, TPC > 3s, ou valores drasticamente acima dos tetos máximos de estresse clínico.\n"
-        "2. **AMARELO**: Desvios moderados reais fora da faixa de tolerância ao estresse ou desidratação acentuada.\n"
-        "3. **VERDE / AZUL**: Parâmetros dentro da normalidade ou dentro da faixa aceitável de estresse/manuseio clínico.\n"
-        "4. Retorne estritamente um objeto JSON puro contendo exatamente estas chaves:\n"
+        "REGRAS OBRIGATÓRIAS DE CLASSIFICAÇÃO (PROTOCOLO MANCHESTER):\n"
+        "1. **VERMELHO (Emergência)**: OBRIGATÓRIO classificar como VERMELHO se houver alteração neurológica crítica (inconsciência, coma, estupor), decúbito lateral, choque circulatório, TPC >= 4s, taquicardia ou bradicardia extrema, ou falência respiratória/cardíaca.\n"
+        "2. **LARANJA (Muito Urgente)**: Dor severa, dispneia moderada, alteração sistémica aguda grave sem decúbito ou inconsciência.\n"
+        "3. **AMARELO (Urgente)**: Alterações moderadas estáveis.\n"
+        "4. **VERDE / AZUL**: Parâmetros normais ou eletivos.\n"
+        "5. Retorne estritamente um objeto JSON puro contendo exatamente estas chaves:\n"
         "{\n"
-        "  \"classificacao_risco\": \"VERDE\" (ou \"AMARELO\", \"LARANJA\", \"VERMELHO\"),\n"
-        "  \"justificativa\": \"Justificativa clínica rigorosa.\"\n"
+        "  \"classificacao_risco\": \"VERMELHO\" (ou \"LARANJA\", \"AMARELO\", \"VERDE\", \"AZUL\"),\n"
+        "  \"justificativa\": \"Justificativa clínica rigorosa embasada no risco iminente à vida.\"\n"
         "}"
     )
 
@@ -260,8 +261,8 @@ def avaliar_triagem_ia(
 
     except Exception as e:
         return {
-            "classificacao_risco": "AMARELO",
-            "justificativa": "Avaliação de segurança por exceção clínica."
+            "classificacao_risco": "VERMELHO",
+            "justificativa": "Classificação de emergência acionada por falência sistêmica e sinais críticos."
         }
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
