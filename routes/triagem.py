@@ -294,13 +294,13 @@ def calcular_referencias_ia(
             "fr": cache_existente.fr,
             "tpc": cache_existente.tpc,
             "mucosas": cache_existente.mucosas,
-            "fonte_ref": cache_existente.fonte_ref
+            "fonte_ref": cache_existente.fonte_ref or "📚 Fonte: Literatura especializada em medicina zoológica."
         }
 
-    # 2. SE NÃO EXISTIR, ACIONA A IA
+    # 2. PROMPT CIENTÍFICO PURO (SEM INDUÇÃO, COM EXIGÊNCIA DE FONTE)
     prompt_sistema = (
         "Você é médico veterinário intensivista, semiologista clínico sênior e especialista em Medicina de Animais Silvestres, Exóticos e Felinos Selvagens. "
-        "Sua tarefa: fornecer os PARÂMETROS DE REFERÊNCIA FISIOLÓGICAS OFICIAIS, baseados em publicações científicas, manuais reconhecidos e literatura veterinária oficial para o animal abaixo.\n\n"
+        "Sua tarefa: consultar a literatura científica oficial, tratados de medicina zoológica e manuais de animais selvagens (ex: Fowler's Zoo and Wild Animal Medicine, Miller's Anatomy, ou estudos de referência da espécie) para fornecer os PARÂMETROS FISIOLÓGICOS REAIS para o animal abaixo:\n\n"
         "DADOS DO ANIMAL:\n"
         f"- Espécie: {especie}\n"
         f"- Sub-espécie: {sub_especie}\n"
@@ -309,20 +309,21 @@ def calcular_referencias_ia(
         f"- Porte: {porte}\n"
         f"- Idade: {idade} anos\n\n"
         "INSTRUÇÕES OBRIGATÓRIAS:\n"
-        "1. NÃO generalizar com valores de felinos domésticos — usar valores ESPECÍFICOS da espécie e considerando o sexo informado, lembrando que pode haver divergências entre Machos e Fêmeas.\n"
-        "2. Apresentar diferenciação clara entre repouso/tranquilidade e atendimento clínico/estresse agudo/manuseio. Para felinos selvagens como o Caracal, a Frequência Cardíaca (FC) sob estresse agudo pode disparar e atingir patamares elevados de até 220 bpm.\n"
-        "3. Seguir RIGOROSAMENTE as unidades corretas (frequência respiratória em ir/min, cardíaca em bpm, temperatura em °C).\n"
+        "1. Baseie-se estritamente na literatura científica oficial para a espécie e sexo informados, sem generalizar com gatos domésticos.\n"
+        "2. Apresente a diferenciação clara entre os estados de repouso/tranquilidade e atendimento clínico/estresse agudo/manuseio.\n"
+        "3. Siga as unidades corretas: frequência respiratória em ir/min, cardíaca em bpm, temperatura em °C.\n"
         "4. ECC = Escala 1 a 9 (informar o ideal).\n"
-        "5. Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases, sem texto adicional) contendo exatamente estas chaves:\n"
+        "5. **OBRIGATÓRIO**: No campo 'fonte_ref', cite explicitamente a obra literária, autor, manual zoológico ou artigo científico oficial utilizado como base para estes parâmetros.\n"
+        "6. Retorne estritamente um objeto JSON puro (sem blocos de código markdown, sem crases) contendo exatamente estas chaves:\n"
         "{\n"
-        "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata da espécie com unidade, ex: 6.2 - 15.9 kg]\",\n"
+        "  \"peso_ref\": \"💡 Ref. Peso: [faixa exata com unidade]\",\n"
         "  \"ecc_ref\": \"💡 Ideal: [valor] (Escala 1 a 9)\",\n"
         "  \"temperatura\": \"Normal: [Repouso: ... | Clínica: ...]\",\n"
-        "  \"fc\": \"[Repouso: ... | Clínica: valores de até 220 bpm] bpm\",\n"
+        "  \"fc\": \"[Repouso: ... | Clínica: ...] bpm\",\n"
         "  \"fr\": \"[Repouso: ... | Clínica: ...] ir/min\",\n"
         "  \"tpc\": \"[faixa TPC]\",\n"
         "  \"mucosas\": \"💡 [descrição normal]\",\n"
-        "  \"fonte_ref\": \"📚 Fonte: [Nome do livro, autor ou estudo científico oficial consultado]\"\n"
+        "  \"fonte_ref\": \"📚 Fonte: [Nome exato do livro, autor ou diretriz zoológica consultada]\"\n"
         "}"
     )
 
@@ -345,7 +346,7 @@ def calcular_referencias_ia(
             
         resultado_ia = json.loads(texto_resposta.strip())
 
-        # 3. SALVA NO CACHE
+        # 3. SALVA NO CACHE INCLUINDO A FONTE
         novo_cache = ReferenciaCache(
             especie=especie,
             sub_especie=sub_especie,
@@ -359,7 +360,7 @@ def calcular_referencias_ia(
             fr=resultado_ia.get("fr"),
             tpc=resultado_ia.get("tpc"),
             mucosas=resultado_ia.get("mucosas"),
-            fonte_ref=resultado_ia.get("fonte_ref")
+            fonte_ref=resultado_ia.get("fonte_ref", "📚 Fonte: Literatura especializada.")
         )
         db.add(novo_cache)
         db.commit()
