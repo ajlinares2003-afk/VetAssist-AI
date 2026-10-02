@@ -201,10 +201,17 @@ def avaliar_triagem_ia(
     tpc = dados.tpc_segundos or 2
     queixa = (dados.queixa_principal or "").lower()
     
+    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO (EMERGÊNCIA DIRETA)
+    # Qualquer sinal vital em colapso extremo (ex: Temp > 40.5°C ou < 35°C, FC > 200 bpm, TPC >= 3s) força VERMELHO de imediato.
+    if temp >= 40.5 or temp <= 35.0 or fc >= 200 or fc <= 40 or tpc >= 3 or "inconsciência" in queixa or "decúbito" in queixa:
+        return {
+            "classificacao_risco": "VERMELHO",
+            "justificativa": f"⚠️ EMERGÊNCIA CLÍNICA CRÍTICA: Sinais vitais em colapso detetados (Temperatura: {temp}°C, FC: {fc} bpm, TPC: {tpc}s). Protocolo de Manchester acionado por risco iminente à vida."
+        }
+
     especie = (dados.especie or "felino").strip().lower()
     raca = (dados.raca or "").strip().lower()
 
-    # Consulta cruzada na Biblioteca Oficial para orientar a IA na avaliação de risco com base nos limites reais
     bib_ref = db.query(BibliotecaParametrosOficiais).filter(
         BibliotecaParametrosOficiais.especie.ilike(f"%{especie}%")
     ).first()
@@ -215,12 +222,11 @@ def avaliar_triagem_ia(
             f"Limites oficiais curados para esta espécie:\n"
             f"- Temperatura Clínica Máxima: {bib_ref.temp_clinica_max} °C\n"
             f"- Frequência Cardíaca Máxima em Clínica/Estresse: {bib_ref.fc_clinica_max} bpm\n"
-            f"- Frequência Respiratória Máxima em Clínica/Estresse: {bib_ref.fr_clinica_max} ir/min\n"
         )
 
     prompt_avaliacao = (
-        "Você é um médico veterinário intensivista sênior e especialista implacável em triagem de emergência (Protocolo Manchester). "
-        "Avalie os sinais vitais e a queixa principal do paciente aplicando rigor absoluto de emergência clínica.\n\n"
+        "Você é um médico veterinário intensivista sênior e especialista em triagem de emergência (Protocolo Manchester). "
+        "Avalie os sinais vitais e a queixa principal do paciente:\n\n"
         f"DADOS DO PACIENTE:\n"
         f"- Espécie/Raça: {especie.capitalize()} / {raca.capitalize()}\n"
         f"- Queixa Principal: {queixa}\n"
@@ -230,15 +236,10 @@ def avaliar_triagem_ia(
         f"- TPC: {tpc} s\n"
         f"- Mucosas: {dados.mucosas}\n\n"
         f"{contexto_referencia}\n\n"
-        "REGRAS OBRIGATÓRIAS DE CLASSIFICAÇÃO (PROTOCOLO MANCHESTER):\n"
-        "1. **VERMELHO (Emergência)**: OBRIGATÓRIO classificar como VERMELHO se houver alteração neurológica crítica (inconsciência, coma, estupor), decúbito lateral, choque circulatório, TPC >= 4s, taquicardia ou bradicardia extrema, ou falência respiratória/cardíaca.\n"
-        "2. **LARANJA (Muito Urgente)**: Dor severa, dispneia moderada, alteração sistémica aguda grave sem decúbito ou inconsciência.\n"
-        "3. **AMARELO (Urgente)**: Alterações moderadas estáveis.\n"
-        "4. **VERDE / AZUL**: Parâmetros normais ou eletivos.\n"
-        "5. Retorne estritamente um objeto JSON puro contendo exatamente estas chaves:\n"
+        "Retorne estritamente um objeto JSON puro contendo exatamente estas chaves:\n"
         "{\n"
         "  \"classificacao_risco\": \"VERMELHO\" (ou \"LARANJA\", \"AMARELO\", \"VERDE\", \"AZUL\"),\n"
-        "  \"justificativa\": \"Justificativa clínica rigorosa embasada no risco iminente à vida.\"\n"
+        "  \"justificativa\": \"Justificativa clínica rigorosa.\"\n"
         "}"
     )
 
