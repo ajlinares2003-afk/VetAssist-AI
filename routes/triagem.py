@@ -12,6 +12,7 @@ from services.security import obter_usuario_logado
 from pydantic import BaseModel
 from typing import Optional
 from models.triagem import Triagem 
+from models.referencia_cache import ReferenciaCache
 
 router = APIRouter(
     prefix="/triagem",
@@ -64,12 +65,33 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    especie = dados.especie or "Desconhecida"
-    sub_especie = dados.sub_especie or "Não informada"
-    raca = dados.raca or "Sem raça definida"
-    porte = dados.porte or "Médio"
+    # Normalizamos as strings para garantir consistência na busca do cache
+    especie = (dados.especie or "desconhecida").strip().lower()
+    sub_especie = (dados.sub_especie or "não informada").strip().lower()
+    raca = (dados.raca or "sem raça definida").strip().lower()
+    porte = (dados.porte or "médio").strip().lower()
     idade = dados.idade or 3.0
 
+    # 1. TENTA BUSCAR NO CACHE DO SUPABASE PRIMEIRO (0ms de latência se já existir)
+    cache_existente = db.query(ReferenciaCache).filter(
+        ReferenciaCache.especie == especie,
+        ReferenciaCache.sub_especie == sub_especie,
+        ReferenciaCache.raca == raca,
+        ReferenciaCache.porte == porte
+    ).first()
+
+    if cache_existente:
+        return {
+            "peso_ref": cache_existente.peso_ref,
+            "ecc_ref": cache_existente.ecc_ref,
+            "temperatura": cache_existente.temperatura,
+            "fc": cache_existente.fc,
+            "fr": cache_existente.fr,
+            "tpc": cache_existente.tpc,
+            "mucosas": cache_existente.mucosas
+        }
+
+    # 2. SE NÃO EXISTIR NO CACHE, ACIONA A IA DO GEMINI DINAMICAMENTE
     prompt_sistema = (
         "És um médico veterinário intensivista e semiologista clínico sénior, especialista em fisiologia "
         "de pequenos, grandes animais, exóticos, animais silvestres e de zoológico. "
@@ -110,9 +132,28 @@ def calcular_referencias_ia(
             texto_resposta = texto_resposta[:-3]
             
         resultado_ia = json.loads(texto_resposta.strip())
+
+        # 3. SALVA AUTOMATICAMENTE NO CACHE PARA AS PRÓXIMAS VEZES
+        novo_cache = ReferenciaCache(
+            especie=especie,
+            sub_especie=sub_especie,
+            raca=raca,
+            porte=porte,
+            peso_ref=resultado_ia.get("peso_ref"),
+            ecc_ref=resultado_ia.get("ecc_ref"),
+            temperatura=resultado_ia.get("temperatura"),
+            fc=resultado_ia.get("fc"),
+            fr=resultado_ia.get("fr"),
+            tpc=resultado_ia.get("tpc"),
+            mucosas=resultado_ia.get("mucosas")
+        )
+        db.add(novo_cache)
+        db.commit()
+
         return resultado_ia
 
     except Exception as e:
+        db.rollback()
         print(f"❌ Erro crítico ao consultar IA para referências: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao calcular referências por IA: {str(e)}")
 
@@ -335,22 +376,4 @@ def buscar_triagem_por_consulta(
             "frequencia_respiratoria": triagem_db.frequencia_respiratoria,
             "tpc_segundos": triagem_db.tpc_segundos,
             "mucosas": triagem_db.mucosas,
-            "queixa_principal": triagem_db.queixa_principal,
-            "observacoes": getattr(triagem_db, 'observacoes', "")
-        }
-
-    consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
-    if not consulta:
-        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
-    
-    return {
-        "consulta_id": consulta.id,
-        "peso": getattr(consulta, 'peso_atendimento', None),
-        "ecc": None,
-        "temperatura": consulta.temperatura,
-        "frequencia_cardiaca": consulta.frequencia_cardiaca,
-        "frequencia_respiratoria": consulta.frequencia_respiratoria,
-        "tpc_segundos": getattr(consulta, 'tpc_segundos', 2),
-        "mucosas": getattr(consulta, 'mucosas', "Normocoradas"),
-        "observacoes": consulta.observacoes or ""
-    }
+            "queixa_
