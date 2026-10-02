@@ -376,4 +376,22 @@ def buscar_triagem_por_consulta(
             "frequencia_respiratoria": triagem_db.frequencia_respiratoria,
             "tpc_segundos": triagem_db.tpc_segundos,
             "mucosas": triagem_db.mucosas,
-            "queixa_
+            "queixa_principal": triagem_db.queixa_principal,
+            "observacoes": getattr(triagem_db, 'observacoes', "")
+        }
+
+    consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
+    if not consulta:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    
+    return {
+        "consulta_id": consulta.id,
+        "peso": getattr(consulta, 'peso_atendimento', None),
+        "ecc": None,
+        "temperatura": consulta.temperatura,
+        "frequencia_cardiaca": consulta.frequencia_cardiaca,
+        "frequencia_respiratoria": consulta.frequencia_respiratoria,
+        "tpc_segundos": getattr(consulta, 'tpc_segundos', 2),
+        "mucosas": getattr(consulta, 'mucosas', "Normocoradas"),
+        "observacoes": consulta.observacoes or ""
+    }
