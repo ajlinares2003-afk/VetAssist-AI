@@ -116,8 +116,11 @@ def _valor_ou_nao_aferido(valor, unidade: str) -> str:
 def _contexto_referencia(bib, pendente: bool = False) -> str:
     if not bib:
         return (
-            "Não há biblioteca oficial para esta espécie/raça. NÃO presuma valores de gato "
-            "ou cão doméstico; avalie com cautela e deixe isso claro na justificativa."
+            "NÃO HÁ faixas de referência para esta espécie/raça. Portanto NÃO julgue se os sinais "
+            "vitais estão normais ou alterados e NÃO os compare com os de gato ou cão doméstico. "
+            "Classifique APENAS pela queixa principal e diga na justificativa que os sinais vitais "
+            "não puderam ser avaliados por falta de referência. A falta de referência, por si só, "
+            "NÃO é motivo para elevar a urgência.\n"
         )
     aviso = (
         "ATENÇÃO: estas faixas foram geradas automaticamente por IA a partir de pesquisa na web e "
@@ -159,12 +162,16 @@ def calcular_referencias_ia(
     bib = buscar_referencia_oficial(db, **perfil)
 
     # 2. Perfil novo: a IA pesquisa na literatura e cadastra como PENDENTE (sem mexer em código)
+    motivo = None
     if not bib:
-        bib = pesquisar_e_registrar(db, **perfil)
+        bib, motivo = pesquisar_e_registrar(db, **perfil)
 
     # 3. Nada confiável: sinaliza indisponibilidade (nunca inventa valores)
     if not bib:
-        return dict(REFERENCIA_INDISPONIVEL)
+        indisponivel = dict(REFERENCIA_INDISPONIVEL)
+        if motivo:
+            indisponivel["fonte_ref"] = f"⚠️ Sem referência oficial. Motivo: {motivo}"
+        return indisponivel
 
     meta = metadados_da_linha(db, bib.id)
     pendente = meta.get("status") == "PENDENTE"

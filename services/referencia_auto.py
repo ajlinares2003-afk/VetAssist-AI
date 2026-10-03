@@ -76,7 +76,7 @@ def validar_pesquisa(dados: dict) -> dict:
             raise ValueError(f"Faixa inconsistente em {base}: {minimo}-{maximo}")
 
     tpc = str(dados.get("tpc_ref") or "").strip()
-    if not (re.search(r"\d", tpc) and re.search(r"seg|\bs\b", tpc.lower())) or "°" in tpc:
+    if not (re.search(r"\d", tpc) and re.search(r"seg|\d\s*s\b", tpc.lower())) or "°" in tpc:
         raise ValueError("tpc_ref não parece ser um tempo em segundos.")
     saida["tpc_ref"] = tpc
 
@@ -199,16 +199,18 @@ def metadados_da_linha(db: Session, linha_id: int) -> dict:
 
 def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, porte):
     """
-    Pesquisa na literatura e cadastra como PENDENTE. Devolve a linha cadastrada
-    (objeto do modelo) ou None se não foi possível (sem fonte, literatura fraca,
-    raça genérica, IA indisponível ou erro de banco). Nunca levanta exceção.
+    Pesquisa na literatura e cadastra como PENDENTE.
+    Devolve (linha, None) em caso de sucesso, ou (None, motivo) quando não foi possível
+    (raça genérica, Gemini indisponível, sem fonte, literatura fraca, erro de banco).
+    O motivo é mostrado na tela para facilitar o diagnóstico. Nunca levanta exceção.
     """
     try:
         return _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte)
-    except Exception:
+    except Exception as exc:
         db.rollback()
         logger.exception("Falha na pesquisa automática de referência")
-        return None
+        return None, (f"erro ao cadastrar a referência ({type(exc).__name__}). "
+                      "Confirme se a migração da biblioteca foi executada.")
 
 
 def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
@@ -217,7 +219,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     nome = _nome_do_perfil(raca)
     if not nome:
         logger.info("Raça genérica/vazia: não há o que pesquisar automaticamente.")
-        return None
+        return None, "raça genérica ou vazia (SRD): é preciso um perfil curado para esse tipo de animal."
 
     sexo_bib = _sexo_da_biblioteca(sexo)
     linhas = db.query(Bib).order_by(Bib.id).all()
@@ -226,7 +228,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     existentes = _perfil_existente(linhas, raca)
     if len(existentes) > 1:
         logger.warning("Raça %r casa com mais de um perfil; não cadastrar.", raca)
-        return None
+        return None, "a raça casa com mais de um perfil da biblioteca; revise os perfis duplicados."
     base = existentes[0].linhas[0] if existentes else None
     especie_perfil = base.especie if base else nome
 
@@ -234,7 +236,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     ja_existe = next((l for l in linhas
                       if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
     if ja_existe:
-        return ja_existe
+        return ja_existe, None
 
     try:
         resposta = gerar_json(
@@ -245,7 +247,9 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
         )
     except IAIndisponivelError as exc:
         logger.warning("Pesquisa automática sem resultado: %s | %s", exc, exc.tentativas)
-        return None
+        if exc.tentativas:
+            return None, f"a pesquisa não produziu resultado aceitável ({exc.tentativas[0][:220]})"
+        return None, str(exc)
 
     d = resposta.dados
     titulos = "; ".join(str(f.get("titulo"))[:120] for f in d["fontes_citadas"][:3] if f.get("titulo"))
@@ -270,6 +274,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     db.commit()
 
     if novo_id is None:  # perdeu a corrida: outro processo inseriu primeiro
-        return next((l for l in db.query(Bib).all()
-                     if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
-    return db.query(Bib).filter(Bib.id == novo_id).first()
+        achada = next((l for l in db.query(Bib).all()
+                       if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
+        return achada, (None if achada else "conflito ao gravar a referência")
+    return db.query(Bib).filter(Bib.id == novo_id).first(), None

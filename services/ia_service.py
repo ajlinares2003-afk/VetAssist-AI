@@ -112,8 +112,9 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
             api_key=api_key,
             http_options=types.HttpOptions(timeout=timeout * 1000),  # em milissegundos
         )
+        # Gemini 3.x: NÃO enviar temperature/top_p/top_k (parâmetros descontinuados,
+        # a API rejeita ou ignora). Só o formato de saída é configurado.
         config = types.GenerateContentConfig(
-            temperature=0.1,
             response_mime_type="application/json" if json_mode else None,
         )
         resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
@@ -150,8 +151,7 @@ def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: in
         api_key=api_key,
         http_options=types.HttpOptions(timeout=timeout * 1000),  # milissegundos
     )
-    config = types.GenerateContentConfig(
-        temperature=0.1,
+    config = types.GenerateContentConfig(  # sem temperature (ver nota em _chamar_provedor)
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
     resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
