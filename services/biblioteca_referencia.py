@@ -26,9 +26,12 @@ GENERICAS = frozenset({
 # Palavras que não ajudam a distinguir um perfil do outro.
 STOP = frozenset({
     "de", "da", "do", "dos", "das", "e", "ex", "domestico", "domesticos",
-    "comum", "silvestre", "silvestres", "selvagem", "selvagens", "porte", "raca",
+    "comum", "silvestre", "silvestres", "selvagem", "selvagens", "exotico", "exotica",
+    "exoticos", "porte", "raca",
 })
-SILVESTRE = frozenset({"silvestre", "silvestres", "selvagem", "selvagens"})
+SILVESTRE = frozenset({
+    "silvestre", "silvestres", "selvagem", "selvagens", "exotico", "exotica", "exoticos",
+})
 # Porte do cadastro -> palavra usada nos perfis de cães. "Pequeno" fica de fora de
 # propósito: não existe perfil de "pequeno porte" e não vamos presumir equivalência.
 PORTE_ALIAS = {

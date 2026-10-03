@@ -9,6 +9,8 @@ Camada única de acesso às IAs do VetAssist.
   (erro de rede, timeout, cota, JSON inválido ou resposta fora do esperado).
 - Um slot só é usado se tiver modelo E chave configurados. Nenhum modelo,
   chave ou ID de IA fica fixo no código.
+- Com `pesquisa_web=True`, só o Gemini é usado (pesquisa do Google) e a resposta só é aceita
+  se vier ancorada em fontes reais da web (devolvidas em RespostaIA.fontes).
 - Se TODOS falharem, levanta IAIndisponivelError. Quem chama decide o que fazer;
   nunca devolva um valor "normal" inventado em caso de falha.
 """
@@ -16,7 +18,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from google import genai
@@ -28,6 +30,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("vetassist.ia")
 
 TIMEOUT_SEGUNDOS = 20
+TIMEOUT_PESQUISA_SEGUNDOS = 90  # pesquisa na web demora mais que uma resposta comum
 # O endpoint da Groq é compatível com o SDK da OpenAI. Pode ser sobrescrito por env.
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
@@ -69,6 +72,7 @@ class RespostaIA:
     dados: dict
     provedor: str  # nome do slot que respondeu
     modelo: str    # modelo que respondeu (para auditoria)
+    fontes: list = field(default_factory=list)  # [{titulo, url}] da pesquisa na web
 
 
 # --------------------------------------------------------------------------- #
@@ -100,12 +104,13 @@ def _chave_do_slot(slot: Slot, config: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Chamada aos provedores
 # --------------------------------------------------------------------------- #
-def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mode: bool) -> str:
+def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mode: bool,
+                     timeout: int = TIMEOUT_SEGUNDOS) -> str:
     """Faz UMA chamada ao provedor e devolve o texto bruto. Lança exceção se falhar."""
     if slot.tipo == "gemini":
         cliente = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=TIMEOUT_SEGUNDOS * 1000),  # em milissegundos
+            http_options=types.HttpOptions(timeout=timeout * 1000),  # em milissegundos
         )
         config = types.GenerateContentConfig(
             temperature=0.1,
@@ -116,7 +121,7 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
 
     # Groq (API compatível com OpenAI). max_retries=0 para o fallback ser rápido.
     cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key,
-                     timeout=TIMEOUT_SEGUNDOS, max_retries=0)
+                     timeout=timeout, max_retries=0)
     args = {
         "model": modelo,
         "messages": [{"role": "user", "content": prompt}],
@@ -133,6 +138,35 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
     else:
         completion = cliente.chat.completions.create(**args)
     return completion.choices[0].message.content or ""
+
+
+def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: int):
+    """
+    Gemini com a ferramenta de Pesquisa do Google. Devolve (texto, fontes), onde
+    `fontes` são as páginas realmente consultadas ([{titulo, url}]).
+    Obs.: com ferramentas ativas o "modo JSON" não é usado; o parser extrai o JSON.
+    """
+    cliente = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=timeout * 1000),  # milissegundos
+    )
+    config = types.GenerateContentConfig(
+        temperature=0.1,
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+    )
+    resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
+
+    fontes, vistas = [], set()
+    try:
+        meta = resposta.candidates[0].grounding_metadata
+        for pedaco in (meta.grounding_chunks or []):
+            web = pedaco.web
+            if web and web.uri and web.uri not in vistas:
+                vistas.add(web.uri)
+                fontes.append({"titulo": web.title or "", "url": web.uri})
+    except (AttributeError, IndexError, TypeError):
+        pass  # sem metadados de ancoragem -> fontes vazias -> resposta rejeitada
+    return resposta.text or "", fontes
 
 
 def _extrair_json(texto: str) -> dict:
@@ -154,12 +188,17 @@ def gerar_json(
     db: Session,
     prompt: str,
     validar: Optional[Callable[[dict], dict]] = None,
+    pesquisa_web: bool = False,
+    timeout: Optional[int] = None,
 ) -> RespostaIA:
     """
     Pede um JSON à IA, com fallback automático entre os slots configurados.
 
     `validar` recebe o dict e devolve o dict normalizado, ou levanta ValueError
     se o conteúdo não servir. Nesse caso o próximo provedor é tentado.
+
+    `pesquisa_web=True`: usa só o Gemini com Pesquisa do Google e exige que a resposta
+    venha ancorada em pelo menos uma fonte real (RespostaIA.fontes).
     """
     config = _ler_configuracoes(db)
     tentativas: list[str] = []
@@ -169,13 +208,24 @@ def gerar_json(
         api_key = _chave_do_slot(slot, config)
         if not modelo or not api_key:
             continue  # slot não configurado
+        if pesquisa_web and slot.tipo != "gemini":
+            continue  # só o Gemini tem pesquisa na web neste sistema
 
         try:
-            bruto = _chamar_provedor(slot, modelo, api_key, prompt, json_mode=True)
+            fontes: list = []
+            if pesquisa_web:
+                bruto, fontes = _chamar_gemini_com_busca(
+                    modelo, api_key, prompt, timeout or TIMEOUT_PESQUISA_SEGUNDOS
+                )
+                if not fontes:
+                    raise ValueError("A IA respondeu sem consultar fontes na web.")
+            else:
+                bruto = _chamar_provedor(slot, modelo, api_key, prompt, json_mode=True,
+                                         timeout=timeout or TIMEOUT_SEGUNDOS)
             dados = _extrair_json(bruto)
             if validar:
                 dados = validar(dados)
-            return RespostaIA(dados=dados, provedor=slot.nome, modelo=modelo)
+            return RespostaIA(dados=dados, provedor=slot.nome, modelo=modelo, fontes=fontes)
         except Exception as exc:  # qualquer falha -> próximo provedor
             registro = f"{slot.nome}/{modelo}: {type(exc).__name__}: {str(exc)[:200]}"
             logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
@@ -183,6 +233,8 @@ def gerar_json(
 
     if not tentativas:
         raise IAIndisponivelError(
+            "Nenhum Gemini configurado para pesquisa na web. Cadastre modelo e chave em Configurações de IA."
+            if pesquisa_web else
             "Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA."
         )
     raise IAIndisponivelError("Todas as IAs configuradas falharam.", tentativas)

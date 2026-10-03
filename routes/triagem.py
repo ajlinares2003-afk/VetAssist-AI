@@ -11,8 +11,8 @@ from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario  # noqa: F401
 from models.triagem import Triagem
-from models.referencia_cache import ReferenciaCache
 from services.biblioteca_referencia import buscar_referencia_oficial
+from services.referencia_auto import metadados_da_linha, pesquisar_e_registrar
 from services.ia_service import IAIndisponivelError, gerar_json
 from services.security import obter_usuario_logado
 
@@ -46,7 +46,7 @@ REFERENCIA_INDISPONIVEL = {
     "fr": "Referência indisponível. Consulte o veterinário",
     "tpc": "Referência indisponível. Consulte o veterinário",
     "mucosas": "⚠️ Referência indisponível",
-    "fonte_ref": "⚠️ Nenhuma referência confiável disponível agora (IA indisponível ou sem dados para esta espécie).",
+    "fonte_ref": "⚠️ Sem referência oficial e a pesquisa automática não encontrou literatura confiável. Consulte o veterinário.",
     "indisponivel": True,
 }
 
@@ -99,14 +99,6 @@ def _normalizar(texto: str) -> str:
     return "".join(c for c in sem_acento if not unicodedata.combining(c))
 
 
-def _validar_referencias(dados: dict) -> dict:
-    for chave in ("peso_ref", "temperatura", "fc", "fr", "tpc", "mucosas"):
-        if not isinstance(dados.get(chave), str) or not dados[chave].strip():
-            raise ValueError(f"Campo ausente ou inválido na referência: {chave}")
-    dados["confiavel"] = dados.get("confiavel") is True
-    return dados
-
-
 def _validar_avaliacao(dados: dict) -> dict:
     cor = str(dados.get("classificacao_risco", "")).strip().upper()
     justificativa = dados.get("justificativa")
@@ -121,13 +113,19 @@ def _valor_ou_nao_aferido(valor, unidade: str) -> str:
     return f"{valor} {unidade}" if valor is not None else "não aferido"
 
 
-def _contexto_referencia(bib) -> str:
+def _contexto_referencia(bib, pendente: bool = False) -> str:
     if not bib:
         return (
             "Não há biblioteca oficial para esta espécie/raça. NÃO presuma valores de gato "
             "ou cão doméstico; avalie com cautela e deixe isso claro na justificativa."
         )
+    aviso = (
+        "ATENÇÃO: estas faixas foram geradas automaticamente por IA a partir de pesquisa na web e "
+        "AINDA NÃO foram validadas por veterinário. Use com cautela e mencione isso na justificativa.\n"
+        if pendente else ""
+    )
     return (
+        aviso +
         "Faixas de referência oficiais curadas para esta espécie/raça:\n"
         f"- Temperatura: repouso {bib.temp_repouso_min}-{bib.temp_repouso_max} °C | "
         f"clínica {bib.temp_clinica_min}-{bib.temp_clinica_max} °C\n"
@@ -149,15 +147,7 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    especie = (dados.especie or "desconhecida").strip().lower()
-    raca = (dados.raca or "sem raça definida").strip().lower()
-    sexo = (dados.sexo or "indiferente").strip().lower()
-
-    # 1. TENTA NA BIBLIOTECA OFICIAL CURADA
-    # Seleção determinística por perfil (raça/sub-espécie/porte) e depois sexo.
-    # Se for ambígua ou não existir perfil, devolve None (nunca "a primeira que achar").
-    bib_oficial = buscar_referencia_oficial(
-        db,
+    perfil = dict(
         especie=dados.especie,
         sub_especie=dados.sub_especie,
         raca=dados.raca,
@@ -165,117 +155,38 @@ def calcular_referencias_ia(
         porte=dados.porte,
     )
 
-    if bib_oficial:
-        return {
-            "peso_ref": f"💡 Ref. Peso: {bib_oficial.peso_min} - {bib_oficial.peso_max} kg",
-            "ecc_ref": f"💡 Ideal: {bib_oficial.ecc_ideal}",
-            "temperatura": f"Normal: [Repouso: {bib_oficial.temp_repouso_min} - {bib_oficial.temp_repouso_max} °C | Clínica: {bib_oficial.temp_clinica_min} - {bib_oficial.temp_clinica_max} °C]",
-            "fc": f"[Repouso: {bib_oficial.fc_repouso_min} - {bib_oficial.fc_repouso_max} bpm | Clínica: {bib_oficial.fc_clinica_min} - {bib_oficial.fc_clinica_max} bpm] bpm",
-            "fr": f"[Repouso: {bib_oficial.fr_repouso_min} - {bib_oficial.fr_repouso_max} ir/min | Clínica: {bib_oficial.fr_clinica_min} - {bib_oficial.fr_clinica_max} ir/min] ir/min",
-            "tpc": f"{bib_oficial.tpc_ref}",
-            "mucosas": f"💡 {bib_oficial.mucosas_ref}",
-            "fonte_ref": f"📚 Fonte: {bib_oficial.fonte_bibliografica} | Perfil: {bib_oficial.especie}"
-        }
+    # 1. Biblioteca (seleção determinística por perfil e sexo)
+    bib = buscar_referencia_oficial(db, **perfil)
 
-    # 2. TENTA NO CACHE DE CONSULTAS ANTERIORES DA IA
-    sub_especie = (dados.sub_especie or "não informada").strip().lower()
-    porte = (dados.porte or "não informado").strip().lower()
-    idade_txt = f"{dados.idade} anos" if dados.idade is not None else "não informada"
+    # 2. Perfil novo: a IA pesquisa na literatura e cadastra como PENDENTE (sem mexer em código)
+    if not bib:
+        bib = pesquisar_e_registrar(db, **perfil)
 
-    try:
-        cache_existente = db.query(ReferenciaCache).filter(
-            ReferenciaCache.especie == especie,
-            ReferenciaCache.sub_especie == sub_especie,
-            ReferenciaCache.raca == raca,
-            ReferenciaCache.sexo == sexo,
-            ReferenciaCache.porte == porte,
-        ).first()
-    except Exception:
-        db.rollback()
-        logger.exception("Falha ao consultar o cache de referências; seguindo sem cache")
-        cache_existente = None
-
-    if cache_existente:
-        return {
-            "peso_ref": cache_existente.peso_ref,
-            "ecc_ref": cache_existente.ecc_ref,
-            "temperatura": cache_existente.temperatura,
-            "fc": cache_existente.fc,
-            "fr": cache_existente.fr,
-            "tpc": cache_existente.tpc,
-            "mucosas": cache_existente.mucosas,
-            "fonte_ref": cache_existente.fonte_ref or "📚 Fonte: Literatura especializada em medicina veterinária."
-        }
-
-    # 3. CHAMA A IA (provedores e chaves vêm do banco, com fallback automático)
-    prompt = (
-        "Você é médico veterinário intensivista e semiologista clínico sênior. "
-        "Forneça os PARÂMETROS FISIOLÓGICOS de referência na literatura veterinária para o animal abaixo:\n\n"
-        f"- Espécie: {especie}\n"
-        f"- Sub-espécie/Tipo: {sub_especie}\n"
-        f"- Raça: {raca}\n"
-        f"- Sexo: {sexo}\n"
-        f"- Porte: {porte}\n"
-        f"- Idade: {idade_txt}\n\n"
-        "REGRAS:\n"
-        "- Use ponto como separador decimal e hífen simples (-) entre mínimo e máximo.\n"
-        "- FR sempre em ir/min (nunca 'mpm').\n"
-        "- NÃO use valores de gato ou cão doméstico para espécies silvestres.\n"
-        "- Se não houver dados confiáveis para esta espécie/raça, retorne \"confiavel\": false "
-        "e escreva 'Sem referência confiável' nos campos.\n\n"
-        "Retorne estritamente um objeto JSON puro com exatamente estas chaves:\n"
-        "{\n"
-        "  \"peso_ref\": \"💡 Ref. Peso: [min] - [max] kg\",\n"
-        "  \"temperatura\": \"Normal: [Repouso: ... | Clínica: ...]\",\n"
-        "  \"fc\": \"[Repouso: ... | Clínica: ...] bpm\",\n"
-        "  \"fr\": \"[Repouso: ... | Clínica: ...] ir/min\",\n"
-        "  \"tpc\": \"texto curto\",\n"
-        "  \"mucosas\": \"💡 texto curto\",\n"
-        "  \"confiavel\": true\n"
-        "}"
-    )
-
-    try:
-        resposta = gerar_json(db, prompt, validar=_validar_referencias)
-    except IAIndisponivelError as exc:
-        logger.error("Referências indisponíveis: %s | %s", exc, exc.tentativas)
-        # Nunca devolver valores de outra espécie: sinaliza indisponibilidade.
+    # 3. Nada confiável: sinaliza indisponibilidade (nunca inventa valores)
+    if not bib:
         return dict(REFERENCIA_INDISPONIVEL)
 
-    ref = resposta.dados
-    confiavel = ref.pop("confiavel")
-    ref["ecc_ref"] = ECC_REF_PADRAO  # ECC ideal = 5/9, definido pela clínica
-    # A fonte NÃO é inventada pela IA: informamos o que realmente aconteceu.
-    ref["fonte_ref"] = (
-        f"🤖 Estimativa gerada por IA ({resposta.provedor}), não validada por veterinário"
-        if confiavel else
-        "⚠️ Dados limitados na literatura para esta espécie. Confirme com o veterinário"
-    )
+    meta = metadados_da_linha(db, bib.id)
+    pendente = meta.get("status") == "PENDENTE"
+    if pendente:
+        n_fontes = len((meta.get("fontes") or {}).get("web", [])) if isinstance(meta.get("fontes"), dict) else 0
+        fonte = (f"⚠️ PENDENTE de validação veterinária. Pesquisa automática por IA "
+                 f"({n_fontes} fonte(s) consultada(s)) | Perfil: {bib.especie}")
+    else:
+        fonte = f"📚 Fonte: {bib.fonte_bibliografica} | Perfil: {bib.especie}"
 
-    # Só guarda em cache o que a IA marcou como confiável.
-    if confiavel:
-        try:
-            db.add(ReferenciaCache(
-                especie=especie,
-                sub_especie=sub_especie,
-                raca=raca,
-                porte=porte,
-                sexo=sexo,
-                peso_ref=ref.get("peso_ref"),
-                ecc_ref=ref.get("ecc_ref"),
-                temperatura=ref.get("temperatura"),
-                fc=ref.get("fc"),
-                fr=ref.get("fr"),
-                tpc=ref.get("tpc"),
-                mucosas=ref.get("mucosas"),
-                fonte_ref=ref.get("fonte_ref"),
-            ))
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Não foi possível gravar o cache de referência")
-
-    return ref
+    return {
+        "peso_ref": f"💡 Ref. Peso: {bib.peso_min} - {bib.peso_max} kg",
+        "ecc_ref": f"💡 Ideal: {bib.ecc_ideal}",
+        "temperatura": f"Normal: [Repouso: {bib.temp_repouso_min} - {bib.temp_repouso_max} °C | Clínica: {bib.temp_clinica_min} - {bib.temp_clinica_max} °C]",
+        "fc": f"[Repouso: {bib.fc_repouso_min} - {bib.fc_repouso_max} bpm | Clínica: {bib.fc_clinica_min} - {bib.fc_clinica_max} bpm] bpm",
+        "fr": f"[Repouso: {bib.fr_repouso_min} - {bib.fr_repouso_max} ir/min | Clínica: {bib.fr_clinica_min} - {bib.fr_clinica_max} ir/min] ir/min",
+        "tpc": f"{bib.tpc_ref}",
+        "mucosas": f"💡 {bib.mucosas_ref}",
+        "fonte_ref": fonte,
+        "validada": not pendente,
+        "indisponivel": False,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -335,6 +246,7 @@ def avaliar_triagem_ia(
         sexo=animal.sexo if animal else None,
         porte=animal.porte if animal else None,
     )
+    pendente_ref = bool(bib_ref) and metadados_da_linha(db, bib_ref.id).get("status") == "PENDENTE"
 
     prompt = (
         "Você é um médico veterinário especialista em triagem de emergência "
@@ -347,7 +259,7 @@ def avaliar_triagem_ia(
         f"- Frequência respiratória: {_valor_ou_nao_aferido(dados.frequencia_respiratoria, 'ir/min')}\n"
         f"- TPC: {_valor_ou_nao_aferido(dados.tpc_segundos, 's')}\n"
         f"- Mucosas: {dados.mucosas or 'não informadas'}\n\n"
-        f"{_contexto_referencia(bib_ref)}\n"
+        f"{_contexto_referencia(bib_ref, pendente_ref)}\n"
         "REGRAS:\n"
         "- 'não aferido' NÃO significa normal; não presuma valores.\n"
         "- Compare os valores com as faixas da espécie, nunca com as de gato ou cão doméstico.\n"
