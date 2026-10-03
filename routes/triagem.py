@@ -157,7 +157,6 @@ def calcular_referencias_ia(
             
         resultado_ia = json.loads(texto_resposta.strip())
 
-        # Salva automaticamente no cache para nunca mais precisar consultar a IA para este perfil
         novo_cache = ReferenciaCache(
             especie=especie,
             sub_especie=sub_especie,
@@ -180,7 +179,6 @@ def calcular_referencias_ia(
 
     except Exception as e:
         db.rollback()
-        # Retorno de segurança caso a IA falhe momentaneamente
         return {
             "peso_ref": "💡 Ref. Peso: 2.0 - 6.0 kg",
             "ecc_ref": "💡 Ideal: 4 a 5 (Escala 1 a 9)",
@@ -315,7 +313,7 @@ def criar_ou_atualizar_triagem(
 
 @router.get("/fila-triagem")
 def listar_fila_triagem(
-    db: Session,
+    db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
     consultas_aguardando = db.query(Consulta).filter(
