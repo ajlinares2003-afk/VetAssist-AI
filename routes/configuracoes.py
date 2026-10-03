@@ -1,102 +1,102 @@
-from fastapi import APIRouter, HTTPException
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-import os
-import traceback
-from google import genai
-from openai import OpenAI
+"""
+routers/configuracoes.py
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
-if "postgresql://" in DATABASE_URL and "?" not in DATABASE_URL:
-    DATABASE_URL += "?sslmode=require"
+Configurações de IA (modelos e chaves). Acesso EXCLUSIVO do perfil ADMIN.
+A lógica de chamada/fallback fica em services/ia_service.py.
+"""
+import logging
+from typing import Optional
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import bindparam, text
+from sqlalchemy.orm import Session
+
+from database.database import get_db
+from services.ia_service import CAMPOS_CONFIG_IA, testar_slot
+from services.security import exigir_perfil
+
+logger = logging.getLogger("vetassist.config")
 
 router = APIRouter(prefix="/configuracoes", tags=["Configurações de IA"])
 
-def obter_chave_armazenada(db, chave_nome, env_nome):
-    row = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = :c"), {"c": chave_nome}).fetchone()
-    if row and row[0] and str(row[0]).strip() and not str(row[0]).startswith("****"):
-        return str(row[0]).strip()
-    return os.getenv(env_nome)
+
+class ConfigIAUpdate(BaseModel):
+    """Só estes campos podem ser gravados (lista fechada)."""
+    gemini_model: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    groq_model_1: Optional[str] = None
+    groq_api_key_1: Optional[str] = None
+    groq_model_2: Optional[str] = None
+    groq_api_key_2: Optional[str] = None
+
+
+class TesteIA(BaseModel):
+    provedor: str  # "gemini", "groq_1" ou "groq_2"
+    modelo: Optional[str] = None
+
+
+def _mascarar(valor: str) -> str:
+    """Mostra só os 4 últimos caracteres da chave."""
+    return f"****{valor[-4:]}" if len(valor) > 4 else "****"
+
 
 @router.get("/ia")
-def obter_configuracoes_ia():
-    resultado = {
-        "groq_model_1": "openai/gpt-oss-120b",
-        "groq_api_key_1": "",
-        "groq_model_2": "qwen/qwen3.8-27b",
-        "groq_api_key_2": "",
-        "gemini_model": "gemini-3.6-flash",
-        "gemini_api_key": ""
-    }
-    db = SessionLocal()
+def obter_configuracoes_ia(
+    usuario_logado=Depends(exigir_perfil(["ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    resultado = {campo: "" for campo in CAMPOS_CONFIG_IA}
+    consulta = text(
+        "SELECT chave, valor FROM configuracoes_sistema WHERE chave IN :chaves"
+    ).bindparams(bindparam("chaves", expanding=True))
+
     try:
-        rows = db.execute(text("SELECT chave, valor FROM configuracoes_sistema")).fetchall()
-        for r in rows:
-            chave, valor = r[0], r[1]
-            if "api_key" in chave and valor:
-                resultado[chave] = "****" + str(valor)[-4:] if len(str(valor)) > 4 else "****"
-            else:
-                resultado[chave] = valor
-    except Exception as e:
-        print(f"Aviso ao ler configurações da BD: {e}")
-    finally:
-        db.close()
+        linhas = db.execute(consulta, {"chaves": list(CAMPOS_CONFIG_IA)}).fetchall()
+    except Exception:
+        db.rollback()
+        logger.exception("Erro ao ler configurações de IA")
+        raise HTTPException(status_code=500, detail="Erro ao ler as configurações de IA.")
+
+    for chave, valor in linhas:
+        valor = (valor or "").strip()
+        resultado[chave] = _mascarar(valor) if ("api_key" in chave and valor) else valor
     return resultado
 
+
 @router.put("/ia")
-def atualizar_configuracoes_ia(payload: dict):
-    db = SessionLocal()
+def atualizar_configuracoes_ia(
+    payload: ConfigIAUpdate,
+    usuario_logado=Depends(exigir_perfil(["ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    # Requer UNIQUE em configuracoes_sistema(chave). Veja o SQL de migração.
+    upsert = text(
+        "INSERT INTO configuracoes_sistema (chave, valor) VALUES (:c, :v) "
+        "ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor"
+    )
     try:
-        for chave, valor in payload.items():
-            if valor is not None:
-                if "api_key" in str(chave) and str(valor).startswith("****"):
-                    continue
-                db.execute(text("DELETE FROM configuracoes_sistema WHERE chave = :c"), {"c": str(chave)})
-                db.execute(text("INSERT INTO configuracoes_sistema (chave, valor) VALUES (:c, :v)"), {"c": str(chave), "v": str(valor)})
+        for campo in CAMPOS_CONFIG_IA:
+            valor = getattr(payload, campo)
+            if valor is None:
+                continue  # campo não enviado: mantém o que está no banco
+            valor = valor.strip()
+            if "api_key" in campo and valor.startswith("****"):
+                continue  # chave mascarada devolvida pelo GET: não sobrescrever
+            db.execute(upsert, {"c": campo, "v": valor})
         db.commit()
-        return {"mensagem": "Configurações de IA atualizadas com sucesso!"}
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro no Banco de Dados: {str(e)}")
-    finally:
-        db.close()
+        logger.exception("Erro ao salvar configurações de IA")
+        raise HTTPException(status_code=500, detail="Erro ao salvar as configurações de IA.")
+
+    return {"mensagem": "Configurações de IA atualizadas com sucesso!"}
+
 
 @router.post("/ia/testar")
-def testar_modelo_ia(payload: dict):
-    provedor = str(payload.get("provedor", "")).lower()
-    modelo = str(payload.get("modelo", ""))
-    db = SessionLocal()
-    try:
-        if "groq" in provedor:
-            chave_nome = "groq_api_key_2" if ("qwen" in modelo.lower() or "2" in provedor) else "groq_api_key_1"
-            api_key = obter_chave_armazenada(db, chave_nome, "GROQ_API_KEY")
-            
-            client = OpenAI(
-                base_url="https://api.groq.com/openai/v1",
-                api_key=api_key
-            )
-            completion = client.chat.completions.create(
-                model=modelo,
-                messages=[{"role": "user", "content": "Responda apenas: 'Conexao bem sucedida!'"}]
-            )
-            return {"sucesso": True, "resposta": completion.choices[0].message.content}
-            
-        elif provedor == "gemini":
-            api_key = obter_chave_armazenada(db, "gemini_api_key", "GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
-            
-            # Utiliza o cliente atualizado da biblioteca google-genai
-            client_gemini = genai.Client(api_key=api_key)
-            response = client_gemini.models.generate_content(
-                model=modelo,
-                contents="Responda apenas: 'Conexao bem sucedida!'"
-            )
-            return {"sucesso": True, "resposta": response.text}
-        else:
-            return {"sucesso": False, "erro": "Provedor desconhecido"}
-    except Exception as e:
-        return {"sucesso": False, "erro": str(e)}
-    finally:
-        db.close()
+def testar_modelo_ia(
+    payload: TesteIA,
+    usuario_logado=Depends(exigir_perfil(["ADMIN"])),
+    db: Session = Depends(get_db),
+):
+    return testar_slot(db, payload.provedor.strip().lower(), payload.modelo)
