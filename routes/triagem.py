@@ -12,7 +12,7 @@ from models.animais import Animal
 from models.usuario import Usuario  # noqa: F401
 from models.triagem import Triagem
 from models.referencia_cache import ReferenciaCache
-from models.biblioteca_oficial import BibliotecaParametrosOficiais
+from services.biblioteca_referencia import buscar_referencia_oficial
 from services.ia_service import IAIndisponivelError, gerar_json
 from services.security import obter_usuario_logado
 
@@ -121,18 +121,6 @@ def _valor_ou_nao_aferido(valor, unidade: str) -> str:
     return f"{valor} {unidade}" if valor is not None else "não aferido"
 
 
-def _buscar_biblioteca(db: Session, raca: str, especie: str):
-    """Do mais específico (raça) para o mais genérico (espécie)."""
-    for termo in (raca, especie):
-        if termo:
-            ref = db.query(BibliotecaParametrosOficiais).filter(
-                BibliotecaParametrosOficiais.especie.ilike(f"%{termo}%")
-            ).first()
-            if ref:
-                return ref
-    return None
-
-
 def _contexto_referencia(bib) -> str:
     if not bib:
         return (
@@ -166,16 +154,16 @@ def calcular_referencias_ia(
     sexo = (dados.sexo or "indiferente").strip().lower()
 
     # 1. TENTA NA BIBLIOTECA OFICIAL CURADA
-    bib_oficial = db.query(BibliotecaParametrosOficiais).filter(
-        BibliotecaParametrosOficiais.especie.ilike(f"%{especie}%"),
-        BibliotecaParametrosOficiais.sexo.ilike(f"%{sexo}%")
-    ).first()
-
-    if not bib_oficial:
-        bib_oficial = db.query(BibliotecaParametrosOficiais).filter(
-            BibliotecaParametrosOficiais.especie.ilike(f"%{raca}%"),
-            BibliotecaParametrosOficiais.sexo.ilike(f"%{sexo}%")
-        ).first()
+    # Seleção determinística por perfil (raça/sub-espécie/porte) e depois sexo.
+    # Se for ambígua ou não existir perfil, devolve None (nunca "a primeira que achar").
+    bib_oficial = buscar_referencia_oficial(
+        db,
+        especie=dados.especie,
+        sub_especie=dados.sub_especie,
+        raca=dados.raca,
+        sexo=dados.sexo,
+        porte=dados.porte,
+    )
 
     if bib_oficial:
         return {
@@ -186,7 +174,7 @@ def calcular_referencias_ia(
             "fr": f"[Repouso: {bib_oficial.fr_repouso_min} - {bib_oficial.fr_repouso_max} ir/min | Clínica: {bib_oficial.fr_clinica_min} - {bib_oficial.fr_clinica_max} ir/min] ir/min",
             "tpc": f"{bib_oficial.tpc_ref}",
             "mucosas": f"💡 {bib_oficial.mucosas_ref}",
-            "fonte_ref": f"📚 Fonte: {bib_oficial.fonte_bibliografica}"
+            "fonte_ref": f"📚 Fonte: {bib_oficial.fonte_bibliografica} | Perfil: {bib_oficial.especie}"
         }
 
     # 2. TENTA NO CACHE DE CONSULTAS ANTERIORES DA IA
@@ -194,10 +182,18 @@ def calcular_referencias_ia(
     porte = (dados.porte or "não informado").strip().lower()
     idade_txt = f"{dados.idade} anos" if dados.idade is not None else "não informada"
 
-    cache_existente = db.query(ReferenciaCache).filter(
-        ReferenciaCache.especie.ilike(f"%{especie}%"),
-        ReferenciaCache.raca.ilike(f"%{raca}%")
-    ).first()
+    try:
+        cache_existente = db.query(ReferenciaCache).filter(
+            ReferenciaCache.especie == especie,
+            ReferenciaCache.sub_especie == sub_especie,
+            ReferenciaCache.raca == raca,
+            ReferenciaCache.sexo == sexo,
+            ReferenciaCache.porte == porte,
+        ).first()
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao consultar o cache de referências; seguindo sem cache")
+        cache_existente = None
 
     if cache_existente:
         return {
@@ -326,7 +322,19 @@ def avaliar_triagem_ia(
 
     especie = (dados.especie or "felino").strip().lower()
     raca = (dados.raca or "").strip().lower()
-    bib_ref = _buscar_biblioteca(db, raca, especie)
+    # Usa o cadastro do animal (não o que vem do navegador) para achar o perfil.
+    animal = (
+        db.query(Animal).filter(Animal.id == dados.animal_id).first()
+        if dados.animal_id else None
+    )
+    bib_ref = buscar_referencia_oficial(
+        db,
+        especie=animal.especie if animal else dados.especie,
+        sub_especie=animal.sub_especie if animal else dados.sub_especie,
+        raca=animal.raca if animal else dados.raca,
+        sexo=animal.sexo if animal else None,
+        porte=animal.porte if animal else None,
+    )
 
     prompt = (
         "Você é um médico veterinário especialista em triagem de emergência "
