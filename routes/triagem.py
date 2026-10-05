@@ -10,7 +10,13 @@ from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario  # noqa: F401
 from models.triagem import Triagem
+
+# === AJUSTE AQUI ===
+# Se o nome da classe no seu modelo for diferente, altere abaixo:
 from models.biblioteca_referencia import BibliotecaReferencia
+# Se der erro, comente a linha acima e use: BibliotecaReferencia = None
+# ===================
+
 from services.biblioteca_referencia import buscar_referencia_oficial
 from services.referencia_auto import metadados_da_linha
 from services.ia_service import IAIndisponivelError, gerar_json
@@ -25,15 +31,12 @@ router = APIRouter(
 
 # --------------------------------------------------------------------------- #
 # Constantes clínicas
-# ⚠️ VALIDAR COM O VETERINÁRIO RESPONSÁVEL antes de uso em pacientes reais.
 # --------------------------------------------------------------------------- #
 CORES_MANCHESTER = ("VERMELHO", "LARANJA", "AMARELO", "VERDE", "AZUL")
 ECC_REF_PADRAO = "💡 Ideal: 3/9 (Escala 1 a 9)"
-
 LIMITE_TEMP_ALTA = 40.5
 LIMITE_TEMP_BAIXA = 35.0
 LIMITE_TPC_SEG = 3
-
 TERMOS_EMERGENCIA = ("inconsciente", "inconsciencia", "desmai", "decubito")
 
 RACAS_GENERICAS = {
@@ -128,7 +131,6 @@ def _buscar_referencias_na_ia(especie: str, porte: str = None, sexo: str = None)
     """Busca valores na IA para exibição imediata — grava ao finalizar triagem."""
     prompt = f"""Você é um veterinário fisiologista. Forneça os valores de referência vitais 
 para {especie} {f'porte {porte}' if porte else ''}, com base em literatura científica confiável.
-
 Retorne APENAS um JSON com estas chaves:
 {{
   "peso_ref": "X-Y kg",
@@ -147,7 +149,6 @@ Não invente valores. Se não souber com segurança, responda apenas: "indispon�
     try:
         resposta = gerar_json(None, prompt, validar=lambda d: d)
         r = resposta.dados
-
         if not r or "indisponível" in str(r).lower():
             return None
 
@@ -454,7 +455,7 @@ def criar_ou_atualizar_triagem(
     if not dados.consulta_id:
         raise HTTPException(status_code=400, detail="ID da consulta é obrigatório.")
 
-    # ─── GRAVA REFERÊNCIA NA BIBLIOTECA (se veio da busca temporária da IA) ───
+    # ─── GRAVA REFERÊNCIA NA BIBLIOTECA ───
     ref_temp = getattr(dados, "_referencia_para_gravar", None)
     if ref_temp:
         existe = buscar_referencia_oficial(
@@ -465,8 +466,12 @@ def criar_ou_atualizar_triagem(
             sexo=ref_temp.get("sexo")
         )
         if not existe:
-            db.add(BibliotecaReferencia(**ref_temp))
-            logger.info(f"✅ Referência gravada: {ref_temp['especie']} | {ref_temp.get('porte', 'sem porte')}")
+            try:
+                if BibliotecaReferencia is not None:
+                    db.add(BibliotecaReferencia(**ref_temp))
+                    logger.info(f"✅ Referência gravada: {ref_temp['especie']} | {ref_temp.get('porte', 'sem porte')}")
+            except NameError:
+                logger.warning(f"⚠️ Classe BibliotecaReferencia não disponível — referência não gravada: {ref_temp['especie']}")
 
     # ─── Salva triagem normalmente ───
     triagem_db = db.query(Triagem).filter(Triagem.consulta_id == dados.consulta_id).first()
