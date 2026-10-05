@@ -192,49 +192,87 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
+    # Normaliza todos os campos
+    especie = (dados.especie or "").strip().capitalize()
+    sub_especie = (dados.sub_especie or "").strip() or None
+    raca = _normalizar_raca(dados.raca)
+    porte = (dados.porte or "").strip() or None
+    sexo = (dados.sexo or "").strip() or None
+
     perfil = dict(
-        especie=dados.especie,
-        sub_especie=dados.sub_especie,
-        raca=_normalizar_raca(dados.raca),
-        porte=dados.porte,
-        sexo=dados.sexo,
+        especie=especie,
+        sub_especie=sub_especie,
+        raca=raca,
+        porte=porte,
+        sexo=sexo,
     )
 
-    # 1. Busca com fallback: raça específica → porte (se genérica)
-    bib, motivo_fallback = _buscar_com_fallback(db, perfil)
+    bib = None
+    motivo = None
 
-    # 2. Perfil novo: a IA pesquisa na literatura e cadastra como PENDENTE
+    # ─── PASSO 1: Busca exata ───
+    bib = buscar_referencia_oficial(db, **perfil)
+    if bib:
+        motivo = "Perfil encontrado diretamente"
+
+    # ─── PASSO 2: SRD/genérica → tenta por porte ───
+    if not bib and _eh_raca_generica(raca):
+        perfil_porte = dict(perfil)
+        perfil_porte["raca"] = None  # Remove raça da busca
+        bib = buscar_referencia_oficial(db, **perfil_porte)
+        if bib:
+            motivo = f"Raça genérica → usando referência por porte: {porte}"
+
+    # ─── PASSO 3: Nada encontrado → PESQUISA AUTOMÁTICA ───
     if not bib:
-        bib, motivo = pesquisar_e_registrar(db, **perfil)
-        motivo_final = motivo
-    else:
-        motivo_final = motivo_fallback
+        logger.info(f"Perfil não encontrado — iniciando pesquisa automática: {especie} | porte: {porte}")
+        bib, motivo_pesquisa = pesquisar_e_registrar(db, **perfil)
+        if bib:
+            motivo = f"Pesquisa automática concluída: {motivo_pesquisa}"
+        else:
+            logger.warning(f"Pesquisa automática não retornou dados confiáveis: {especie}")
 
-    # 3. Nada confiável: sinaliza indisponibilidade
+    # ─── PASSO 4: Ainda sem nada → avisa indisponível ───
     if not bib:
         indisponivel = dict(REFERENCIA_INDISPONIVEL)
-        indisponivel["fonte_ref"] = f"⚠️ Sem referência oficial. Motivo: {motivo_final or 'perfil não encontrado'}"
+        indisponivel["fonte_ref"] = (
+            f"⚠️ Sem referência oficial. Pesquisa automática finalizada sem dados confiáveis. "
+            f"Espécie: {especie} | Porte: {porte or 'não informado'}"
+        )
         return indisponivel
 
+    # ─── PASSO 5: Monta resposta ───
     meta = metadados_da_linha(db, bib.id)
     pendente = meta.get("status") == "PENDENTE"
-    
+
     if pendente:
         n_fontes = len((meta.get("fontes") or {}).get("web", [])) if isinstance(meta.get("fontes"), dict) else 0
-        fonte = (f"⚠️ PENDENTE de validação veterinária. Pesquisa automática por IA "
-                 f"({n_fontes} fonte(s) consultada(s)) | Perfil: {bib.especie}")
+        fonte = (
+            f"⚠️ PENDENTE de validação veterinária. "
+            f"Pesquisa automática por IA ({n_fontes} fonte(s) consultada(s)) | "
+            f"Perfil: {bib.especie}"
+        )
     else:
         fonte = f"📚 Fonte: {bib.fonte_bibliografica} | Perfil: {bib.especie}"
 
-    if motivo_final:
-        fonte = f"{fonte} | {motivo_final}"
+    if motivo:
+        fonte = f"{fonte} | {motivo}"
 
     return {
         "peso_ref": f"💡 Ref. Peso: {bib.peso_min} - {bib.peso_max} kg",
         "ecc_ref": f"💡 Ideal: {bib.ecc_ideal}",
-        "temperatura": f"Normal: [Repouso: {bib.temp_repouso_min} - {bib.temp_repouso_max} °C | Clínica: {bib.temp_clinica_min} - {bib.temp_clinica_max} °C]",
-        "fc": f"[Repouso: {bib.fc_repouso_min} - {bib.fc_repouso_max} bpm | Clínica: {bib.fc_clinica_min} - {bib.fc_clinica_max} bpm] bpm",
-        "fr": f"[Repouso: {bib.fr_repouso_min} - {bib.fr_repouso_max} ir/min | Clínica: {bib.fr_clinica_min} - {bib.fr_clinica_max} ir/min] ir/min",
+        "temperatura": (
+            f"Normal: [Repouso: {bib.temp_repouso_min} - {bib.temp_repouso_max} °C | "
+            f"Clínica: {bib.temp_clinica_min} - {bib.temp_clinica_max} °C]"
+        ),
+        "fc": (
+            f"[Repouso: {bib.fc_repouso_min} - {bib.fc_repouso_max} bpm | "
+            f"Clínica: {bib.fc_clinica_min} - {bib.fc_clinica_max} bpm]"
+        ),
+        "fr": (
+            f"[Repouso: {bib.fr_repouso_min} - {bib.fr_repouso_max} ir/min | "
+            f"Clínica: {bib.fr_clinica_min} - {bib.fr_clinica_max} ir/min]"
+        ),
         "tpc": f"{bib.tpc_ref}",
         "mucosas": f"💡 {bib.mucosas_ref}",
         "fonte_ref": fonte,
