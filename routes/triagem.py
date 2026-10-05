@@ -11,11 +11,17 @@ from models.animais import Animal
 from models.usuario import Usuario  # noqa: F401
 from models.triagem import Triagem
 
-# === AJUSTE AQUI ===
-# Se o nome da classe no seu modelo for diferente, altere abaixo:
-from models.biblioteca_referencia import BibliotecaReferencia
-# Se der erro, comente a linha acima e use: BibliotecaReferencia = None
-# ===================
+# === CORREÇÃO: Importação segura ===
+try:
+    from models.biblioteca_referencia import BibliotecaReferencia
+    _BIBLIOTECA_DISPONIVEL = True
+except ImportError:
+    BibliotecaReferencia = None
+    _BIBLIOTECA_DISPONIVEL = False
+    logging.getLogger(__name__).warning(
+        "⚠️ Classe BibliotecaReferencia não encontrada — gravação de referências desativada temporariamente"
+    )
+# ===================================
 
 from services.biblioteca_referencia import buscar_referencia_oficial
 from services.referencia_auto import metadados_da_linha
@@ -455,9 +461,9 @@ def criar_ou_atualizar_triagem(
     if not dados.consulta_id:
         raise HTTPException(status_code=400, detail="ID da consulta é obrigatório.")
 
-    # ─── GRAVA REFERÊNCIA NA BIBLIOTECA ───
+    # ─── GRAVA REFERÊNCIA NA BIBLIOTECA (SE DISPONÍVEL) ───
     ref_temp = getattr(dados, "_referencia_para_gravar", None)
-    if ref_temp:
+    if ref_temp and _BIBLIOTECA_DISPONIVEL and BibliotecaReferencia is not None:
         existe = buscar_referencia_oficial(
             db,
             especie=ref_temp.get("especie"),
@@ -467,11 +473,10 @@ def criar_ou_atualizar_triagem(
         )
         if not existe:
             try:
-                if BibliotecaReferencia is not None:
-                    db.add(BibliotecaReferencia(**ref_temp))
-                    logger.info(f"✅ Referência gravada: {ref_temp['especie']} | {ref_temp.get('porte', 'sem porte')}")
-            except NameError:
-                logger.warning(f"⚠️ Classe BibliotecaReferencia não disponível — referência não gravada: {ref_temp['especie']}")
+                db.add(BibliotecaReferencia(**ref_temp))
+                logger.info(f"✅ Referência gravada: {ref_temp['especie']} | {ref_temp.get('porte', 'sem porte')}")
+            except Exception as e:
+                logger.warning(f"⚠️ Não foi possível gravar referência: {e}")
 
     # ─── Salva triagem normalmente ───
     triagem_db = db.query(Triagem).filter(Triagem.consulta_id == dados.consulta_id).first()
