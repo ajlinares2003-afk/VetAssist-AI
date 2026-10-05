@@ -1,11 +1,9 @@
 import logging
 import unicodedata
 from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-
 from database.database import get_db
 from models.consulta import Consulta
 from models.animais import Animal
@@ -36,7 +34,19 @@ ECC_REF_PADRAO = "💡 Ideal: 5/9 (Escala 1 a 9)"
 LIMITE_TEMP_ALTA = 40.5
 LIMITE_TEMP_BAIXA = 35.0
 LIMITE_TPC_SEG = 3
+
 TERMOS_EMERGENCIA = ("inconsciente", "inconsciencia", "desmai", "decubito")
+
+# Lista de valores considerados raça genérica/SRD
+RACAS_GENERICAS = {
+    "srd",
+    "sem raça definida",
+    "sem raca definida",
+    "sem raça",
+    "sem raca",
+    "",
+    None,
+}
 
 REFERENCIA_INDISPONIVEL = {
     "peso_ref": "⚠️ Ref. Peso: indisponível",
@@ -50,7 +60,9 @@ REFERENCIA_INDISPONIVEL = {
     "indisponivel": True,
 }
 
-
+# --------------------------------------------------------------------------- #
+# Modelos
+# --------------------------------------------------------------------------- #
 class TriagemCreate(BaseModel):
     consulta_id: Optional[int] = None
     animal_id: Optional[int] = None
@@ -73,6 +85,7 @@ class AvaliacaoIARequest(BaseModel):
     especie: Optional[str] = "Felino"
     sub_especie: Optional[str] = None
     raca: Optional[str] = None
+    porte: Optional[str] = None
     ecc: Optional[str] = None
     queixa_principal: str
     temperatura: Optional[float] = None
@@ -89,15 +102,47 @@ class ReferenciasIARequest(BaseModel):
     sexo: Optional[str] = None
     idade: Optional[float] = None
 
-
 # --------------------------------------------------------------------------- #
 # Auxiliares
 # --------------------------------------------------------------------------- #
 def _normalizar(texto: str) -> str:
     """minúsculas e sem acentos, para comparar termos da queixa."""
-    sem_acento = unicodedata.normalize("NFKD", (texto or "").lower())
+    if not texto:
+        return ""
+    sem_acento = unicodedata.normalize("NFKD", texto.lower())
     return "".join(c for c in sem_acento if not unicodedata.combining(c))
 
+def _normalizar_raca(raca: Optional[str]) -> str:
+    """Padroniza o nome da raça para busca."""
+    if not raca:
+        return ""
+    return _normalizar(raca.strip())
+
+def _eh_raca_generica(raca: Optional[str]) -> bool:
+    """Verifica se a raça é genérica/SRD."""
+    return _normalizar_raca(raca) in RACAS_GENERICAS
+
+def _buscar_com_fallback(db: Session, perfil: dict) -> tuple:
+    """
+    Busca referência:
+    1. Por espécie + raça + porte + sexo
+    2. Se genérica e não encontrou → por espécie + porte + sexo
+    3. Retorna (obj_bib, motivo)
+    """
+    motivo = None
+    bib = buscar_referencia_oficial(db, **perfil)
+    
+    if not bib and _eh_raca_generica(perfil.get("raca")):
+        perfil_fallback = {
+            "especie": perfil.get("especie"),
+            "porte": perfil.get("porte"),
+            "sexo": perfil.get("sexo"),
+        }
+        bib = buscar_referencia_oficial(db, **perfil_fallback)
+        if bib:
+            motivo = f"Perfil genérico — referência por porte: {perfil.get('porte')}"
+    
+    return bib, motivo
 
 def _validar_avaliacao(dados: dict) -> dict:
     cor = str(dados.get("classificacao_risco", "")).strip().upper()
@@ -108,10 +153,8 @@ def _validar_avaliacao(dados: dict) -> dict:
         raise ValueError("Justificativa ausente.")
     return {"classificacao_risco": cor, "justificativa": justificativa.strip()}
 
-
 def _valor_ou_nao_aferido(valor, unidade: str) -> str:
     return f"{valor} {unidade}" if valor is not None else "não aferido"
-
 
 def _contexto_referencia(bib, pendente: bool = False) -> str:
     if not bib:
@@ -140,7 +183,6 @@ def _contexto_referencia(bib, pendente: bool = False) -> str:
         f"- Mucosas: {bib.mucosas_ref}\n"
     )
 
-
 # --------------------------------------------------------------------------- #
 # Referências fisiológicas
 # --------------------------------------------------------------------------- #
@@ -153,34 +195,39 @@ def calcular_referencias_ia(
     perfil = dict(
         especie=dados.especie,
         sub_especie=dados.sub_especie,
-        raca=dados.raca,
-        sexo=dados.sexo,
+        raca=_normalizar_raca(dados.raca),
         porte=dados.porte,
+        sexo=dados.sexo,
     )
 
-    # 1. Biblioteca (seleção determinística por perfil e sexo)
-    bib = buscar_referencia_oficial(db, **perfil)
+    # 1. Busca com fallback: raça específica → porte (se genérica)
+    bib, motivo_fallback = _buscar_com_fallback(db, perfil)
 
-    # 2. Perfil novo: a IA pesquisa na literatura e cadastra como PENDENTE (sem mexer em código)
-    motivo = None
+    # 2. Perfil novo: a IA pesquisa na literatura e cadastra como PENDENTE
     if not bib:
         bib, motivo = pesquisar_e_registrar(db, **perfil)
+        motivo_final = motivo
+    else:
+        motivo_final = motivo_fallback
 
-    # 3. Nada confiável: sinaliza indisponibilidade (nunca inventa valores)
+    # 3. Nada confiável: sinaliza indisponibilidade
     if not bib:
         indisponivel = dict(REFERENCIA_INDISPONIVEL)
-        if motivo:
-            indisponivel["fonte_ref"] = f"⚠️ Sem referência oficial. Motivo: {motivo}"
+        indisponivel["fonte_ref"] = f"⚠️ Sem referência oficial. Motivo: {motivo_final or 'perfil não encontrado'}"
         return indisponivel
 
     meta = metadados_da_linha(db, bib.id)
     pendente = meta.get("status") == "PENDENTE"
+    
     if pendente:
         n_fontes = len((meta.get("fontes") or {}).get("web", [])) if isinstance(meta.get("fontes"), dict) else 0
         fonte = (f"⚠️ PENDENTE de validação veterinária. Pesquisa automática por IA "
                  f"({n_fontes} fonte(s) consultada(s)) | Perfil: {bib.especie}")
     else:
         fonte = f"📚 Fonte: {bib.fonte_bibliografica} | Perfil: {bib.especie}"
+
+    if motivo_final:
+        fonte = f"{fonte} | {motivo_final}"
 
     return {
         "peso_ref": f"💡 Ref. Peso: {bib.peso_min} - {bib.peso_max} kg",
@@ -195,7 +242,6 @@ def calcular_referencias_ia(
         "indisponivel": False,
     }
 
-
 # --------------------------------------------------------------------------- #
 # Classificação Manchester
 # --------------------------------------------------------------------------- #
@@ -207,6 +253,7 @@ def avaliar_triagem_ia(
 ):
     vitais = (dados.temperatura, dados.frequencia_cardiaca,
               dados.frequencia_respiratoria, dados.tpc_segundos)
+    
     if all(v is None for v in vitais):
         raise HTTPException(
             status_code=422,
@@ -216,7 +263,7 @@ def avaliar_triagem_ia(
     queixa = (dados.queixa_principal or "").strip()
     queixa_norm = _normalizar(queixa)
 
-    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO (EMERGÊNCIA DIRETA, sem depender de IA)
+    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO — sem depender de IA
     motivos = []
     if dados.temperatura is not None:
         if dados.temperatura >= LIMITE_TEMP_ALTA:
@@ -227,7 +274,7 @@ def avaliar_triagem_ia(
         motivos.append(f"TPC {dados.tpc_segundos} s (perfusão comprometida)")
     if any(termo in queixa_norm for termo in TERMOS_EMERGENCIA):
         motivos.append("queixa compatível com inconsciência/decúbito")
-
+    
     if motivos:
         return {
             "classificacao_risco": "VERMELHO",
@@ -238,28 +285,45 @@ def avaliar_triagem_ia(
             "origem": "REGRA_FISICA",
         }
 
-    especie = (dados.especie or "felino").strip().lower()
-    raca = (dados.raca or "").strip().lower()
-    # Usa o cadastro do animal (não o que vem do navegador) para achar o perfil.
+    # Busca dados do animal cadastrado
     animal = (
         db.query(Animal).filter(Animal.id == dados.animal_id).first()
         if dados.animal_id else None
     )
-    bib_ref = buscar_referencia_oficial(
-        db,
-        especie=animal.especie if animal else dados.especie,
-        sub_especie=animal.sub_especie if animal else dados.sub_especie,
-        raca=animal.raca if animal else dados.raca,
-        sexo=animal.sexo if animal else None,
-        porte=animal.porte if animal else None,
+
+    # Dados com prioridade: cadastro do animal > requisição
+    especie = (
+        animal.especie.strip().lower()
+        if animal and animal.especie
+        else (dados.especie or "felino").strip().lower()
     )
-    pendente_ref = bool(bib_ref) and metadados_da_linha(db, bib_ref.id).get("status") == "PENDENTE"
+    sub_especie = animal.sub_especie if animal else dados.sub_especie
+    raca = _normalizar_raca(animal.raca if animal else dados.raca)
+    porte = animal.porte if animal else dados.porte
+    sexo = animal.sexo if animal else None
+
+    perfil_busca = {
+        "especie": especie,
+        "sub_especie": sub_especie,
+        "raca": raca,
+        "porte": porte,
+        "sexo": sexo,
+    }
+
+    # Busca referência com fallback para porte
+    bib_ref, _ = _buscar_com_fallback(db, perfil_busca)
+
+    pendente_ref = False
+    if bib_ref:
+        meta = metadados_da_linha(db, bib_ref.id)
+        pendente_ref = meta.get("status") == "PENDENTE"
 
     prompt = (
         "Você é um médico veterinário especialista em triagem de emergência "
         "(Protocolo Manchester adaptado à medicina veterinária). Classifique o paciente abaixo.\n\n"
         "DADOS DO PACIENTE:\n"
         f"- Espécie/Raça: {especie.capitalize()} / {raca.capitalize() or 'não informada'}\n"
+        f"- Porte: {porte or 'não informado'}\n"
         f"- Queixa principal: {queixa or 'não informada'}\n"
         f"- Temperatura: {_valor_ou_nao_aferido(dados.temperatura, '°C')}\n"
         f"- Frequência cardíaca: {_valor_ou_nao_aferido(dados.frequencia_cardiaca, 'bpm')}\n"
@@ -273,8 +337,8 @@ def avaliar_triagem_ia(
         "- Em dúvida entre dois níveis, escolha o mais urgente.\n\n"
         "Retorne estritamente um objeto JSON puro com exatamente estas chaves:\n"
         "{\n"
-        "  \"classificacao_risco\": \"VERMELHO\" | \"LARANJA\" | \"AMARELO\" | \"VERDE\" | \"AZUL\",\n"
-        "  \"justificativa\": \"Justificativa clínica objetiva em português do Brasil, até 3 frases.\"\n"
+        '  "classificacao_risco": "VERMELHO" | "LARANJA" | "AMARELO" | "VERDE" | "AZUL",\n'
+        '  "justificativa": "Justificativa clínica objetiva em português do Brasil, até 3 frases."\n'
         "}"
     )
 
@@ -282,7 +346,6 @@ def avaliar_triagem_ia(
         resposta = gerar_json(db, prompt, validar=_validar_avaliacao)
     except IAIndisponivelError as exc:
         logger.error("Avaliação por IA indisponível: %s | %s", exc, exc.tentativas)
-        # NUNCA assumir 'VERDE' em falha: o paciente pode estar grave.
         raise HTTPException(
             status_code=503,
             detail="IA indisponível no momento. Classifique o paciente manualmente."
@@ -295,9 +358,8 @@ def avaliar_triagem_ia(
         "modelo_ia": resposta.modelo,
     }
 
-
 # --------------------------------------------------------------------------- #
-# Persistência e filas (sem alterações em relação à versão anterior)
+# Persistência e filas
 # --------------------------------------------------------------------------- #
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def criar_ou_atualizar_triagem(
@@ -309,7 +371,7 @@ def criar_ou_atualizar_triagem(
         raise HTTPException(status_code=400, detail="ID da consulta é obrigatório.")
 
     triagem_db = db.query(Triagem).filter(Triagem.consulta_id == dados.consulta_id).first()
-
+    
     if triagem_db:
         triagem_db.peso = dados.peso
         triagem_db.ecc = dados.ecc
@@ -341,7 +403,12 @@ def criar_ou_atualizar_triagem(
 
     db.commit()
     db.refresh(triagem_db)
-    return {"mensagem": "Triagem salva com sucesso!", "id": triagem_db.id}
+    
+    return {
+        "mensagem": "Triagem salva com sucesso!",
+        "id": triagem_db.id,
+        "classificacao_risco": triagem_db.classificacao_risco
+    }
 
 @router.get("/fila-triagem")
 def listar_fila_triagem(
@@ -350,7 +417,8 @@ def listar_fila_triagem(
 ):
     consultas_aguardando = db.query(Consulta).filter(
         Consulta.status.in_([
-            "AGUARDANDO_TRIAGEM", "Aguardando Triagem (Recepção)", "Aguardando Triagem", "Chamando para Triagem", "AGUARDANDO_VACINA", "Aguardando Vacina"
+            "AGUARDANDO_TRIAGEM", "Aguardando Triagem (Recepção)", "Aguardando Triagem",
+            "Chamando para Triagem", "AGUARDANDO_VACINA", "Aguardando Vacina"
         ])
     ).order_by(Consulta.id.asc()).all()
 
@@ -379,7 +447,6 @@ def buscar_triagem_por_consulta(
     usuario_logado = Depends(obter_usuario_logado)
 ):
     triagem_db = db.query(Triagem).filter(Triagem.consulta_id == consulta_id).first()
-
     if triagem_db:
         return {
             "consulta_id": triagem_db.consulta_id,
