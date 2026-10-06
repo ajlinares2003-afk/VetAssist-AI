@@ -8,8 +8,9 @@ procura os parâmetros na literatura e o sistema cadastra o resultado sozinho na
 Regras de segurança deste fluxo:
   - Só aceita resposta ANCORADA em fontes reais da web (sem fontes = descartada).
   - Confiança "baixa" ou literatura insuficiente = nada é cadastrado.
-  - O registro nasce PENDENTE e aparece na tela com aviso. Quem o torna VALIDADO
-    é o veterinário (routers/referencias_admin.py).
+  - O registro nasce como RASCUNHO: aparece na tela para o enfermeiro, mas NÃO entra na
+    biblioteca ainda. Ao FINALIZAR a triagem ele vira PENDENTE (promover_rascunho) e só
+    então o veterinário o valida (routers/referencias_admin.py).
   - Nunca cria perfil para raça genérica (SRD): não dá para pesquisar "SRD".
   - Reaproveita o perfil existente (mesmo texto de `especie`) quando só falta o sexo,
     para não duplicar perfis e quebrar a busca.
@@ -22,7 +23,9 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from services.biblioteca_referencia import GENERICAS, _montar_descritores, _norm, _partes
+from services.biblioteca_referencia import (
+    GENERICAS, _montar_descritores, _norm, _partes, _sexo_chave,
+)
 from services.ia_service import IAIndisponivelError, gerar_json
 
 logger = logging.getLogger("vetassist.referencia_auto")
@@ -99,7 +102,7 @@ def validar_pesquisa(dados: dict) -> dict:
 # Auxiliares
 # --------------------------------------------------------------------------- #
 def _sexo_da_biblioteca(sexo) -> str:
-    n = _norm(sexo)
+    n = _sexo_chave(sexo)  # aceita "M"/"F" do cadastro e "macho"/"fêmea"
     if n == "macho":
         return "macho"
     if n == "femea":
@@ -172,7 +175,7 @@ _INSERIR = text("""
        :fc_repouso_min, :fc_repouso_max, :fc_clinica_min, :fc_clinica_max,
        :fr_repouso_min, :fr_repouso_max, :fr_clinica_min, :fr_clinica_max,
        :tpc_ref, :mucosas_ref, :ecc_ideal, :fonte_bibliografica,
-       'PENDENTE', 'IA', CAST(:fontes AS jsonb), :observacoes_ia)
+       'RASCUNHO', 'IA', CAST(:fontes AS jsonb), :observacoes_ia)
     ON CONFLICT (especie, sexo) DO NOTHING
     RETURNING id
 """)
@@ -199,7 +202,8 @@ def metadados_da_linha(db: Session, linha_id: int) -> dict:
 
 def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, porte):
     """
-    Pesquisa na literatura e cadastra como PENDENTE.
+    Pesquisa na literatura e guarda o resultado como RASCUNHO (reaproveita o rascunho
+    existente do mesmo perfil/sexo, sem nova chamada à IA).
     Devolve (linha, None) em caso de sucesso, ou (None, motivo) quando não foi possível
     (raça genérica, Gemini indisponível, sem fonte, literatura fraca, erro de banco).
     O motivo é mostrado na tela para facilitar o diagnóstico. Nunca levanta exceção.
@@ -278,3 +282,30 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
                        if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
         return achada, (None if achada else "conflito ao gravar a referência")
     return db.query(Bib).filter(Bib.id == novo_id).first(), None
+
+
+def promover_rascunho(db: Session, *, raca, sexo) -> Optional[int]:
+    """
+    Chamada ao FINALIZAR a triagem: o RASCUNHO do perfil/sexo do animal passa a PENDENTE
+    (entra na biblioteca e na fila de validação do veterinário). Devolve o id promovido
+    ou None. Nunca levanta exceção: uma falha aqui não pode impedir salvar a triagem.
+    """
+    try:
+        if _nome_do_perfil(raca) is None:  # raça genérica não gera perfil automático
+            return None
+        from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
+        linhas = db.query(Bib).order_by(Bib.id).all()
+        existentes = _perfil_existente(linhas, raca)
+        if len(existentes) != 1:
+            return None
+        promovido = db.execute(
+            text("UPDATE biblioteca_parametros_oficiais SET status = 'PENDENTE' "
+                 "WHERE especie = :e AND sexo = :s AND status = 'RASCUNHO' RETURNING id"),
+            {"e": existentes[0].linhas[0].especie, "s": _sexo_da_biblioteca(sexo)},
+        ).scalar()
+        db.commit()
+        return promovido
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao promover o rascunho da referência")
+        return None

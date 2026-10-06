@@ -1,5 +1,4 @@
 import logging
-import re
 import unicodedata
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,25 +9,8 @@ from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario  # noqa: F401
 from models.triagem import Triagem
-
-# === IMPORTAÇÃO SEGURA DA BIBLIOTECA OFICIAL ===
-try:
-    from models.biblioteca_oficial import BibliotecaParametrosOficiais as BibliotecaReferencia
-    _BIBLIOTECA_DISPONIVEL = True
-except ImportError:
-    try:
-        from models.biblioteca_referencia import BibliotecaReferencia
-        _BIBLIOTECA_DISPONIVEL = True
-    except ImportError:
-        BibliotecaReferencia = None
-        _BIBLIOTECA_DISPONIVEL = False
-        logging.getLogger(__name__).warning(
-            "⚠️ Classe de Modelo da Biblioteca não encontrada — gravação de referências desativada temporariamente"
-        )
-# ===============================================
-
 from services.biblioteca_referencia import buscar_referencia_oficial
-from services.referencia_auto import metadados_da_linha
+from services.referencia_auto import metadados_da_linha, pesquisar_e_registrar, promover_rascunho
 from services.ia_service import IAIndisponivelError, gerar_json
 from services.security import obter_usuario_logado
 
@@ -41,14 +23,21 @@ router = APIRouter(
 
 # --------------------------------------------------------------------------- #
 # Constantes clínicas
+# ⚠️ VALIDAR COM O VETERINÁRIO RESPONSÁVEL antes de uso em pacientes reais.
 # --------------------------------------------------------------------------- #
 CORES_MANCHESTER = ("VERMELHO", "LARANJA", "AMARELO", "VERDE", "AZUL")
-ECC_REF_PADRAO = "💡 Ideal: 3/9 (Escala 1 a 9)"
+ECC_REF_PADRAO = "💡 Ideal: 5/9 (Escala 1 a 9)"
+
+# Travão físico (regras originais mantidas). A FC foi retirada daqui de propósito:
+# cortes fixos (ex.: 200 bpm) classificam um Caracal normal em atendimento
+# (140-220 bpm) como emergência. A FC é avaliada pela IA com a faixa da espécie.
 LIMITE_TEMP_ALTA = 40.5
 LIMITE_TEMP_BAIXA = 35.0
 LIMITE_TPC_SEG = 3
+
 TERMOS_EMERGENCIA = ("inconsciente", "inconsciencia", "desmai", "decubito")
 
+# Lista de valores considerados raça genérica/SRD
 RACAS_GENERICAS = {
     "srd",
     "sem raça definida",
@@ -90,8 +79,6 @@ class TriagemCreate(BaseModel):
     queixa_principal: str
     classificacao_risco: str
     justificativa_risco: Optional[str] = None
-    # Permitir receber os dados gerados por IA para gravação definitiva
-    dados_referencia_ia: Optional[dict] = None
 
 class AvaliacaoIARequest(BaseModel):
     animal_id: Optional[int] = None
@@ -119,114 +106,42 @@ class ReferenciasIARequest(BaseModel):
 # Auxiliares
 # --------------------------------------------------------------------------- #
 def _normalizar(texto: str) -> str:
+    """minúsculas e sem acentos, para comparar termos da queixa."""
     if not texto:
         return ""
     sem_acento = unicodedata.normalize("NFKD", texto.lower())
     return "".join(c for c in sem_acento if not unicodedata.combining(c))
 
 def _normalizar_raca(raca: Optional[str]) -> str:
+    """Padroniza o nome da raça para busca."""
     if not raca:
         return ""
     return _normalizar(raca.strip())
 
 def _eh_raca_generica(raca: Optional[str]) -> bool:
+    """Verifica se a raça é genérica/SRD."""
     return _normalizar_raca(raca) in RACAS_GENERICAS
 
-def _extrair_faixa(texto: str) -> tuple:
-    if not texto:
-        return (None, None)
-    nums = [float(n) for n in re.findall(r"\d+\.?\d*", texto)]
-    return (nums[0], nums[1]) if len(nums) >= 2 else (None, None)
-
-def _buscar_referencias_na_ia(especie: str, porte: str = None, sexo: str = None) -> Optional[dict]:
-    prompt = f"""Você é um veterinário fisiologista. Forneça os valores de referência vitais 
-para {especie} {f'porte {porte}' if porte else ''}, com base em literatura científica confiável.
-Retorne APENAS um JSON com estas chaves:
-{{
-  "peso_ref": "X-Y kg",
-  "ecc_ideal": "3/9",
-  "temp_repouso": "min-max °C",
-  "temp_clinica": "min-max °C",
-  "fc_repouso": "min-max bpm",
-  "fc_clinica": "min-max bpm",
-  "fr_repouso": "min-max ir/min",
-  "fr_clinica": "min-max ir/min",
-  "tpc_ref": "≤ X segundos",
-  "mucosas_ref": "descrição padrão"
-}}
-Não invente valores. Se não souber com segurança, responda apenas: "indisponível"."""
-
-    try:
-        resposta = gerar_json(None, prompt, validar=lambda d: d)
-        r = resposta.dados
-        if not r or "indisponível" in str(r).lower():
-            return None
-
-        t_rep_min, t_rep_max = _extrair_faixa(r.get("temp_repouso", ""))
-        t_cli_min, t_cli_max = _extrair_faixa(r.get("temp_clinica", ""))
-        fc_rep_min, fc_rep_max = _extrair_faixa(r.get("fc_repouso", ""))
-        fc_cli_min, fc_cli_max = _extrair_faixa(r.get("fc_clinica", ""))
-        fr_rep_min, fr_rep_max = _extrair_faixa(r.get("fr_repouso", ""))
-        fr_cli_min, fr_cli_max = _extrair_faixa(r.get("fr_clinica", ""))
-        p_min, p_max = _extrair_faixa(r.get("peso_ref", ""))
-
-        if not all([t_rep_min, fc_rep_min, fr_rep_min]):
-            return None
-
-        dados_gravar = {
-            "classe_animal": "Mamífero",
-            "grupo": "Pesquisa Automática IA",
-            "especie": especie,
-            "nome_cientifico": especie,
-            "raca": None,
-            "porte": porte,
-            "sexo": sexo or "indiferente",
-            "peso_min": p_min or 1.0,
-            "peso_max": p_max or 10.0,
-            "ecc_ideal": r.get("ecc_ideal", "3/9"),
-            "temp_repouso_min": t_rep_min,
-            "temp_repouso_max": t_rep_max,
-            "temp_clinica_min": t_cli_min or t_rep_min,
-            "temp_clinica_max": t_cli_max or t_rep_max,
-            "fc_repouso_min": fc_rep_min,
-            "fc_repouso_max": fc_rep_max,
-            "fc_clinica_min": fc_cli_min or fc_rep_min,
-            "fc_clinica_max": fc_cli_max or fc_rep_max,
-            "fr_repouso_min": fr_rep_min,
-            "fr_repouso_max": fr_rep_max,
-            "fr_clinica_min": fr_cli_min or fr_rep_min,
-            "fr_clinica_max": fr_cli_max or fr_rep_max,
-            "tpc_ref": r.get("tpc_ref", "≤ 2 segundos"),
-            "mucosas_ref": r.get("mucosas_ref", "Rosadas, úmidas e brilhantes"),
-            "fonte_bibliografica": "Pesquisa automática via IA (Pendente de Validação)",
-        }
-
-        return {
-            "peso_ref": f"💡 Ref. Peso: {p_min or '—'} - {p_max or '—'} kg",
-            "ecc_ref": f"💡 Ideal: {r.get('ecc_ideal', '3/9')}",
-            "temperatura": f"Normal: Repouso {t_rep_min}-{t_rep_max}°C | Clínica {t_cli_min}-{t_cli_max}°C",
-            "fc": f"Repouso {fc_rep_min}-{fc_rep_max} bpm | Clínica {fc_cli_min}-{fc_cli_max} bpm",
-            "fr": f"Repouso {fr_rep_min}-{fr_rep_max} ir/min | Clínica {fr_cli_min}-{fr_cli_max} ir/min",
-            "tpc": f"{r.get('tpc_ref', '≤ 2 segundos')}",
-            "mucosas": f"💡 {r.get('mucosas_ref', 'Rosadas e úmidas')}",
-            "_dados_para_gravar": dados_gravar,
-        }
-    except Exception as e:
-        logger.warning(f"Falha na busca de referências: {e}")
-        return None
-
-def _buscar_com_fallback(db: Session, perfil: dict) -> tuple:
+def _buscar_com_fallback(db: Session, perfil: dict, incluir_rascunhos: bool = False) -> tuple:
+    """
+    Busca referência:
+    1. Por espécie + raça + porte + sexo
+    2. Se genérica e não encontrou → por espécie + porte + sexo
+    3. Retorna (obj_bib, motivo)
+    """
     motivo = None
-    bib = buscar_referencia_oficial(db, **perfil)
+    bib = buscar_referencia_oficial(db, incluir_rascunhos=incluir_rascunhos, **perfil)
+    
     if not bib and _eh_raca_generica(perfil.get("raca")):
         perfil_fallback = {
             "especie": perfil.get("especie"),
             "porte": perfil.get("porte"),
             "sexo": perfil.get("sexo"),
         }
-        bib = buscar_referencia_oficial(db, **perfil_fallback)
+        bib = buscar_referencia_oficial(db, incluir_rascunhos=incluir_rascunhos, **perfil_fallback)
         if bib:
             motivo = f"Perfil genérico — referência por porte: {perfil.get('porte')}"
+    
     return bib, motivo
 
 def _validar_avaliacao(dados: dict) -> dict:
@@ -247,9 +162,16 @@ def _contexto_referencia(bib, pendente: bool = False) -> str:
             "NÃO HÁ faixas de referência para esta espécie/raça. Portanto NÃO julgue se os sinais "
             "vitais estão normais ou alterados e NÃO os compare com os de gato ou cão doméstico. "
             "Classifique APENAS pela queixa principal e diga na justificativa que os sinais vitais "
-            "não puderam ser avaliados por falta de referência.\n"
+            "não puderam ser avaliados por falta de referência. A falta de referência, por si só, "
+            "NÃO é motivo para elevar a urgência.\n"
         )
+    aviso = (
+        "ATENÇÃO: estas faixas foram geradas automaticamente por IA a partir de pesquisa na web e "
+        "AINDA NÃO foram validadas por veterinário. Use com cautela e mencione isso na justificativa.\n"
+        if pendente else ""
+    )
     return (
+        aviso +
         "Faixas de referência oficiais curadas para esta espécie/raça:\n"
         f"- Temperatura: repouso {bib.temp_repouso_min}-{bib.temp_repouso_max} °C | "
         f"clínica {bib.temp_clinica_min}-{bib.temp_clinica_max} °C\n"
@@ -270,6 +192,7 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
+    # Normaliza todos os campos
     especie = (dados.especie or "").strip().capitalize()
     sub_especie = (dados.sub_especie or "").strip() or None
     raca = _normalizar_raca(dados.raca)
@@ -287,52 +210,87 @@ def calcular_referencias_ia(
     bib = None
     motivo = None
 
+    # ─── PASSO 1: Busca exata ───
     bib = buscar_referencia_oficial(db, **perfil)
     if bib:
-        motivo = "Perfil encontrado no banco de dados"
+        motivo = "Perfil encontrado diretamente"
 
+    # ─── PASSO 2: SRD/genérica → tenta por porte ───
     if not bib and _eh_raca_generica(raca):
         perfil_porte = dict(perfil)
-        perfil_porte["raca"] = None
+        perfil_porte["raca"] = None  # Remove raça da busca
         bib = buscar_referencia_oficial(db, **perfil_porte)
         if bib:
-            motivo = f"Raça genérica → referência por porte: {porte}"
+            motivo = f"Raça genérica → usando referência por porte: {porte}"
 
+    # ─── PASSO 3: Nada encontrado → PESQUISA AUTOMÁTICA ───
+    # O resultado é um RASCUNHO: aparece na tela, mas só é gravado na biblioteca
+    # (como PENDENTE de validação) quando a triagem for FINALIZADA.
+    motivo_pesquisa = None
     if not bib:
-        logger.info(f"Perfil não encontrado — buscando na IA: {especie} | porte: {porte}")
-        dados_ia = _buscar_referencias_na_ia(especie, porte, sexo)
-        if dados_ia:
-            return {
-                **dados_ia,
-                "fonte_ref": f"🔍 Pesquisa automática por IA — será gravada ao finalizar triagem | Espécie: {especie}",
-                "validada": False,
-                "indisponivel": False,
-            }
+        logger.info(f"Perfil não encontrado — iniciando pesquisa automática: {especie} | porte: {porte}")
+        # A pesquisa recebe a raça como está no cadastro (com acento), para nomear o perfil.
+        perfil_pesquisa = dict(perfil, raca=(dados.raca or "").strip() or None)
+        bib, motivo_pesquisa = pesquisar_e_registrar(db, **perfil_pesquisa)
+        if not bib:
+            logger.warning(f"Pesquisa automática sem dados confiáveis: {especie} | {motivo_pesquisa}")
 
+    # ─── PASSO 4: Ainda sem nada → avisa indisponível (com o motivo real) ───
     if not bib:
         indisponivel = dict(REFERENCIA_INDISPONIVEL)
         indisponivel["fonte_ref"] = (
-            f"⚠️ Sem referência. Espécie: {especie} | Porte: {porte or 'não informado'}"
+            "⚠️ Sem referência oficial. "
+            f"Motivo: {motivo_pesquisa or 'perfil não encontrado'} | "
+            f"Espécie: {especie} | Porte: {porte or 'não informado'}"
         )
         return indisponivel
 
-    meta = metadados_da_linha(db, bib.id) if hasattr(bib, "id") else {}
-    pendente = meta.get("status") == "PENDENTE" if isinstance(meta, dict) else False
+    # ─── PASSO 5: Monta resposta ───
+    meta = metadados_da_linha(db, bib.id)
+    status_ref = meta.get("status")
+    rascunho = status_ref == "RASCUNHO"
+    pendente = status_ref in ("PENDENTE", "RASCUNHO")
+    fontes_meta = meta.get("fontes") if isinstance(meta.get("fontes"), dict) else {}
+    n_fontes = len(fontes_meta.get("web", []))
 
-    fonte = f"📚 Fonte: {getattr(bib, 'fonte_bibliografica', 'Oficial')} | Perfil: {getattr(bib, 'especie', especie)}"
+    if rascunho:
+        fonte = (
+            f"📝 RASCUNHO: pesquisa automática por IA ({n_fontes} fonte(s) consultada(s)). "
+            "Será gravada na biblioteca ao finalizar a triagem, PENDENTE de validação veterinária | "
+            f"Perfil: {bib.especie}"
+        )
+    elif pendente:
+        fonte = (
+            f"⚠️ PENDENTE de validação veterinária. "
+            f"Pesquisa automática por IA ({n_fontes} fonte(s) consultada(s)) | "
+            f"Perfil: {bib.especie}"
+        )
+    else:
+        fonte = f"📚 Fonte: {bib.fonte_bibliografica} | Perfil: {bib.especie}"
+
     if motivo:
         fonte = f"{fonte} | {motivo}"
 
     return {
         "peso_ref": f"💡 Ref. Peso: {bib.peso_min} - {bib.peso_max} kg",
         "ecc_ref": f"💡 Ideal: {bib.ecc_ideal}",
-        "temperatura": f"Normal: Repouso {bib.temp_repouso_min}-{bib.temp_repouso_max}°C | Clínica {bib.temp_clinica_min}-{bib.temp_clinica_max}°C",
-        "fc": f"Repouso {bib.fc_repouso_min}-{bib.fc_repouso_max} bpm | Clínica {bib.fc_clinica_min}-{bib.fc_clinica_max} bpm",
-        "fr": f"Repouso {bib.fr_repouso_min}-{bib.fr_repouso_max} ir/min | Clínica {bib.fr_clinica_min}-{bib.fr_clinica_max} ir/min",
+        "temperatura": (
+            f"Normal: [Repouso: {bib.temp_repouso_min} - {bib.temp_repouso_max} °C | "
+            f"Clínica: {bib.temp_clinica_min} - {bib.temp_clinica_max} °C]"
+        ),
+        "fc": (
+            f"[Repouso: {bib.fc_repouso_min} - {bib.fc_repouso_max} bpm | "
+            f"Clínica: {bib.fc_clinica_min} - {bib.fc_clinica_max} bpm]"
+        ),
+        "fr": (
+            f"[Repouso: {bib.fr_repouso_min} - {bib.fr_repouso_max} ir/min | "
+            f"Clínica: {bib.fr_clinica_min} - {bib.fr_clinica_max} ir/min]"
+        ),
         "tpc": f"{bib.tpc_ref}",
         "mucosas": f"💡 {bib.mucosas_ref}",
         "fonte_ref": fonte,
         "validada": not pendente,
+        "rascunho": rascunho,
         "indisponivel": False,
     }
 
@@ -347,7 +305,7 @@ def avaliar_triagem_ia(
 ):
     vitais = (dados.temperatura, dados.frequencia_cardiaca,
               dados.frequencia_respiratoria, dados.tpc_segundos)
-
+    
     if all(v is None for v in vitais):
         raise HTTPException(
             status_code=422,
@@ -357,6 +315,7 @@ def avaliar_triagem_ia(
     queixa = (dados.queixa_principal or "").strip()
     queixa_norm = _normalizar(queixa)
 
+    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO — sem depender de IA
     motivos = []
     if dados.temperatura is not None:
         if dados.temperatura >= LIMITE_TEMP_ALTA:
@@ -367,7 +326,7 @@ def avaliar_triagem_ia(
         motivos.append(f"TPC {dados.tpc_segundos} s (perfusão comprometida)")
     if any(termo in queixa_norm for termo in TERMOS_EMERGENCIA):
         motivos.append("queixa compatível com inconsciência/decúbito")
-
+    
     if motivos:
         return {
             "classificacao_risco": "VERMELHO",
@@ -378,12 +337,17 @@ def avaliar_triagem_ia(
             "origem": "REGRA_FISICA",
         }
 
-    animal = db.query(Animal).filter(Animal.id == dados.animal_id).first() if dados.animal_id else None
+    # Busca dados do animal cadastrado
+    animal = (
+        db.query(Animal).filter(Animal.id == dados.animal_id).first()
+        if dados.animal_id else None
+    )
 
+    # Dados com prioridade: cadastro do animal > requisição
     especie = (
-        animal.especie.strip().capitalize()
+        animal.especie.strip().lower()
         if animal and animal.especie
-        else (dados.especie or "Felino").strip().capitalize()
+        else (dados.especie or "felino").strip().lower()
     )
     sub_especie = animal.sub_especie if animal else dados.sub_especie
     raca = _normalizar_raca(animal.raca if animal else dados.raca)
@@ -398,37 +362,46 @@ def avaliar_triagem_ia(
         "sexo": sexo,
     }
 
-    bib_ref, _ = _buscar_com_fallback(db, perfil_busca)
+    # Busca referência com fallback para porte
+    bib_ref, _ = _buscar_com_fallback(db, perfil_busca, incluir_rascunhos=True)
+
     pendente_ref = False
-    if bib_ref and hasattr(bib_ref, "id"):
+    if bib_ref:
         meta = metadados_da_linha(db, bib_ref.id)
-        pendente_ref = meta.get("status") == "PENDENTE" if isinstance(meta, dict) else False
+        pendente_ref = meta.get("status") in ("PENDENTE", "RASCUNHO")
 
     prompt = (
         "Você é um médico veterinário especialista em triagem de emergência "
-        "(Protocolo Manchester). Classifique o paciente abaixo.\n\n"
+        "(Protocolo Manchester adaptado à medicina veterinária). Classifique o paciente abaixo.\n\n"
         "DADOS DO PACIENTE:\n"
-        f"- Espécie/Raça: {especie} / {raca.capitalize() or 'não informada'}\n"
+        f"- Espécie/Raça: {especie.capitalize()} / {raca.capitalize() or 'não informada'}\n"
         f"- Porte: {porte or 'não informado'}\n"
         f"- Queixa principal: {queixa or 'não informada'}\n"
         f"- Temperatura: {_valor_ou_nao_aferido(dados.temperatura, '°C')}\n"
-        f"- FC: {_valor_ou_nao_aferido(dados.frequencia_cardiaca, 'bpm')}\n"
-        f"- FR: {_valor_ou_nao_aferido(dados.frequencia_respiratoria, 'ir/min')}\n"
+        f"- Frequência cardíaca: {_valor_ou_nao_aferido(dados.frequencia_cardiaca, 'bpm')}\n"
+        f"- Frequência respiratória: {_valor_ou_nao_aferido(dados.frequencia_respiratoria, 'ir/min')}\n"
         f"- TPC: {_valor_ou_nao_aferido(dados.tpc_segundos, 's')}\n"
         f"- Mucosas: {dados.mucosas or 'não informadas'}\n\n"
         f"{_contexto_referencia(bib_ref, pendente_ref)}\n"
         "REGRAS:\n"
         "- 'não aferido' NÃO significa normal; não presuma valores.\n"
-        "- Compare com faixas da espécie, nunca com cão/gato genérico.\n"
-        "- Em dúvida, escolha o nível mais urgente.\n\n"
-        "Retorne JSON: {\"classificacao_risco\": \"VERMELHO|LARANJA|AMARELO|VERDE|AZUL\", \"justificativa\": \"texto\"}"
+        "- Compare os valores com as faixas da espécie, nunca com as de gato ou cão doméstico.\n"
+        "- Em dúvida entre dois níveis, escolha o mais urgente.\n\n"
+        "Retorne estritamente um objeto JSON puro com exatamente estas chaves:\n"
+        "{\n"
+        '  "classificacao_risco": "VERMELHO" | "LARANJA" | "AMARELO" | "VERDE" | "AZUL",\n'
+        '  "justificativa": "Justificativa clínica objetiva em português do Brasil, até 3 frases."\n'
+        "}"
     )
 
     try:
         resposta = gerar_json(db, prompt, validar=_validar_avaliacao)
     except IAIndisponivelError as exc:
-        logger.error("Avaliação IA indisponível: %s", exc)
-        raise HTTPException(status_code=503, detail="IA indisponível — classifique manualmente.")
+        logger.error("Avaliação por IA indisponível: %s | %s", exc, exc.tentativas)
+        raise HTTPException(
+            status_code=503,
+            detail="IA indisponível no momento. Classifique o paciente manualmente."
+        )
 
     return {
         **resposta.dados,
@@ -438,7 +411,7 @@ def avaliar_triagem_ia(
     }
 
 # --------------------------------------------------------------------------- #
-# Persistência — GRAVA REFERÊNCIA AO FINALIZAR TRIAGEM
+# Persistência e filas
 # --------------------------------------------------------------------------- #
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def criar_ou_atualizar_triagem(
@@ -449,30 +422,8 @@ def criar_ou_atualizar_triagem(
     if not dados.consulta_id:
         raise HTTPException(status_code=400, detail="ID da consulta é obrigatório.")
 
-    # ─── GRAVAÇÃO AUTOMÁTICA DA REFERÊNCIA PESQUISADA PELA IA ───
-    # Se o payload trouxer os dados que a IA buscou dinamicamente, salvamos na tabela oficial
-    if dados.dados_referencia_ia and _BIBLIOTECA_DISPONIVEL and BibliotecaReferencia is not None:
-        try:
-            ref_dict = dados.dados_referencia_ia
-            # Verifica se já existe para evitar duplicatas exatas
-            existe = buscar_referencia_oficial(
-                db,
-                especie=ref_dict.get("especie"),
-                porte=ref_dict.get("porte"),
-                sexo=ref_dict.get("sexo")
-            )
-            if not existe:
-                nova_ref = BibliotecaReferencia(**ref_dict)
-                db.add(nova_ref)
-                db.commit()
-                logger.info(f"✅ Nova referência de IA gravada com sucesso para: {ref_dict.get('especie')}")
-        except Exception as e:
-            db.rollback()
-            logger.warning(f"⚠️ Não foi possível gravar referência automática no banco: {e}")
-
-    # ─── Salva ou atualiza a Triagem normalmente ───
     triagem_db = db.query(Triagem).filter(Triagem.consulta_id == dados.consulta_id).first()
-
+    
     if triagem_db:
         triagem_db.peso = dados.peso
         triagem_db.ecc = dados.ecc
@@ -505,10 +456,29 @@ def criar_ou_atualizar_triagem(
     db.commit()
     db.refresh(triagem_db)
 
+    # Triagem finalizada: se a referência exibida veio de pesquisa automática (RASCUNHO),
+    # ela passa a constar na biblioteca como PENDENTE de validação veterinária.
+    # Qualquer falha aqui é só registrada: a triagem já foi salva.
+    referencia_gravada_id = None
+    try:
+        animal_id = dados.animal_id
+        if not animal_id:
+            consulta = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
+            animal_id = consulta.animal_id if consulta else None
+        animal_triado = db.query(Animal).filter(Animal.id == animal_id).first() if animal_id else None
+        if animal_triado:
+            referencia_gravada_id = promover_rascunho(
+                db, raca=animal_triado.raca, sexo=animal_triado.sexo
+            )
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao gravar a referência pesquisada após a triagem")
+
     return {
-        "mensagem": "Triagem salva e biblioteca atualizada com sucesso!",
+        "mensagem": "Triagem salva com sucesso!",
         "id": triagem_db.id,
-        "classificacao_risco": triagem_db.classificacao_risco
+        "classificacao_risco": triagem_db.classificacao_risco,
+        "referencia_gravada_id": referencia_gravada_id,
     }
 
 @router.get("/fila-triagem")
@@ -516,7 +486,7 @@ def listar_fila_triagem(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    consultas = db.query(Consulta).filter(
+    consultas_aguardando = db.query(Consulta).filter(
         Consulta.status.in_([
             "AGUARDANDO_TRIAGEM", "Aguardando Triagem (Recepção)", "Aguardando Triagem",
             "Chamando para Triagem", "AGUARDANDO_VACINA", "Aguardando Vacina"
@@ -524,7 +494,7 @@ def listar_fila_triagem(
     ).order_by(Consulta.id.asc()).all()
 
     resultado = []
-    for c in consultas:
+    for c in consultas_aguardando:
         animal = db.query(Animal).filter(Animal.id == c.animal_id).first()
         resultado.append({
             "id": c.id,
@@ -533,7 +503,7 @@ def listar_fila_triagem(
             "pet": animal.nome if animal else "Paciente",
             "especie": animal.especie if animal else "-",
             "queixa_principal": c.queixa_principal,
-            "peso_atendimento": getattr(c, "peso_atendimento", None),
+            "peso_atendimento": getattr(c, 'peso_atendimento', None),
             "temperatura": c.temperatura,
             "frequencia_cardiaca": c.frequencia_cardiaca,
             "frequencia_respiratoria": c.frequencia_respiratoria,
@@ -552,14 +522,14 @@ def buscar_triagem_por_consulta(
         return {
             "consulta_id": triagem_db.consulta_id,
             "peso": triagem_db.peso,
-            "ecc": getattr(triagem_db, "ecc", None),
+            "ecc": getattr(triagem_db, 'ecc', None),
             "temperatura": triagem_db.temperatura,
             "frequencia_cardiaca": triagem_db.frequencia_cardiaca,
             "frequencia_respiratoria": triagem_db.frequencia_respiratoria,
             "tpc_segundos": triagem_db.tpc_segundos,
             "mucosas": triagem_db.mucosas,
             "queixa_principal": triagem_db.queixa_principal,
-            "observacoes": getattr(triagem_db, "observacoes", "")
+            "observacoes": getattr(triagem_db, 'observacoes', "")
         }
 
     consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
@@ -568,12 +538,12 @@ def buscar_triagem_por_consulta(
 
     return {
         "consulta_id": consulta.id,
-        "peso": getattr(consulta, "peso_atendimento", None),
+        "peso": getattr(consulta, 'peso_atendimento', None),
         "ecc": None,
         "temperatura": consulta.temperatura,
         "frequencia_cardiaca": consulta.frequencia_cardiaca,
         "frequencia_respiratoria": consulta.frequencia_respiratoria,
-        "tpc_segundos": getattr(consulta, "tpc_segundos", 2),
-        "mucosas": getattr(consulta, "mucosas", "Normocoradas"),
+        "tpc_segundos": getattr(consulta, 'tpc_segundos', 2),
+        "mucosas": getattr(consulta, 'mucosas', "Normocoradas"),
         "observacoes": consulta.observacoes or ""
     }

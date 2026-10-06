@@ -57,6 +57,16 @@ def _partes(texto) -> list:
     return [p for p in (_norm(x) for x in pedacos) if p]
 
 
+def _sexo_chave(sexo) -> str:
+    """
+    Normaliza o sexo. O cadastro de animais grava "M"/"F"; a biblioteca usa
+    "macho"/"fêmea"/"indiferente". Sem este mapeamento NENHUM animal casava com
+    a biblioteca (causa das referências "indisponíveis").
+    """
+    n = _norm(sexo)
+    return {"m": "macho", "f": "femea"}.get(n, n)
+
+
 def _tokens(texto) -> set:
     """Palavras relevantes reduzidas a 4 letras (felino/felideos -> 'feli')."""
     return {w[:4] for w in _norm(texto).split() if w not in STOP}
@@ -151,8 +161,8 @@ def _escolher_descritor(descritores, especie, sub_especie, raca, porte) -> Optio
 
 
 def _escolher_linha(descritor: Descritor, sexo):
-    por_sexo = {_norm(getattr(l, "sexo", "")): l for l in descritor.linhas}
-    sexo_n = _norm(sexo)
+    por_sexo = {_sexo_chave(getattr(l, "sexo", "")): l for l in descritor.linhas}
+    sexo_n = _sexo_chave(sexo)
     if sexo_n and sexo_n in por_sexo:
         return por_sexo[sexo_n]
     return por_sexo.get("indiferente")
@@ -167,10 +177,29 @@ def selecionar_referencia(linhas, *, especie, sub_especie, raca, sexo, porte):
     return _escolher_linha(descritor, sexo)
 
 
-def buscar_referencia_oficial(db, *, especie, sub_especie, raca, sexo, porte):
-    """Lê a biblioteca (poucas dezenas de linhas) e escolhe a linha do animal."""
+def ids_rascunho(db) -> set:
+    """IDs das linhas RASCUNHO (pesquisa automática ainda não confirmada pela triagem)."""
+    from sqlalchemy import text
+    try:
+        return set(db.execute(
+            text("SELECT id FROM biblioteca_parametros_oficiais WHERE status = 'RASCUNHO'")
+        ).scalars().all())
+    except Exception:  # coluna ainda não existe (migração pendente)
+        db.rollback()
+        return set()
+
+
+def buscar_referencia_oficial(db, *, especie, sub_especie, raca, sexo, porte,
+                              incluir_rascunhos=False):
+    """
+    Lê a biblioteca (poucas dezenas de linhas) e escolhe a linha do animal.
+    Por padrão ignora RASCUNHOS: só entram na biblioteca depois de finalizada a triagem.
+    """
     from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
     linhas = db.query(Bib).order_by(Bib.id).all()
+    if not incluir_rascunhos:
+        rascunhos = ids_rascunho(db)
+        linhas = [l for l in linhas if l.id not in rascunhos]
     return selecionar_referencia(
         linhas, especie=especie, sub_especie=sub_especie,
         raca=raca, sexo=sexo, porte=porte,
