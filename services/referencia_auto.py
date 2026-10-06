@@ -252,7 +252,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     except IAIndisponivelError as exc:
         logger.warning("Pesquisa automática sem resultado: %s | %s", exc, exc.tentativas)
         if exc.tentativas:
-            return None, f"a pesquisa não produziu resultado aceitável ({exc.tentativas[0][:220]})"
+            return None, f"a pesquisa não produziu resultado aceitável ({exc.tentativas[0][:450]})"
         return None, str(exc)
 
     d = resposta.dados

@@ -59,6 +59,44 @@ CAMPOS_CONFIG_IA = tuple(
 )
 
 
+def _descrever_erro(exc: Exception, limite: int = 500) -> str:
+    """
+    Resumo útil de um erro de provedor. Para erros do Google (ex.: 429), extrai o que
+    permite diagnosticar: código/status, a MÉTRICA de cota violada, o modelo e o tempo
+    de espera sugerido. Nunca inclui chaves de API.
+    """
+    partes = [type(exc).__name__]
+    codigo, status = getattr(exc, "code", None), getattr(exc, "status", None)
+    if codigo or status:
+        partes.append(f"{codigo or ''} {status or ''}".strip())
+
+    detalhes = getattr(exc, "details", None)
+    lista = []
+    if isinstance(detalhes, dict) and isinstance(detalhes.get("error"), dict):
+        lista = detalhes["error"].get("details") or []
+    violacoes, espera = [], None
+    for item in lista if isinstance(lista, list) else []:
+        if not isinstance(item, dict):
+            continue
+        for v in item.get("violations") or []:
+            metrica = str(v.get("quotaMetric", "")).split("/")[-1]
+            modelo = (v.get("quotaDimensions") or {}).get("model", "")
+            violacoes.append(" ".join(x for x in (metrica, f"[{v.get('quotaId')}]" if v.get("quotaId") else "",
+                                                  f"modelo {modelo}" if modelo else "") if x))
+        espera = espera or item.get("retryDelay")
+    if violacoes:
+        partes.append("cota violada: " + "; ".join(violacoes[:3]))
+    if espera:
+        partes.append(f"tentar de novo em {espera}")
+    if str(status) == "RESOURCE_EXHAUSTED" and not violacoes:
+        # O Google nem sempre informa a métrica. Este é o formato visto quando um recurso
+        # (ex.: pesquisa do Google/grounding) não está disponível no plano da chave.
+        partes.append("sem métrica informada: cota esgotada OU recurso indisponível no plano atual")
+    mensagem = getattr(exc, "message", None) or str(exc)
+    partes.append(str(mensagem)[:200])
+    return " | ".join(partes)[:limite]
+
+
 class IAIndisponivelError(Exception):
     """Nenhuma IA configurada ou todas falharam."""
 
@@ -227,7 +265,7 @@ def gerar_json(
                 dados = validar(dados)
             return RespostaIA(dados=dados, provedor=slot.nome, modelo=modelo, fontes=fontes)
         except Exception as exc:  # qualquer falha -> próximo provedor
-            registro = f"{slot.nome}/{modelo}: {type(exc).__name__}: {str(exc)[:200]}"
+            registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
             logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
             tentativas.append(registro)
 
@@ -265,4 +303,4 @@ def testar_slot(db: Session, nome_slot: str, modelo: Optional[str]) -> dict:
         )
         return {"sucesso": True, "resposta": resposta.strip()}
     except Exception as exc:
-        return {"sucesso": False, "erro": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        return {"sucesso": False, "erro": _descrever_erro(exc, 600)}
