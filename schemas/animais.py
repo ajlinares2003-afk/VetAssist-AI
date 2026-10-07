@@ -9,7 +9,7 @@ class AnimalCreate(BaseModel):
     raca: str = Field(..., min_length=1)
     sexo: str
     idade: float = Field(ge=0)
-    peso: Optional[float] = None  # <-- Alterado para opcional
+    peso: Optional[float] = None
     tutor_id: int
     status: str
     castrado: Optional[str] = None
@@ -24,9 +24,10 @@ class AnimalResponse(BaseModel):
     especie: str
     sub_especie: Optional[str] = None
     raca: str
+    nome_cientifico: Optional[str] = None  # <-- Adicionado para retornar o nome científico gerado pela IA
     sexo: str
     idade: float
-    peso: Optional[float] = None  # <-- Alterado para opcional
+    peso: Optional[float] = None
     tutor_id: int
     status: str
     castrado: Optional[str] = None

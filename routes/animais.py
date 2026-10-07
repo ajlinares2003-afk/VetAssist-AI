@@ -1,3 +1,4 @@
+import requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -5,6 +6,7 @@ from schemas.animais import AnimalCreate, AnimalResponse
 from database.database import get_db
 from models.animais import Animal
 from models.tutor import Tutor
+from models.configuracoes import ConfiguracaoSistema  # Certifique-se de que o model de configurações está acessível
 from services.security import (
     obter_usuario_logado,
     exigir_perfil
@@ -14,6 +16,39 @@ router = APIRouter(
     prefix="/animais",
     tags=["Animais"]
 )
+
+def buscar_nome_cientifico_via_groq(especie: str, sub_especie: str, raca: str, db: Session) -> str:
+    """Consulta a API da Groq usando as credenciais ativas nas configurações do sistema."""
+    try:
+        config = db.query(ConfiguracaoSistema).first()
+        if not config or not config.groq_api_key_1 or not config.groq_model_1:
+            return None
+
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {config.groq_api_key_1}",
+            "Content-Type": "application/json"
+        }
+        
+        prompt = (
+            f"Retorne apenas o nome científico binomial (gênero e espécie) em formato de texto simples, "
+            f"sem explicações adicionais, para o animal: Espécie: {especie}, Sub-espécie: {sub_especie}, Raça: {raca}."
+        )
+
+        payload = {
+            "model": config.groq_model_1,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1
+        }
+
+        response = requests.post(url, json=payload, headers=headers, timeout=8)
+        if response.status_code == 200:
+            data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"Aviso: Não foi possível obter o nome científico via Groq: {e}")
+    
+    return None
 
 @router.get("/")
 def listar_animais(
@@ -47,12 +82,21 @@ def criar_animal(
             detail="Tutor não encontrado."
         )
 
+    # Busca automática do nome científico utilizando a Groq configurada
+    nome_cientifico_calculado = buscar_nome_cientifico_via_groq(
+        animal.especie, 
+        animal.sub_especie, 
+        animal.raca, 
+        db
+    )
+
     novo_animal = Animal(
         codigo=animal.codigo,
         nome=animal.nome,
         especie=animal.especie,
-        sub_especie=animal.sub_especie,  # <-- Capturando a subespécie corretamente
+        sub_especie=animal.sub_especie,
         raca=animal.raca,
+        nome_cientifico=nome_cientifico_calculado,  # Gravado permanentemente no banco
         sexo=animal.sexo,
         idade=animal.idade,
         peso=getattr(animal, "peso", None),
@@ -176,8 +220,13 @@ def atualizar_animal(
             
         animal_db.nome = animal.nome
         animal_db.especie = animal.especie
-        animal_db.sub_especie = animal.sub_especie  # <-- Atualizando a subespécie corretamente
+        animal_db.sub_especie = animal.sub_especie
         animal_db.raca = animal.raca
+
+        # Atualiza o nome científico caso os dados taxonômicos tenham mudado
+        if animal_db.especie != animal.especie or animal_db.sub_especie != animal.sub_especie or animal_db.raca != animal.raca:
+            animal_db.nome_cientifico = buscar_nome_cientifico_via_groq(animal.especie, animal.sub_especie, animal.raca, db)
+
         animal_db.sexo = animal.sexo
         animal_db.idade = animal.idade
         animal_db.peso = getattr(animal, "peso", None)

@@ -19,8 +19,12 @@ class Animal(Base):
 
     nome = Column(String(100), nullable=False)
     especie = Column(String(50), nullable=False)
-    sub_especie = Column(String(100), nullable=True)  # Novo campo adicionado para a subespécie
+    sub_especie = Column(String(100), nullable=True)  # Subespécie do paciente
     raca = Column(String(100))
+    
+    # Novo campo para armazenar o nome científico inferido pela IA da Groq
+    nome_cientifico = Column(String(150), nullable=True)
+
     sexo = Column(String(20), nullable=False)
 
     idade = Column(DECIMAL(4, 1))
@@ -55,10 +59,9 @@ class Animal(Base):
     )
     
     data_nascimento = Column(Date)
-    cor = Column(String(50))     # Ajustado para 50 caracteres
+    cor = Column(String(50))
     microchip = Column(String(100))
     
-    # Novos campos integrados corretamente
     castrado = Column(String(3), nullable=True)
     porte = Column(String(20), nullable=True)
 
