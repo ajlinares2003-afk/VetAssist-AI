@@ -1,3 +1,4 @@
+import time
 import requests
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
@@ -18,7 +19,8 @@ router = APIRouter(
 )
 
 def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie: str, raca: str):
-    """Busca o nome científico na Groq com tratamento robusto e fallback para garantir o preenchimento."""
+    """Busca o nome científico na Groq aguardando a consolidação do registro na base de dados."""
+    time.sleep(1)  # Pausa essencial para garantir visibilidade do novo registro em cadastros
     db = SessionLocal()
     try:
         # Busca as configurações no formato chave/valor da tabela configuracoes_sistema
