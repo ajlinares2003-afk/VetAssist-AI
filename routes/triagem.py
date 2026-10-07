@@ -101,6 +101,7 @@ class ReferenciasIARequest(BaseModel):
     porte: Optional[str] = None
     sexo: Optional[str] = None
     idade: Optional[float] = None
+    nome_cientifico: Optional[str] = None  # 👈 Adicionado para receber o binômio científico
 
 # --------------------------------------------------------------------------- #
 # Auxiliares
@@ -198,6 +199,7 @@ def calcular_referencias_ia(
     raca = _normalizar_raca(dados.raca)
     porte = (dados.porte or "").strip() or None
     sexo = (dados.sexo or "").strip() or None
+    nome_cientifico = (dados.nome_cientifico or "").strip() or None  # 👈 Capturado da requisição
 
     perfil = dict(
         especie=especie,
@@ -224,18 +226,19 @@ def calcular_referencias_ia(
             motivo = f"Raça genérica → usando referência por porte: {porte}"
 
     # ─── PASSO 3: Nada encontrado → PESQUISA AUTOMÁTICA ───
-    # O resultado é um RASCUNHO: aparece na tela, mas só é gravado na biblioteca
-    # (como PENDENTE de validação) quando a triagem for FINALIZADA.
     motivo_pesquisa = None
     if not bib:
-        logger.info(f"Perfil não encontrado — iniciando pesquisa automática: {especie} | porte: {porte}")
-        # A pesquisa recebe a raça como está no cadastro (com acento), para nomear o perfil.
-        perfil_pesquisa = dict(perfil, raca=(dados.raca or "").strip() or None)
+        logger.info(f"Perfil não encontrado — iniciando pesquisa automática: {especie} | porte: {porte} | científico: {nome_cientifico}")
+        perfil_pesquisa = dict(
+            perfil, 
+            raca=(dados.raca or "").strip() or None,
+            nome_cientifico=nome_cientifico  # 👈 Passado adiante para enriquecer a pesquisa automática
+        )
         bib, motivo_pesquisa = pesquisar_e_registrar(db, **perfil_pesquisa)
         if not bib:
             logger.warning(f"Pesquisa automática sem dados confiáveis: {especie} | {motivo_pesquisa}")
 
-    # ─── PASSO 4: Ainda sem nada → avisa indisponível (com o motivo real) ───
+    # ─── PASSO 4: Ainda sem nada → avisa indisponível ───
     if not bib:
         indisponivel = dict(REFERENCIA_INDISPONIVEL)
         indisponivel["fonte_ref"] = (
@@ -315,7 +318,7 @@ def avaliar_triagem_ia(
     queixa = (dados.queixa_principal or "").strip()
     queixa_norm = _normalizar(queixa)
 
-    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO — sem depender de IA
+    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO
     motivos = []
     if dados.temperatura is not None:
         if dados.temperatura >= LIMITE_TEMP_ALTA:
@@ -337,13 +340,11 @@ def avaliar_triagem_ia(
             "origem": "REGRA_FISICA",
         }
 
-    # Busca dados do animal cadastrado
     animal = (
         db.query(Animal).filter(Animal.id == dados.animal_id).first()
         if dados.animal_id else None
     )
 
-    # Dados com prioridade: cadastro do animal > requisição
     especie = (
         animal.especie.strip().lower()
         if animal and animal.especie
@@ -362,7 +363,6 @@ def avaliar_triagem_ia(
         "sexo": sexo,
     }
 
-    # Busca referência com fallback para porte
     bib_ref, _ = _buscar_com_fallback(db, perfil_busca, incluir_rascunhos=True)
 
     pendente_ref = False
@@ -456,9 +456,6 @@ def criar_ou_atualizar_triagem(
     db.commit()
     db.refresh(triagem_db)
 
-    # Triagem finalizada: se a referência exibida veio de pesquisa automática (RASCUNHO),
-    # ela passa a constar na biblioteca como PENDENTE de validação veterinária.
-    # Qualquer falha aqui é só registrada: a triagem já foi salva.
     referencia_gravada_id = None
     try:
         animal_id = dados.animal_id

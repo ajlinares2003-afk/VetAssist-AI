@@ -172,29 +172,66 @@ def _perfil_existente(linhas, raca):
     return [d for d in _montar_descritores(linhas) if partes_raca & (d.aliases | d.exemplos)]
 
 
-def _montar_prompt(nome, sexo, porte, sub_especie, especie) -> str:
+def _identificar_grupo_animal(especie: str, sub_especie: str) -> str:
+    """Classifica o animal em um dos grupos da matriz de fontes oficiais."""
+    texto = f"{especie or ''} {sub_especie or ''}".lower()
+    
+    prod_termos = {"bovino", "suino", "ovino", "caprino", "equino", "bubalino", "avestruz", "galinha", "suíno"}
+    if any(t in texto for t in prod_termos):
+        return "Produção"
+        
+    dom_termos = {"canino", "felino", "cao", "gato", "cachorro"}
+    if any(t in texto for t in dom_termos):
+        return "Domésticos"
+        
+    return "Silvestres/Exóticos"
+
+
+def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None) -> str:
+    grupo_animal = _identificar_grupo_animal(especie, sub_especie)
+    
+    if grupo_animal == "Domésticos":
+        fontes_prioritarias = (
+            "1ª Opção: Merck Veterinary Manual\n"
+            "2ª Opção: BSAVA Manual\n"
+            "3ª Opção: Blackwell"
+        )
+    elif grupo_animal == "Produção":
+        fontes_prioritarias = (
+            "1ª Opção: Merck Veterinary Manual\n"
+            "2ª Opção: Embrapa\n"
+            "3ª Opção: OIE"
+        )
+    else:  # Silvestres/Exóticos
+        fontes_prioritarias = (
+            "1ª Opção: Mader (Reptile Medicine/Exotic)\n"
+            "2ª Opção: Fowler's Zoo and Wild Animal Medicine\n"
+            "3ª Opção: BSAVA Manual of Exotic Pets"
+        )
+
     return (
-        "Você é pesquisador de medicina veterinária. USE A PESQUISA NA WEB para encontrar publicações "
-        "científicas (artigos revisados por pares, livros-texto de medicina veterinária ou de animais "
-        "silvestres/zoológicos, diretrizes de associações veterinárias) com os parâmetros fisiológicos "
-        "de referência de:\n\n"
-        f"- Perfil: {nome}\n"
-        f"- Espécie / sub-espécie informadas no cadastro: {especie or 'não informada'} / {sub_especie or 'não informada'}\n"
+        "Você é pesquisador de medicina veterinária. USE A PESQUISA NA WEB priorizando estritamente "
+        f"as seguintes fontes de referência oficiais para o grupo ({grupo_animal}):\n"
+        f"{fontes_prioritarias}\n\n"
+        "Busque publicações científicas, livros-texto ou diretrizes nas fontes acima com os parâmetros "
+        "fisiológicos de referência de:\n\n"
+        f"- Perfil / Raça: {nome}\n"
+        f"- Nome Científico: {nome_cientifico or 'Não informado'}\n"
+        f"- Espécie / sub-espécie: {especie or 'não informada'} / {sub_especie or 'não informada'}\n"
         f"- Sexo: {sexo}\n"
         f"- Porte: {porte or 'não informado'}\n"
         "- Faixa etária: animal ADULTO saudável\n\n"
         "REGRAS:\n"
-        "- Use SOMENTE valores encontrados nas fontes. NÃO extrapole de gato ou cão doméstico.\n"
+        "- Use SOMENTE valores encontrados nas fontes indicadas. NÃO extrapole de cão ou gato doméstico se for silvestre/exótico.\n"
         "- 'repouso' = animal calmo, sem estresse; 'clinica' = durante o atendimento/manejo.\n"
-        "- Se houver pouca literatura, ou as fontes não trouxerem os parâmetros, "
-        "responda com \"confianca\": \"baixa\" (nesse caso nada será cadastrado).\n"
+        "- Se houver pouca literatura nas fontes primárias, responda com \"confianca\": \"baixa\" (nada será cadastrado).\n"
         "- Números com ponto decimal. FC em bpm, FR em ir/min, temperatura em °C, peso em kg.\n"
         "- O campo tpc_ref traz SOMENTE o tempo de preenchimento capilar em segundos.\n"
         "- Cite cada publicação usada em fontes_citadas, com título, autores, ano e URL (se houver).\n\n"
         "Responda SOMENTE com um objeto JSON puro, exatamente com estas chaves:\n"
         "{\n"
         "  \"classe_animal\": \"Mamífero | Ave | Réptil | ...\",\n"
-        "  \"grupo\": \"ex.: Felídeos Silvestres\",\n"
+        "  \"grupo\": \"ex.: Rodents / Gerbils\",\n"
         "  \"nome_cientifico\": \"Gênero espécie\",\n"
         "  \"peso_min\": 0, \"peso_max\": 0,\n"
         "  \"temp_repouso_min\": 0, \"temp_repouso_max\": 0, \"temp_clinica_min\": 0, \"temp_clinica_max\": 0,\n"
@@ -304,7 +341,14 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     try:
         resposta = gerar_json(
             db,
-            _montar_prompt(especie_perfil, sexo_bib, porte, sub_especie, especie),
+            _montar_prompt(
+                especie_perfil, 
+                sexo_bib, 
+                porte, 
+                sub_especie, 
+                especie, 
+                nome_cientifico=getattr(base, "nome_cientifico", None)
+            ),
             validar=validar_pesquisa,
             pesquisa_web=True,
         )
