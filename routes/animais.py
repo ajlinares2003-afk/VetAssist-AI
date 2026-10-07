@@ -18,17 +18,24 @@ router = APIRouter(
 )
 
 def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie: str, raca: str):
-    """Executa a busca da Groq em background utilizando a tabela correta de configurações."""
+    """Lê as configurações da tabela chave-valor do Supabase para obter a chave e modelo da Groq."""
     db = SessionLocal()
     try:
-        resultado = db.execute(
-            text("SELECT groq_api_key_1, groq_model_1 FROM configuracoes_sistema LIMIT 1")
-        ).fetchone()
+        # Busca as configurações no formato chave/valor da tabela configuracoes_sistema
+        resultados = db.execute(
+            text("SELECT chave, valor FROM configuracoes_sistema")
+        ).fetchall()
 
-        if not resultado or not resultado[0] or not resultado[1]:
+        config = {row[0]: row[1] for row in resultados}
+
+        # Recolhe a chave e o modelo das configurações oficiais
+        api_key = config.get("groq_api_key_1") or config.get("groq_api_key_2")
+        modelo = config.get("groq_model_1") or config.get("groq_model_2")
+
+        if not api_key or not modelo:
+            print("Aviso Background: Chave ou modelo Groq não encontrados nas configurações do sistema.")
             return
 
-        api_key, modelo = resultado[0], resultado[1]
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -47,6 +54,7 @@ def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie:
         }
 
         response = requests.post(url, json=payload, headers=headers, timeout=10)
+        
         if response.status_code == 200:
             data = response.json()
             nome_cientifico = data["choices"][0]["message"]["content"].strip()
@@ -56,8 +64,12 @@ def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie:
                 {"nc": nome_cientifico, "id": animal_id}
             )
             db.commit()
+            print(f"Sucesso: Nome científico '{nome_cientifico}' gravado para o animal ID {animal_id}.")
+        else:
+            print(f"Erro Groq API ({response.status_code}): {response.text}")
+            
     except Exception as e:
-        print(f"Aviso em background ao buscar nome científico: {e}")
+        print(f"Exceção crítica em background ao buscar nome científico: {e}")
     finally:
         db.close()
 
@@ -120,7 +132,6 @@ def criar_animal(
     db.commit()
     db.refresh(novo_animal)
 
-    # Dispara a busca da Groq em background para novos animais
     background_tasks.add_task(
         background_buscar_nome_cientifico,
         novo_animal.id,
@@ -237,7 +248,6 @@ def atualizar_animal(
         animal_db.sub_especie = animal.sub_especie
         animal_db.raca = animal.raca
 
-        # Dispara a busca em background sempre que atualizar dados taxonômicos
         if animal_db.especie != animal.especie or animal_db.sub_especie != animal.sub_especie or animal_db.raca != animal.raca or not animal_db.nome_cientifico:
             background_tasks.add_task(
                 background_buscar_nome_cientifico,
