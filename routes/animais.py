@@ -20,17 +20,14 @@ router = APIRouter(
 
 def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie: str, raca: str):
     """Busca o nome científico na Groq aguardando a consolidação do registro na base de dados."""
-    time.sleep(1)  # Pausa essencial para garantir visibilidade do novo registro em cadastros
+    time.sleep(1)
     db = SessionLocal()
     try:
-        # Busca as configurações no formato chave/valor da tabela configuracoes_sistema
         resultados = db.execute(
             text("SELECT chave, valor FROM configuracoes_sistema")
         ).fetchall()
 
         config = {row[0]: row[1] for row in resultados}
-
-        # Recolhe a chave e o modelo das configurações oficiais
         api_key = config.get("groq_api_key_1") or config.get("groq_api_key_2")
         modelo = config.get("groq_model_1") or config.get("groq_model_2")
 
@@ -44,7 +41,6 @@ def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie:
             "Content-Type": "application/json"
         }
         
-        # Prompt otimizado para evitar falhas em raças exóticas ou específicas
         prompt = (
             f"Retorne apenas o nome científico binomial (gênero e espécie) em formato de texto simples, "
             f"sem pontuações extras ou explicações, para o animal: "
@@ -111,6 +107,12 @@ def criar_animal(
             detail="Tutor não encontrado."
         )
 
+    # Regra automática: se for Ave, Pássaro ou Réptil, define castrado como "Não"
+    especie_lower = animal.especie.lower()
+    castrado_val = animal.castrado
+    if any(palavra in especie_lower for palavra in ["ave", "pássaro", "passaro", "réptil", "reptil"]):
+        castrado_val = "Não"
+
     novo_animal = Animal(
         codigo=animal.codigo,
         nome=animal.nome,
@@ -123,7 +125,7 @@ def criar_animal(
         peso=getattr(animal, "peso", None),
         tutor_id=animal.tutor_id,
         status=animal.status,
-        castrado=animal.castrado,
+        castrado=castrado_val,
         cor=animal.cor,
         porte=animal.porte
     )
@@ -267,7 +269,14 @@ def atualizar_animal(
         animal_db.peso = getattr(animal, "peso", None)
         animal_db.tutor_id = animal.tutor_id
         animal_db.status = animal.status
-        animal_db.castrado = animal.castrado
+        
+        # Aplica a mesma regra de castração para aves/répteis na edição
+        especie_lower = animal.especie.lower()
+        if any(palavra in especie_lower for palavra in ["ave", "pássaro", "passaro", "réptil", "reptil"]):
+            animal_db.castrado = "Não"
+        else:
+            animal_db.castrado = animal.castrado
+
         animal_db.cor = animal.cor
         animal_db.porte = animal.porte
 
