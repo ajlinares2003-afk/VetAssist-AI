@@ -20,12 +20,13 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from google import genai
 from google.genai import types
-from openai import BadRequestError, OpenAI
+from openai import BadRequestError, InternalServerError, OpenAI
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -238,13 +239,21 @@ def _chamar_groq_com_busca(modelo: str, api_key: str, prompt: str, timeout: int)
     "structured outputs", por isso não enviamos response_format aqui.
     """
     cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key, timeout=timeout, max_retries=0)
-    completion = cliente.chat.completions.create(
+    pedido = dict(
         model=modelo,
         messages=[{"role": "user", "content": prompt}],
         tools=[{"type": "browser_search"}],
         tool_choice="required",
         extra_body={"reasoning_effort": "low"},  # recomendado pela Groq para busca
     )
+    try:
+        completion = cliente.chat.completions.create(**pedido)
+    except InternalServerError:
+        # Erro 5xx do lado da Groq costuma ser passageiro: uma nova tentativa depois de uma pausa.
+        # (Timeout NÃO é repetido, para não dobrar a espera.)
+        logger.warning("Groq devolveu erro 5xx na pesquisa; tentando mais uma vez.")
+        time.sleep(3)
+        completion = cliente.chat.completions.create(**pedido)
     mensagem = completion.choices[0].message
     executadas = getattr(mensagem, "executed_tools", None)
     if executadas is None:
