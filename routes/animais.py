@@ -1,10 +1,10 @@
 import requests
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text
 from schemas.animais import AnimalCreate, AnimalResponse
-from database.database import get_db
+from database.database import get_db, SessionLocal
 from models.animais import Animal
 from models.tutor import Tutor
 from services.security import (
@@ -17,19 +17,18 @@ router = APIRouter(
     tags=["Animais"]
 )
 
-def buscar_nome_cientifico_via_groq(especie: str, sub_especie: str, raca: str, db: Session) -> str:
-    """Consulta a API da Groq buscando as credenciais diretamente na tabela de configurações."""
+def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie: str, raca: str):
+    """Executa a busca da Groq em background para não travar a requisição principal da tela."""
+    db = SessionLocal()
     try:
-        # Busca direta na tabela de configurações do sistema via SQL para evitar erros de importação de models
         resultado = db.execute(
             text("SELECT groq_api_key_1, groq_model_1 FROM configuracao_sistema LIMIT 1")
         ).fetchone()
 
         if not resultado or not resultado[0] or not resultado[1]:
-            return None
+            return
 
         api_key, modelo = resultado[0], resultado[1]
-
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -47,14 +46,20 @@ def buscar_nome_cientifico_via_groq(especie: str, sub_especie: str, raca: str, d
             "temperature": 0.1
         }
 
-        response = requests.post(url, json=payload, headers=headers, timeout=8)
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+            nome_cientifico = data["choices"][0]["message"]["content"].strip()
+            
+            db.execute(
+                text("UPDATE animal SET nome_cientifico = :nc WHERE id = :id"),
+                {"nc": nome_cientifico, "id": animal_id}
+            )
+            db.commit()
     except Exception as e:
-        print(f"Aviso: Não foi possível obter o nome científico via Groq: {e}")
-    
-    return None
+        print(f"Aviso em background ao buscar nome científico: {e}")
+    finally:
+        db.close()
 
 @router.get("/")
 def listar_animais(
@@ -71,6 +76,7 @@ def listar_animais(
 @router.post("/")
 def criar_animal(
     animal: AnimalCreate,
+    background_tasks: BackgroundTasks,
     usuario_logado = Depends(
         exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])
     ),
@@ -88,21 +94,13 @@ def criar_animal(
             detail="Tutor não encontrado."
         )
 
-    # Busca automática do nome científico utilizando a Groq configurada
-    nome_cientifico_calculado = buscar_nome_cientifico_via_groq(
-        animal.especie, 
-        animal.sub_especie, 
-        animal.raca, 
-        db
-    )
-
     novo_animal = Animal(
         codigo=animal.codigo,
         nome=animal.nome,
         especie=animal.especie,
         sub_especie=animal.sub_especie,
         raca=animal.raca,
-        nome_cientifico=nome_cientifico_calculado,  # Gravado permanentemente no banco
+        nome_cientifico=None,  # Preenchido assincronamente pela IA
         sexo=animal.sexo,
         idade=animal.idade,
         peso=getattr(animal, "peso", None),
@@ -121,6 +119,15 @@ def criar_animal(
 
     db.commit()
     db.refresh(novo_animal)
+
+    # Dispara a busca da Groq em background para garantir resposta imediata na tela
+    background_tasks.add_task(
+        background_buscar_nome_cientifico,
+        novo_animal.id,
+        novo_animal.especie,
+        novo_animal.sub_especie,
+        novo_animal.raca
+    )
 
     return novo_animal
 
@@ -179,6 +186,7 @@ def excluir_animal(
 def atualizar_animal(
     animal_id: int,
     animal: AnimalCreate,
+    background_tasks: BackgroundTasks,
     usuario_logado = Depends(
         exigir_perfil(["ADMIN", "VETERINARIO", "RECEPCAO"])
     ),
@@ -229,9 +237,15 @@ def atualizar_animal(
         animal_db.sub_especie = animal.sub_especie
         animal_db.raca = animal.raca
 
-        # Atualiza o nome científico caso os dados taxonômicos tenham mudado
+        # Atualiza em background se os dados taxonómicos foram alterados
         if animal_db.especie != animal.especie or animal_db.sub_especie != animal.sub_especie or animal_db.raca != animal.raca:
-            animal_db.nome_cientifico = buscar_nome_cientifico_via_groq(animal.especie, animal.sub_especie, animal.raca, db)
+            background_tasks.add_task(
+                background_buscar_nome_cientifico,
+                animal_db.id,
+                animal.especie,
+                animal.sub_especie,
+                animal.raca
+            )
 
         animal_db.sexo = animal.sexo
         animal_db.idade = animal.idade
