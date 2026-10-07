@@ -18,11 +18,11 @@ router = APIRouter(
 )
 
 def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie: str, raca: str):
-    """Executa a busca da Groq em background para não travar a requisição principal da tela."""
+    """Executa a busca da Groq em background utilizando a tabela correta de configurações."""
     db = SessionLocal()
     try:
         resultado = db.execute(
-            text("SELECT groq_api_key_1, groq_model_1 FROM configuracao_sistema LIMIT 1")
+            text("SELECT groq_api_key_1, groq_model_1 FROM configuracoes_sistema LIMIT 1")
         ).fetchone()
 
         if not resultado or not resultado[0] or not resultado[1]:
@@ -100,7 +100,7 @@ def criar_animal(
         especie=animal.especie,
         sub_especie=animal.sub_especie,
         raca=animal.raca,
-        nome_cientifico=None,  # Preenchido assincronamente pela IA
+        nome_cientifico=None,
         sexo=animal.sexo,
         idade=animal.idade,
         peso=getattr(animal, "peso", None),
@@ -120,7 +120,7 @@ def criar_animal(
     db.commit()
     db.refresh(novo_animal)
 
-    # Dispara a busca da Groq em background para garantir resposta imediata na tela
+    # Dispara a busca da Groq em background para novos animais
     background_tasks.add_task(
         background_buscar_nome_cientifico,
         novo_animal.id,
@@ -237,8 +237,8 @@ def atualizar_animal(
         animal_db.sub_especie = animal.sub_especie
         animal_db.raca = animal.raca
 
-        # Atualiza em background se os dados taxonómicos foram alterados
-        if animal_db.especie != animal.especie or animal_db.sub_especie != animal.sub_especie or animal_db.raca != animal.raca:
+        # Dispara a busca em background sempre que atualizar dados taxonômicos
+        if animal_db.especie != animal.especie or animal_db.sub_especie != animal.sub_especie or animal_db.raca != animal.raca or not animal_db.nome_cientifico:
             background_tasks.add_task(
                 background_buscar_nome_cientifico,
                 animal_db.id,
