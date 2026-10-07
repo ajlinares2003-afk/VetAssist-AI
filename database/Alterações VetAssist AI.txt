@@ -26,3 +26,16 @@ Senha: Banco de dados na Nuvem
 postgresql://postgres:MatheusLinares98@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
 postgresql+psycopg2://postgres:MatheusLinares98@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
 postgresql+psycopg2://postgres.ucndrmsekpgwijhrvkbz:MatheusLinares98@aws-0-sa-east-1.pooler.supabase.com:5432/postgres
+
+
+
+Como você já deve ter visto, estou tentando desenvolver um sistema para uma clinica Veterinária, esse sistema consta com aparte de cadastrado de animais, tutores, check-in, triagem e atendimento.
+Um dos propósitos do sistema é atuar como um assistente veterinário virtual com ajuda na triagem na triagem do paciente. Nesse módulo da triagem minha ideia era  desenvolver um sistema que analisasse o estado do paciente fizesse a classificação Manchester Automaticamente, por exemplo:
+
+O tutor chega na clinica com o pet se direciona a recepção, a recepcionista realiza o cadastro do tutor, nome, telefone, cep (o sistema já busca o endereço), número e e-mail.
+Em seguida realiza o cadastro do animal, informando, o nome, espécie (Exemplo: Felino), Sub espécie (Exemplo: Felino Silvestre), Raça (Exemplo; Caracal - Lince do Deserto), idade e queixa principal.
+Após esse cadastro o paciente é encaminhado para triagem (Aguarda na recepção a chamada pelo Painel de Atendimento).
+Na triagem minha ideia era que a IA através da informações cadastradas no check-in (Espécie, Sub espécie, raça e idade) me trouxesse com base em pesquisas em publicações cientificas as os padrões normais de referências vitais do paciente tipo Frequência Cardíaca (Exemplo Caracal 140 - 220), Frequência Respiratória (20-50), Temperatura (38,2 - 39,4), TPC (<=2s), Mucosas (Úmidas Normocoradas).
+O enfermeiro realiza as as aferições reais FC, FR, Temperatura, TPC e Mucosas.
+A IA com base nessas informações mais a queixas principal realiza a classificação Manchester do paciente.
+Enviei os códigos Backend e Frontend para a sua análise.

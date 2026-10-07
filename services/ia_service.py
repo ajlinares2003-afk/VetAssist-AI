@@ -9,8 +9,10 @@ Camada única de acesso às IAs do VetAssist.
   (erro de rede, timeout, cota, JSON inválido ou resposta fora do esperado).
 - Um slot só é usado se tiver modelo E chave configurados. Nenhum modelo,
   chave ou ID de IA fica fixo no código.
-- Com `pesquisa_web=True`, só o Gemini é usado (pesquisa do Google) e a resposta só é aceita
-  se vier ancorada em fontes reais da web (devolvidas em RespostaIA.fontes).
+- Com `pesquisa_web=True`, só entram provedores com pesquisa na web: o Gemini (Pesquisa do
+  Google, exige plano pago nos modelos 3.x) e modelos Groq `openai/gpt-oss-*` (ferramenta
+  `browser_search` da Groq, sem chave nova). A resposta só é aceita se vier ancorada em
+  fontes reais da web (devolvidas em RespostaIA.fontes).
 - Se TODOS falharem, levanta IAIndisponivelError. Quem chama decide o que fazer;
   nunca devolva um valor "normal" inventado em caso de falha.
 """
@@ -207,6 +209,57 @@ def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: in
     return resposta.text or "", fontes
 
 
+def _groq_tem_busca(modelo: str) -> bool:
+    """Segundo a documentação da Groq, `browser_search` existe nos modelos openai/gpt-oss-*."""
+    return (modelo or "").strip().lower().startswith("openai/gpt-oss")
+
+
+def _coletar_fontes(no, achadas: list, vistas: set) -> None:
+    """Percorre a estrutura de `executed_tools` e junta toda {url, title} encontrada."""
+    if isinstance(no, dict):
+        url = no.get("url")
+        if isinstance(url, str) and url.startswith("http") and url not in vistas:
+            vistas.add(url)
+            achadas.append({"titulo": str(no.get("title") or no.get("titulo") or ""), "url": url})
+        for valor in no.values():
+            _coletar_fontes(valor, achadas, vistas)
+    elif isinstance(no, (list, tuple)):
+        for item in no:
+            _coletar_fontes(item, achadas, vistas)
+    elif hasattr(no, "model_dump"):  # objetos pydantic do SDK
+        _coletar_fontes(no.model_dump(), achadas, vistas)
+
+
+def _chamar_groq_com_busca(modelo: str, api_key: str, prompt: str, timeout: int):
+    """
+    Groq com a ferramenta `browser_search` (modelos openai/gpt-oss-*). Devolve (texto, fontes).
+    A Groq informa o que foi pesquisado em `message.executed_tools`; sem isso, a resposta
+    saiu da memória do modelo e é recusada. Obs.: browser_search não combina com
+    "structured outputs", por isso não enviamos response_format aqui.
+    """
+    cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key, timeout=timeout, max_retries=0)
+    completion = cliente.chat.completions.create(
+        model=modelo,
+        messages=[{"role": "user", "content": prompt}],
+        tools=[{"type": "browser_search"}],
+        tool_choice="required",
+        extra_body={"reasoning_effort": "low"},  # recomendado pela Groq para busca
+    )
+    mensagem = completion.choices[0].message
+    executadas = getattr(mensagem, "executed_tools", None)
+    if executadas is None:
+        executadas = (getattr(mensagem, "model_extra", None) or {}).get("executed_tools")
+
+    fontes: list = []
+    _coletar_fontes(executadas, fontes, set())
+    if executadas and not fontes:
+        # A Groq rodou a busca, mas a estrutura veio diferente do esperado: registra o
+        # formato para ajustarmos o leitor, sem gravar o conteúdo das páginas.
+        trecho = str(executadas)[:300].replace("\n", " ")
+        logger.warning("executed_tools sem URLs reconhecíveis. Estrutura: %s", trecho)
+    return mensagem.content or "", fontes
+
+
 def _extrair_json(texto: str) -> dict:
     """Extrai o objeto JSON da resposta, tolerando ```json, <think> e texto extra."""
     limpo = re.sub(r"<think>.*?</think>", "", texto, flags=re.DOTALL | re.IGNORECASE).strip()
@@ -235,8 +288,9 @@ def gerar_json(
     `validar` recebe o dict e devolve o dict normalizado, ou levanta ValueError
     se o conteúdo não servir. Nesse caso o próximo provedor é tentado.
 
-    `pesquisa_web=True`: usa só o Gemini com Pesquisa do Google e exige que a resposta
-    venha ancorada em pelo menos uma fonte real (RespostaIA.fontes).
+    `pesquisa_web=True`: usa só provedores com pesquisa na web (Gemini com Pesquisa do Google,
+    ou Groq openai/gpt-oss-* com browser_search) e exige que a resposta venha ancorada em
+    pelo menos uma fonte real (RespostaIA.fontes).
     """
     config = _ler_configuracoes(db)
     tentativas: list[str] = []
@@ -246,15 +300,14 @@ def gerar_json(
         api_key = _chave_do_slot(slot, config)
         if not modelo or not api_key:
             continue  # slot não configurado
-        if pesquisa_web and slot.tipo != "gemini":
-            continue  # só o Gemini tem pesquisa na web neste sistema
+        if pesquisa_web and slot.tipo == "groq" and not _groq_tem_busca(modelo):
+            continue  # este modelo Groq não tem pesquisa na web (ex.: qwen)
 
         try:
             fontes: list = []
             if pesquisa_web:
-                bruto, fontes = _chamar_gemini_com_busca(
-                    modelo, api_key, prompt, timeout or TIMEOUT_PESQUISA_SEGUNDOS
-                )
+                buscar = _chamar_gemini_com_busca if slot.tipo == "gemini" else _chamar_groq_com_busca
+                bruto, fontes = buscar(modelo, api_key, prompt, timeout or TIMEOUT_PESQUISA_SEGUNDOS)
                 if not fontes:
                     raise ValueError("A IA respondeu sem consultar fontes na web.")
             else:
@@ -271,7 +324,8 @@ def gerar_json(
 
     if not tentativas:
         raise IAIndisponivelError(
-            "Nenhum Gemini configurado para pesquisa na web. Cadastre modelo e chave em Configurações de IA."
+            "Nenhum provedor com pesquisa na web configurado: use o Gemini (plano pago) ou um modelo "
+            "Groq openai/gpt-oss-* em Configurações de IA."
             if pesquisa_web else
             "Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA."
         )
