@@ -18,6 +18,7 @@ Regras de segurança deste fluxo:
 import json
 import logging
 import re
+import time
 from typing import Optional
 
 from sqlalchemy import text
@@ -31,6 +32,11 @@ from services.ia_service import IAIndisponivelError, gerar_json
 logger = logging.getLogger("vetassist.referencia_auto")
 
 ECC_IDEAL_PADRAO = "5 (Escala 1 a 9)"  # regra da clínica
+
+# Pausa após uma pesquisa que falhou. Cada tentativa gasta tokens/cota das IAs (a busca da
+# Groq é cara); sem pausa, reabrir a tela repetiria a chamada e esgotaria o limite diário.
+COOLDOWN_FALHA_SEGUNDOS = 20 * 60
+_falhas_recentes: dict = {}  # (perfil, sexo) -> (instante, motivo)  [por processo]
 
 # (campo, é_inteiro). FC e FR são int4 no banco; peso e temperatura são numeric.
 CAMPOS_NUMERICOS = (
@@ -96,6 +102,48 @@ def validar_pesquisa(dados: dict) -> dict:
     saida["confianca"] = confianca
     saida["observacoes"] = str(dados.get("observacoes") or "").strip()[:1000]
     return saida
+
+
+# --------------------------------------------------------------------------- #
+# Motivo da falha em linguagem simples
+# --------------------------------------------------------------------------- #
+def _resumo_tentativa(texto: str) -> str:
+    """'groq_1/openai/gpt-oss-120b: RateLimitError | ...' -> 'groq_1: limite diário de tokens (TPD) atingido'."""
+    origem, _, detalhe = texto.partition(": ")
+    nome = origem.split("/")[0] or origem
+    t = detalhe.lower()
+    espera = re.search(r"try again in ([0-9a-z\.]+)", t)
+    liberado = f" (liberado em {espera.group(1).rstrip('.')})" if espera else ""
+    if "tokens per day" in t or "(tpd)" in t:
+        motivo = "limite diário de tokens (TPD) atingido" + liberado
+    elif "tokens per minute" in t or "(tpm)" in t:
+        motivo = "limite de tokens por minuto (TPM) atingido" + liberado
+    elif "rate_limit" in t or "rate limit" in t:
+        motivo = "limite de uso da Groq atingido" + liberado
+    elif "api key not valid" in t or "invalid api key" in t or "invalid_api_key" in t or "401" in t:
+        motivo = "chave de API inválida: confira a chave em Configurações de IA"
+    elif "not_found" in t or "no longer available" in t or "404" in t:
+        motivo = "modelo indisponível para esta conta: troque o modelo em Configurações de IA"
+    elif "resource_exhausted" in t or "429" in t:
+        motivo = "cota esgotada ou pesquisa do Google indisponível no plano atual (429)"
+    elif "413" in t or "request too large" in t:
+        motivo = "requisição grande demais para o limite do plano"
+    elif "sem consultar fontes" in t:
+        motivo = "a IA respondeu sem pesquisar na web"
+    elif "literatura insuficiente" in t:
+        motivo = "literatura insuficiente para este perfil"
+    else:
+        motivo = detalhe[:140]
+    return f"{nome}: {motivo}"
+
+
+def _motivo_das_tentativas(tentativas: list) -> str:
+    return "a pesquisa falhou em todos os provedores. " + "; ".join(_resumo_tentativa(t) for t in tentativas[:3])
+
+
+def limpar_falhas_pesquisa() -> None:
+    """Chamada quando a configuração de IA muda (ou um teste de conexão passa): libera novas tentativas."""
+    _falhas_recentes.clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -242,6 +290,17 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     if ja_existe:
         return ja_existe, None
 
+    # Pausa após falha recente do mesmo perfil: não repete uma chamada cara e que acabou de falhar.
+    chave_falha = (_norm(especie_perfil), _norm(sexo_bib))
+    anterior = _falhas_recentes.get(chave_falha)
+    if anterior:
+        decorrido = time.monotonic() - anterior[0]
+        if decorrido < COOLDOWN_FALHA_SEGUNDOS:
+            minutos = int((COOLDOWN_FALHA_SEGUNDOS - decorrido) // 60) + 1
+            return None, (f"{anterior[1]} | nova tentativa automática em ~{minutos} min "
+                          "(para não gastar a cota das IAs; salvar as configurações de IA libera já)")
+        _falhas_recentes.pop(chave_falha, None)
+
     try:
         resposta = gerar_json(
             db,
@@ -251,9 +310,10 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
         )
     except IAIndisponivelError as exc:
         logger.warning("Pesquisa automática sem resultado: %s | %s", exc, exc.tentativas)
-        if exc.tentativas:
-            return None, f"a pesquisa não produziu resultado aceitável ({exc.tentativas[0][:450]})"
-        return None, str(exc)
+        motivo = _motivo_das_tentativas(exc.tentativas) if exc.tentativas else str(exc)
+        _falhas_recentes[chave_falha] = (time.monotonic(), motivo)
+        return None, motivo
+    _falhas_recentes.pop(chave_falha, None)
 
     d = resposta.dados
     titulos = "; ".join(str(f.get("titulo"))[:120] for f in d["fontes_citadas"][:3] if f.get("titulo"))

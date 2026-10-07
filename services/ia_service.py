@@ -61,7 +61,7 @@ CAMPOS_CONFIG_IA = tuple(
 )
 
 
-def _descrever_erro(exc: Exception, limite: int = 500) -> str:
+def _descrever_erro(exc: Exception, limite: int = 900) -> str:
     """
     Resumo útil de um erro de provedor. Para erros do Google (ex.: 429), extrai o que
     permite diagnosticar: código/status, a MÉTRICA de cota violada, o modelo e o tempo
@@ -95,7 +95,7 @@ def _descrever_erro(exc: Exception, limite: int = 500) -> str:
         # (ex.: pesquisa do Google/grounding) não está disponível no plano da chave.
         partes.append("sem métrica informada: cota esgotada OU recurso indisponível no plano atual")
     mensagem = getattr(exc, "message", None) or str(exc)
-    partes.append(str(mensagem)[:200])
+    partes.append(str(mensagem)[:420])  # inclui limite/uso/tempo de espera da Groq
     return " | ".join(partes)[:limite]
 
 
@@ -357,4 +357,4 @@ def testar_slot(db: Session, nome_slot: str, modelo: Optional[str]) -> dict:
         )
         return {"sucesso": True, "resposta": resposta.strip()}
     except Exception as exc:
-        return {"sucesso": False, "erro": _descrever_erro(exc, 600)}
+        return {"sucesso": False, "erro": _descrever_erro(exc, 900)}

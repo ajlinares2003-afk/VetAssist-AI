@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from database.database import get_db
 from services.ia_service import CAMPOS_CONFIG_IA, testar_slot
+from services.referencia_auto import limpar_falhas_pesquisa
 from services.security import exigir_perfil
 
 logger = logging.getLogger("vetassist.config")
@@ -90,6 +91,7 @@ def atualizar_configuracoes_ia(
         logger.exception("Erro ao salvar configurações de IA")
         raise HTTPException(status_code=500, detail="Erro ao salvar as configurações de IA.")
 
+    limpar_falhas_pesquisa()  # configuração mudou: libera novas tentativas de pesquisa
     return {"mensagem": "Configurações de IA atualizadas com sucesso!"}
 
 
@@ -99,4 +101,7 @@ def testar_modelo_ia(
     usuario_logado=Depends(exigir_perfil(["ADMIN"])),
     db: Session = Depends(get_db),
 ):
-    return testar_slot(db, payload.provedor.strip().lower(), payload.modelo)
+    resultado = testar_slot(db, payload.provedor.strip().lower(), payload.modelo)
+    if resultado.get("sucesso"):
+        limpar_falhas_pesquisa()
+    return resultado
