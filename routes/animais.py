@@ -18,7 +18,7 @@ router = APIRouter(
 )
 
 def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie: str, raca: str):
-    """Lê as configurações da tabela chave-valor do Supabase para obter a chave e modelo da Groq."""
+    """Busca o nome científico na Groq com tratamento robusto e fallback para garantir o preenchimento."""
     db = SessionLocal()
     try:
         # Busca as configurações no formato chave/valor da tabela configuracoes_sistema
@@ -42,9 +42,12 @@ def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie:
             "Content-Type": "application/json"
         }
         
+        # Prompt otimizado para evitar falhas em raças exóticas ou específicas
         prompt = (
             f"Retorne apenas o nome científico binomial (gênero e espécie) em formato de texto simples, "
-            f"sem explicações adicionais, para o animal: Espécie: {especie}, Sub-espécie: {sub_especie}, Raça: {raca}."
+            f"sem pontuações extras ou explicações, para o animal: "
+            f"Espécie: {especie}, Sub-espécie/Tipo: {sub_especie}, Raça: {raca}. "
+            f"Se desconhecido, retorne o nome científico da espécie principal."
         )
 
         payload = {
@@ -53,11 +56,11 @@ def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie:
             "temperature": 0.1
         }
 
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
         
         if response.status_code == 200:
             data = response.json()
-            nome_cientifico = data["choices"][0]["message"]["content"].strip()
+            nome_cientifico = data["choices"][0]["message"]["content"].strip().replace('"', '')
             
             db.execute(
                 text("UPDATE animal SET nome_cientifico = :nc WHERE id = :id"),
