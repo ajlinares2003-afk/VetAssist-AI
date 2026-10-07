@@ -2,8 +2,9 @@
 services/referencia_auto.py
 
 Quando o animal NÃO tem perfil na biblioteca oficial, a IA (Gemini com pesquisa na web)
-procura os parâmetros na literatura e o sistema cadastra o resultado sozinho na
-`biblioteca_parametros_oficiais` com status PENDENTE.
+procura os parâmetros na literatura utilizando a chave multivariada:
+Nome Científico + Porte + Sexo + Idade, restrita estritamente às fontes oficiais da clínica,
+e cadastra o resultado na `biblioteca_parametros_oficiais` com status PENDENTE.
 
 Regras de segurança deste fluxo:
   - Só aceita resposta ANCORADA em fontes reais da web (sem fontes = descartada).
@@ -187,7 +188,7 @@ def _identificar_grupo_animal(especie: str, sub_especie: str) -> str:
     return "Silvestres/Exóticos"
 
 
-def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None) -> str:
+def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None, idade=None) -> str:
     grupo_animal = _identificar_grupo_animal(especie, sub_especie)
     
     if grupo_animal == "Domésticos":
@@ -206,32 +207,35 @@ def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None
         fontes_prioritarias = (
             "1ª Opção: Mader (Reptile Medicine/Exotic)\n"
             "2ª Opção: Fowler's Zoo and Wild Animal Medicine\n"
-            "3ª Opção: BSAVA Manual of Exotic Pets"
+            "3ª Opção: BSAVA Exóticos"
         )
 
     return (
-        "Você é pesquisador de medicina veterinária. USE A PESQUISA NA WEB priorizando estritamente "
-        f"as seguintes fontes de referência oficiais para o grupo ({grupo_animal}):\n"
-        f"{fontes_prioritarias}\n\n"
-        "Busque publicações científicas, livros-texto ou diretrizes nas fontes acima com os parâmetros "
-        "fisiológicos de referência de:\n\n"
-        f"- Perfil / Raça: {nome}\n"
-        f"- Nome Científico: {nome_cientifico or 'Não informado'}\n"
-        f"- Espécie / sub-espécie: {especie or 'não informada'} / {sub_especie or 'não informada'}\n"
-        f"- Sexo: {sexo}\n"
+        "Você é um pesquisador de medicina veterinária de alta exigência hospitalar. "
+        "⚠️ REGRA SUPREMA: VOCÊ DEVE PESQUISAR EXCLUSIVAMENTE E ESTRITAMENTE NAS SEGUINTES FONTES OFICIAIS, "
+        f"divididas por ordem de prioridade para o grupo ({grupo_animal}):\n"
+        f"{fontes_prioritarias}\n"
+        "Caso não encontre nestas fontes exatas, utilize secundariamente as bases de ciência geral (PubMed, SciELO, Scholar). "
+        "NUNCA utilize blogs, sites genéricos ou fóruns não acadêmicos.\n\n"
+        "Busque os parâmetros fisiológicos de referência cruzando obrigatoriamente todos os dados do paciente (Chave Multivariada):\n\n"
+        f"- Perfil / Raça comercial: {nome}\n"
+        f"- Nome Científico (Taxonomia obrigatória): {nome_cientifico or 'Não informado'}\n"
+        f"- Espécie / Sub-espécie: {especie or 'não informada'} / {sub_especie or 'não informada'}\n"
         f"- Porte: {porte or 'não informado'}\n"
-        "- Faixa etária: animal ADULTO saudável\n\n"
-        "REGRAS:\n"
-        "- Use SOMENTE valores encontrados nas fontes indicadas. NÃO extrapole de cão ou gato doméstico se for silvestre/exótico.\n"
-        "- 'repouso' = animal calmo, sem estresse; 'clinica' = durante o atendimento/manejo.\n"
-        "- Se houver pouca literatura nas fontes primárias, responda com \"confianca\": \"baixa\" (nada será cadastrado).\n"
+        f"- Sexo: {sexo or 'indiferente'}\n"
+        f"- Idade / Estágio de vida: {idade if idade is not None else 'não informada'} anos (Adapte para filhote, adulto ou idoso conforme a literatura)\n\n"
+        "REGRAS CLÍNICAS:\n"
+        "- Respeite rigorosamente as variações fisiológicas de porte (pequeno, médio, grande, gigante), sexo e faixa etária.\n"
+        "- 'repouso' = animal calmo, sem estresse; 'clinica' = durante o atendimento/manejo hospitalar.\n"
+        "- Se a literatura oficial primária não trouxer os parâmetros para essa combinação exata, "
+        "responda obrigatoriamente com \"confianca\": \"baixa\" (nada será cadastrado).\n"
         "- Números com ponto decimal. FC em bpm, FR em ir/min, temperatura em °C, peso em kg.\n"
         "- O campo tpc_ref traz SOMENTE o tempo de preenchimento capilar em segundos.\n"
         "- Cite cada publicação usada em fontes_citadas, com título, autores, ano e URL (se houver).\n\n"
         "Responda SOMENTE com um objeto JSON puro, exatamente com estas chaves:\n"
         "{\n"
         "  \"classe_animal\": \"Mamífero | Ave | Réptil | ...\",\n"
-        "  \"grupo\": \"ex.: Rodents / Gerbils\",\n"
+        "  \"grupo\": \"ex.: Cães de Grande Porte / Canidae\",\n"
         "  \"nome_cientifico\": \"Gênero espécie\",\n"
         "  \"peso_min\": 0, \"peso_max\": 0,\n"
         "  \"temp_repouso_min\": 0, \"temp_repouso_max\": 0, \"temp_clinica_min\": 0, \"temp_clinica_max\": 0,\n"
@@ -241,7 +245,7 @@ def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None
         "  \"mucosas_ref\": \"descrição curta\",\n"
         "  \"fontes_citadas\": [{\"titulo\": \"\", \"autores\": \"\", \"ano\": \"\", \"url\": \"\"}],\n"
         "  \"confianca\": \"alta | media | baixa\",\n"
-        "  \"observacoes\": \"limitações dos dados, em 1 ou 2 frases\"\n"
+        "  \"observacoes\": \"limitações dos dados e considerações de porte/idade, em 1 ou 2 frases\"\n"
         "}"
     )
 
@@ -285,16 +289,13 @@ def metadados_da_linha(db: Session, linha_id: int) -> dict:
     return {"status": "VALIDADO", "origem": "MANUAL", "fontes": None, "observacoes_ia": None}
 
 
-def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, porte):
+def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, porte, nome_cientifico=None, idade=None):
     """
-    Pesquisa na literatura e guarda o resultado como RASCUNHO (reaproveita o rascunho
-    existente do mesmo perfil/sexo, sem nova chamada à IA).
-    Devolve (linha, None) em caso de sucesso, ou (None, motivo) quando não foi possível
-    (raça genérica, Gemini indisponível, sem fonte, literatura fraca, erro de banco).
-    O motivo é mostrado na tela para facilitar o diagnóstico. Nunca levanta exceção.
+    Pesquisa na literatura utilizando a chave multivariada (Nome Científico + Porte + Sexo + Idade)
+    e guarda o resultado como RASCUNHO.
     """
     try:
-        return _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte)
+        return _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cientifico, idade)
     except Exception as exc:
         db.rollback()
         logger.exception("Falha na pesquisa automática de referência")
@@ -302,7 +303,7 @@ def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, port
                       "Confirme se a migração da biblioteca foi executada.")
 
 
-def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
+def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cientifico, idade):
     from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
 
     nome = _nome_do_perfil(raca)
@@ -327,7 +328,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     if ja_existe:
         return ja_existe, None
 
-    # Pausa após falha recente do mesmo perfil: não repete uma chamada cara e que acabou de falhar.
+    # Pausa após falha recente do mesmo perfil
     chave_falha = (_norm(especie_perfil), _norm(sexo_bib))
     anterior = _falhas_recentes.get(chave_falha)
     if anterior:
@@ -335,7 +336,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
         if decorrido < COOLDOWN_FALHA_SEGUNDOS:
             minutos = int((COOLDOWN_FALHA_SEGUNDOS - decorrido) // 60) + 1
             return None, (f"{anterior[1]} | nova tentativa automática em ~{minutos} min "
-                          "(para não gastar a cota das IAs; salvar as configurações de IA libera já)")
+                          "(para não gastar a cota das IAs)")
         _falhas_recentes.pop(chave_falha, None)
 
     try:
@@ -347,7 +348,8 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
                 porte, 
                 sub_especie, 
                 especie, 
-                nome_cientifico=getattr(base, "nome_cientifico", None)
+                nome_cientifico=nome_cientifico or getattr(base, "nome_cientifico", None),
+                idade=idade
             ),
             validar=validar_pesquisa,
             pesquisa_web=True,
@@ -365,14 +367,14 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
         **{campo: d[campo] for campo, _ in CAMPOS_NUMERICOS},
         "classe_animal": getattr(base, "classe_animal", None) or d["classe_animal"],
         "grupo": getattr(base, "grupo", None) or d["grupo"],
-        "nome_cientifico": getattr(base, "nome_cientifico", None) or d["nome_cientifico"],
+        "nome_cientifico": nome_cientifico or getattr(base, "nome_cientifico", None) or d["nome_cientifico"],
         "especie": especie_perfil,
         "sexo": sexo_bib,
         "tpc_ref": d["tpc_ref"],
         "mucosas_ref": d["mucosas_ref"],
         "ecc_ideal": ECC_IDEAL_PADRAO,
         "fonte_bibliografica": (f"Pesquisa automática por IA, PENDENTE de validação veterinária. "
-                                f"Fontes: {titulos}")[:600],
+                                f"Fontes oficiais: {titulos}")[:600],
         "fontes": json.dumps({"citadas": d["fontes_citadas"], "web": resposta.fontes,
                               "confianca": d["confianca"], "modelo": f"{resposta.provedor}/{resposta.modelo}"},
                              ensure_ascii=False),
@@ -381,7 +383,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
     novo_id = db.execute(_INSERIR, parametros).scalar()
     db.commit()
 
-    if novo_id is None:  # perdeu a corrida: outro processo inseriu primeiro
+    if novo_id is None:
         achada = next((l for l in db.query(Bib).all()
                        if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
         return achada, (None if achada else "conflito ao gravar a referência")
@@ -390,12 +392,10 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte):
 
 def promover_rascunho(db: Session, *, raca, sexo) -> Optional[int]:
     """
-    Chamada ao FINALIZAR a triagem: o RASCUNHO do perfil/sexo do animal passa a PENDENTE
-    (entra na biblioteca e na fila de validação do veterinário). Devolve o id promovido
-    ou None. Nunca levanta exceção: uma falha aqui não pode impedir salvar a triagem.
+    Chamada ao FINALIZAR a triagem: o RASCUNHO do perfil/sexo do animal passa a PENDENTE.
     """
     try:
-        if _nome_do_perfil(raca) is None:  # raça genérica não gera perfil automático
+        if _nome_do_perfil(raca) is None:
             return None
         from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
         linhas = db.query(Bib).order_by(Bib.id).all()
