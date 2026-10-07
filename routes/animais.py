@@ -2,11 +2,11 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 from schemas.animais import AnimalCreate, AnimalResponse
 from database.database import get_db
 from models.animais import Animal
 from models.tutor import Tutor
-from models.configuracoes import ConfiguracaoSistema  # Certifique-se de que o model de configurações está acessível
 from services.security import (
     obter_usuario_logado,
     exigir_perfil
@@ -18,15 +18,21 @@ router = APIRouter(
 )
 
 def buscar_nome_cientifico_via_groq(especie: str, sub_especie: str, raca: str, db: Session) -> str:
-    """Consulta a API da Groq usando as credenciais ativas nas configurações do sistema."""
+    """Consulta a API da Groq buscando as credenciais diretamente na tabela de configurações."""
     try:
-        config = db.query(ConfiguracaoSistema).first()
-        if not config or not config.groq_api_key_1 or not config.groq_model_1:
+        # Busca direta na tabela de configurações do sistema via SQL para evitar erros de importação de models
+        resultado = db.execute(
+            text("SELECT groq_api_key_1, groq_model_1 FROM configuracao_sistema LIMIT 1")
+        ).fetchone()
+
+        if not resultado or not resultado[0] or not resultado[1]:
             return None
+
+        api_key, modelo = resultado[0], resultado[1]
 
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {config.groq_api_key_1}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         
@@ -36,7 +42,7 @@ def buscar_nome_cientifico_via_groq(especie: str, sub_especie: str, raca: str, d
         )
 
         payload = {
-            "model": config.groq_model_1,
+            "model": modelo,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1
         }
