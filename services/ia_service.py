@@ -301,7 +301,7 @@ def gerar_json(
 
     `pesquisa_web=True`: usa só provedores com pesquisa na web (Gemini com Pesquisa do Google,
     ou Groq openai/gpt-oss-* com browser_search) e exige que a resposta venha ancorada em
-    pelo menos uma fonte real (RespostaIA.fontes).
+    pelo menos uma real (RespostaIA.fontes).
     """
     config = _ler_configuracoes(db)
     tentativas: list[str] = []
