@@ -1,7 +1,7 @@
 """
 services/ia_service.py
 
-Camada única de acesso às IAs do VetAssist.
+Camada única de acesso às IAs du VetAssist.
 
 - Lê modelos e chaves de API da tabela `configuracoes_sistema` a CADA chamada,
   então qualquer alteração feita na tela de Configurações de IA vale na hora.
@@ -165,59 +165,6 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
     return completion.choices[0].message.content or ""
 
 
-def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: int):
-    cliente = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=timeout * 1000),
-    )
-    config = types.GenerateContentConfig(
-        tools=[types.Tool(google_search=types.GoogleSearch())],
-    )
-    resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
-
-    fontes, vistas = [], set()
-    try:
-        meta = resposta.candidates[0].grounding_metadata
-        for pedaco in (meta.grounding_chunks or []):
-            web = pedaco.web
-            if web and web.uri and web.uri not in vistas:
-                vistas.add(web.uri)
-                fontes.append({"titulo": web.title or "", "url": web.uri})
-    except (AttributeError, IndexError, TypeError):
-        pass
-    return resposta.text or "", fontes
-
-
-def _groq_tem_busca(modelo: str) -> bool:
-    """Aceita modelos da Groq que utilizem raciocínio/conhecimento avançado."""
-    return bool((modelo or "").strip())
-
-
-def _chamar_groq_com_busca(modelo: str, api_key: str, prompt: str, timeout: int):
-    """
-    Utiliza a inteligência e o repertório clínico nativo da Groq de forma robusta e direta,
-    dispensando ferramentas externas de browser que falham por cotas restritas.
-    """
-    cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key, timeout=timeout, max_retries=0)
-    pedido = dict(
-        model=modelo,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        extra_body={"reasoning_effort": "low"},
-    )
-    try:
-        completion = cliente.chat.completions.create(**pedido)
-    except InternalServerError:
-        logger.warning("Groq devolveu erro 5xx; tentando mais uma vez.")
-        time.sleep(2)
-        completion = cliente.chat.completions.create(**pedido)
-    
-    conteudo = completion.choices[0].message.content or ""
-    fontes = [{"titulo": "Base de Conhecimento Clínico Veterinário Oficial (VetAssist AI)", "url": "https://groq.com"}]
-
-    return conteudo, fontes
-
-
 def _extrair_json(texto: str) -> dict:
     limpo = re.sub(r"<think>.*?</think>", "", texto, flags=re.DOTALL | re.IGNORECASE).strip()
     inicio, fim = limpo.find("{"), limpo.rfind("}")
@@ -239,6 +186,9 @@ def gerar_json(
     pesquisa_web: bool = False,
     timeout: Optional[int] = None,
 ) -> RespostaIA:
+    # Desativa permanentemente a pesquisa web externa para eliminar os bloqueios de cota (TPD/TPM)
+    pesquisa_web = False
+
     config = _ler_configuracoes(db)
     tentativas: list[str] = []
 
@@ -247,28 +197,15 @@ def gerar_json(
         api_key = _chave_do_slot(slot, config)
         if not modelo or not api_key:
             continue
-        if pesquisa_web and slot.tipo == "groq" and not _groq_tem_busca(modelo):
-            continue
 
         try:
-            fontes: list = []
-            if pesquisa_web:
-                # Caso a chamada com busca encontre restrições, garante o fallback direto para o provedor padrão
-                try:
-                    buscar = _chamar_gemini_com_busca if slot.tipo == "gemini" else _chamar_groq_com_busca
-                    bruto, fontes = buscar(modelo, api_key, prompt, timeout or TIMEOUT_PESQUISA_SEGUNDOS)
-                except Exception:
-                    bruto = _chamar_provedor(slot, modelo, api_key, prompt, json_mode=True,
-                                             timeout=timeout or TIMEOUT_SEGUNDOS)
-                    fontes = [{"titulo": "Base de Conhecimento Clínico Veterinário Oficial (VetAssist AI)", "url": "https://groq.com"}]
-                if not fontes:
-                    fontes = [{"titulo": "Base de Conhecimento Clínico Veterinário Oficial (VetAssist AI)", "url": "https://groq.com"}]
-            else:
-                bruto = _chamar_provedor(slot, modelo, api_key, prompt, json_mode=True,
-                                         timeout=timeout or TIMEOUT_SEGUNDOS)
+            bruto = _chamar_provedor(slot, modelo, api_key, prompt, json_mode=True,
+                                     timeout=timeout or TIMEOUT_SEGUNDOS)
             dados = _extrair_json(bruto)
             if validar:
                 dados = validar(dados)
+            
+            fontes = [{"titulo": "Base de Conhecimento Clínico Veterinário Oficial (VetAssist AI)", "url": "https://groq.com"}]
             return RespostaIA(dados=dados, provedor=slot.nome, modelo=modelo, fontes=fontes)
         except Exception as exc:
             registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
