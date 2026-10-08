@@ -28,16 +28,12 @@ router = APIRouter(
 CORES_MANCHESTER = ("VERMELHO", "LARANJA", "AMARELO", "VERDE", "AZUL")
 ECC_REF_PADRAO = "💡 Ideal: 5/9 (Escala 1 a 9)"
 
-# Travão físico (regras originais mantidas). A FC foi retirada daqui de propósito:
-# cortes fixos (ex.: 200 bpm) classificam um Caracal normal em atendimento
-# (140-220 bpm) como emergência. A FC é avaliada pela IA com a faixa da espécie.
 LIMITE_TEMP_ALTA = 40.5
 LIMITE_TEMP_BAIXA = 35.0
 LIMITE_TPC_SEG = 3
 
 TERMOS_EMERGENCIA = ("inconsciente", "inconsciencia", "desmai", "decubito")
 
-# Lista de valores considerados raça genérica/SRD
 RACAS_GENERICAS = {
     "srd",
     "sem raça definida",
@@ -101,35 +97,26 @@ class ReferenciasIARequest(BaseModel):
     porte: Optional[str] = None
     sexo: Optional[str] = None
     idade: Optional[float] = None
-    nome_cientifico: Optional[str] = None  # 👈 Adicionado para receber o binômio científico
+    nome_cientifico: Optional[str] = None
 
 # --------------------------------------------------------------------------- #
 # Auxiliares
 # --------------------------------------------------------------------------- #
 def _normalizar(texto: str) -> str:
-    """minúsculas e sem acentos, para comparar termos da queixa."""
     if not texto:
         return ""
     sem_acento = unicodedata.normalize("NFKD", texto.lower())
     return "".join(c for c in sem_acento if not unicodedata.combining(c))
 
 def _normalizar_raca(raca: Optional[str]) -> str:
-    """Padroniza o nome da raça para busca."""
     if not raca:
         return ""
     return _normalizar(raca.strip())
 
 def _eh_raca_generica(raca: Optional[str]) -> bool:
-    """Verifica se a raça é genérica/SRD."""
     return _normalizar_raca(raca) in RACAS_GENERICAS
 
 def _buscar_com_fallback(db: Session, perfil: dict, incluir_rascunhos: bool = False) -> tuple:
-    """
-    Busca referência:
-    1. Por espécie + raça + porte + sexo
-    2. Se genérica e não encontrou → por espécie + porte + sexo
-    3. Retorna (obj_bib, motivo)
-    """
     motivo = None
     bib = buscar_referencia_oficial(db, incluir_rascunhos=incluir_rascunhos, **perfil)
     
@@ -193,13 +180,12 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    # Normaliza todos os campos
     especie = (dados.especie or "").strip().capitalize()
     sub_especie = (dados.sub_especie or "").strip() or None
     raca = _normalizar_raca(dados.raca)
     porte = (dados.porte or "").strip() or None
     sexo = (dados.sexo or "").strip() or None
-    nome_cientifico = (dados.nome_cientifico or "").strip() or None  # 👈 Capturado da requisição
+    nome_cientifico = (dados.nome_cientifico or "").strip() or None
 
     perfil = dict(
         especie=especie,
@@ -212,33 +198,29 @@ def calcular_referencias_ia(
     bib = None
     motivo = None
 
-    # ─── PASSO 1: Busca exata ───
     bib = buscar_referencia_oficial(db, **perfil)
     if bib:
         motivo = "Perfil encontrado diretamente"
 
-    # ─── PASSO 2: SRD/genérica → tenta por porte ───
     if not bib and _eh_raca_generica(raca):
         perfil_porte = dict(perfil)
-        perfil_porte["raca"] = None  # Remove raça da busca
+        perfil_porte["raca"] = None
         bib = buscar_referencia_oficial(db, **perfil_porte)
         if bib:
             motivo = f"Raça genérica → usando referência por porte: {porte}"
 
-    # ─── PASSO 3: Nada encontrado → PESQUISA AUTOMÁTICA ───
     motivo_pesquisa = None
     if not bib:
         logger.info(f"Perfil não encontrado — iniciando pesquisa automática: {especie} | porte: {porte} | científico: {nome_cientifico}")
         perfil_pesquisa = dict(
             perfil, 
             raca=(dados.raca or "").strip() or None,
-            nome_cientifico=nome_cientifico  # 👈 Passado adiante para enriquecer a pesquisa automática
+            nome_cientifico=nome_cientifico
         )
         bib, motivo_pesquisa = pesquisar_e_registrar(db, **perfil_pesquisa)
         if not bib:
             logger.warning(f"Pesquisa automática sem dados confiáveis: {especie} | {motivo_pesquisa}")
 
-    # ─── PASSO 4: Ainda sem nada → avisa indisponível ───
     if not bib:
         indisponivel = dict(REFERENCIA_INDISPONIVEL)
         indisponivel["fonte_ref"] = (
@@ -248,7 +230,6 @@ def calcular_referencias_ia(
         )
         return indisponivel
 
-    # ─── PASSO 5: Monta resposta ───
     meta = metadados_da_linha(db, bib.id)
     status_ref = meta.get("status")
     rascunho = status_ref == "RASCUNHO"
@@ -318,7 +299,6 @@ def avaliar_triagem_ia(
     queixa = (dados.queixa_principal or "").strip()
     queixa_norm = _normalizar(queixa)
 
-    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO
     motivos = []
     if dados.temperatura is not None:
         if dados.temperatura >= LIMITE_TEMP_ALTA:
@@ -464,8 +444,13 @@ def criar_ou_atualizar_triagem(
             animal_id = consulta.animal_id if consulta else None
         animal_triado = db.query(Animal).filter(Animal.id == animal_id).first() if animal_id else None
         if animal_triado:
+            # 💡 CORREÇÃO APLICADA: Passa espécie e porte juntamente com raça e sexo para evitar IntegrityError
             referencia_gravada_id = promover_rascunho(
-                db, raca=animal_triado.raca, sexo=animal_triado.sexo
+                db, 
+                especie=animal_triado.especie,
+                raca=animal_triado.raca, 
+                porte=animal_triado.porte,
+                sexo=animal_triado.sexo
             )
     except Exception:
         db.rollback()
