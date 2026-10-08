@@ -35,9 +35,6 @@ from routes import triagem
 from routes import financeiro
 from routes import configuracoes
 
-from alembic.config import Config
-from alembic import command
-
 app = FastAPI(
     title="VetAssist AI",
     version="0.1.0"
@@ -49,14 +46,6 @@ try:
     print("✅ Todas as tabelas foram criadas/verificadas com sucesso no banco de dados!")
 except Exception as e:
     print(f"⚠️ Erro ao criar tabelas: {e}")
-
-# EXECUTAR MIGRAÇÕES DO ALEMBIC AUTOMATICAMENTE NO ARRANQUE
-try:
-    alembic_cfg = Config("alembic.ini")
-    command.upgrade(alembic_cfg, "head")
-    print("✅ Migrações do Alembic executadas com sucesso no arranque!")
-except Exception as e:
-    print(f"⚠️ Nota sobre as migrações do Alembic: {e}")
 
 # 2. APLICA AJUSTES OPCIONAIS DE COLUNAS DE FORMA ISOLADA
 with engine.connect() as conn:
