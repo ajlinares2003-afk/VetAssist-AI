@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger("vetassist.ia")
 
-TIMEOUT_SEGUNDOS = 20
+TIMEOUT_SEGUNDOS = 35
 TIMEOUT_PESQUISA_SEGUNDOS = 90  # pesquisa na web demora mais que uma resposta comum
 # O endpoint da Groq é compatível com o SDK da OpenAI. Pode ser sobrescrito por env.
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
