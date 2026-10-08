@@ -48,11 +48,11 @@ class Slot:
     envs: tuple        # variáveis de ambiente usadas como reserva para a chave
 
 
-# Ordem de prioridade: Gemini (principal) -> Groq 1 -> Groq 2.
+# Ordem de prioridade modificada: Groq 1 (principal com busca) -> Gemini -> Groq 2.
 SLOTS_ORDEM = (
+    Slot("groq_1", "groq", "groq_model_1", "groq_api_key_1", ("GROQ_API_KEY",)),
     Slot("gemini", "gemini", "gemini_model", "gemini_api_key",
          ("GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY")),
-    Slot("groq_1", "groq", "groq_model_1", "groq_api_key_1", ("GROQ_API_KEY",)),
     Slot("groq_2", "groq", "groq_model_2", "groq_api_key_2", ("GROQ_API_KEY",)),
 )
 
