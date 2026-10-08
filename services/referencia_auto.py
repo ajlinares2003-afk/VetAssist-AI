@@ -140,7 +140,6 @@ def validar_pesquisa(dados: dict) -> dict:
 # Motivo da falha em linguagem simples
 # --------------------------------------------------------------------------- #
 def _resumo_tentativa(texto: str) -> str:
-    """'groq_1/openai/gpt-oss-120b: RateLimitError | ...' -> 'groq_1: limite diário de tokens (TPD) atingido'."""
     origem, _, detalhe = texto.partition(": ")
     nome = origem.split("/")[0] or origem
     t = detalhe.lower()
@@ -174,7 +173,6 @@ def _motivo_das_tentativas(tentativas: list) -> str:
 
 
 def limpar_falhas_pesquisa() -> None:
-    """Chamada quando a configuração de IA muda (ou um teste de conexão passa): libera novas tentativas."""
     _falhas_recentes.clear()
 
 
@@ -182,7 +180,7 @@ def limpar_falhas_pesquisa() -> None:
 # Auxiliares
 # --------------------------------------------------------------------------- #
 def _sexo_da_biblioteca(sexo) -> str:
-    n = _sexo_chave(sexo)  # aceita "M"/"F" do cadastro e "macho"/"fêmea"
+    n = _sexo_chave(sexo)
     if n == "macho":
         return "macho"
     if n == "femea":
@@ -191,7 +189,6 @@ def _sexo_da_biblioteca(sexo) -> str:
 
 
 def _nome_do_perfil(raca) -> Optional[str]:
-    """'Caracal - Lince do Deserto' -> 'Caracal (Lince do Deserto)'. Genérica -> None."""
     texto = str(raca or "").strip()
     if not texto:
         return None
@@ -219,13 +216,11 @@ def _nome_do_perfil(raca) -> Optional[str]:
 
 
 def _perfil_existente(linhas, raca):
-    """Descritor que já responde por essa raça (para só acrescentar o sexo que falta)."""
     partes_raca = {p for p in _partes(raca) if p not in GENERICAS}
     return [d for d in _montar_descritores(linhas) if partes_raca & (d.aliases | d.exemplos)]
 
 
 def _identificar_grupo_animal(especie: str, sub_especie: str) -> str:
-    """Classifica o animal em um dos grupos da matriz de fontes oficiais."""
     texto = f"{especie or ''} {sub_especie or ''}".lower()
 
     prod_termos = {"bovino", "suino", "ovino", "caprino", "equino", "bubalino",
@@ -430,19 +425,23 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
         "observacoes_ia": d["observacoes"],
     }
 
-    # 💡 TRATAMENTO BLINDADO DE INTEGRITYERROR NO INSERIR
+    # 💡 TRATAMENTO BLINDADO DE INTEGRITYERROR / CONFLITO:
+    # Tenta inserir; se já existir, apanha a exceção e recupera o registo existente sem falhar.
     novo_id = None
     try:
         novo_id = db.execute(_INSERIR, parametros).scalar()
         db.commit()
     except Exception as e:
         db.rollback()
-        logger.warning(f"Conflito de integridade capturado no insert (ignorado com segurança): {e}")
+        logger.warning(f"Conflito capturado no insert (recuperando registo existente com segurança): {e}")
+        novo_id = None
 
     if novo_id is None:
-        achada = next((l for l in db.query(Bib).all()
-                       if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
-        return achada, (None if achada else "conflito ao gravar a referência")
+        achada = db.query(Bib).filter(
+            Bib.especie == especie_perfil,
+            Bib.sexo == sexo_bib
+        ).first()
+        return achada, None
 
     return db.query(Bib).filter(Bib.id == novo_id).first(), None
 
