@@ -196,7 +196,6 @@ def _nome_do_perfil(raca) -> Optional[str]:
     if not texto:
         return None
 
-    # aliases fortes para raça genérica ou indefinida
     aliases = {
         "srd", "sem raça", "sem raca", "sem raça definida", "sem raca definida",
         "mestiço", "mestico", "vazio", "indefinido", "nao informado", "não informado",
@@ -244,7 +243,6 @@ def _identificar_grupo_animal(especie: str, sub_especie: str) -> str:
 def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None, idade=None) -> str:
     grupo_animal = _identificar_grupo_animal(especie, sub_especie)
 
-    # Hierarquia de fontes estritamente alinhada à sua tabela oficial
     if grupo_animal == "Domésticos":
         fontes_prioritarias = (
             "1ª Opção: MSD Vet Manual (Merck Veterinary Manual)\n"
@@ -257,7 +255,7 @@ def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None
             "2ª Opção: Embrapa\n"
             "3ª Opção: Iowa State University Veterinary College"
         )
-    else:  # Silvestres/Exóticos
+    else:
         fontes_prioritarias = (
             "1ª Opção: ExoCalc\n"
             "2ª Opção: VIN (Veterinary Information Network)\n"
@@ -328,7 +326,6 @@ _INSERIR = text("""
 # API pública
 # --------------------------------------------------------------------------- #
 def metadados_da_linha(db: Session, linha_id: int) -> dict:
-    """status/origem/fontes da linha. Se a migração ainda não rodou, assume VALIDADO/MANUAL."""
     try:
         r = db.execute(
             text("SELECT status, origem, fontes, observacoes_ia "
@@ -344,10 +341,6 @@ def metadados_da_linha(db: Session, linha_id: int) -> dict:
 
 
 def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, porte, nome_cientifico=None, idade=None):
-    """
-    Pesquisa na literatura utilizando a chave multivariada (Nome Científico + Porte + Sexo + Idade)
-    e guarda o resultado como RASCUNHO.
-    """
     try:
         return _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cientifico, idade)
     except Exception as exc:
@@ -368,7 +361,6 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
     sexo_bib = _sexo_da_biblioteca(sexo)
     linhas = db.query(Bib).order_by(Bib.id).all()
 
-    # Já existe perfil para essa raça? Reaproveita o MESMO texto de `especie`.
     existentes = _perfil_existente(linhas, raca)
     if len(existentes) > 1:
         logger.warning("Raça %r casa com mais de um perfil; não cadastrar.", raca)
@@ -376,13 +368,11 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
     base = existentes[0].linhas[0] if existentes else None
     especie_perfil = base.especie if base else nome
 
-    # Concorrência: alguém pode já ter cadastrado este perfil+sexo.
     ja_existe = next((l for l in linhas
                       if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
     if ja_existe:
         return ja_existe, None
 
-    # Pausa após falha recente do mesmo perfil
     chave_falha = (_norm(especie_perfil), _norm(sexo_bib))
     anterior = _falhas_recentes.get(chave_falha)
     if anterior:
@@ -440,8 +430,14 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
         "observacoes_ia": d["observacoes"],
     }
 
-    novo_id = db.execute(_INSERIR, parametros).scalar()
-    db.commit()
+    # 💡 TRATAMENTO BLINDADO DE INTEGRITYERROR NO INSERIR
+    novo_id = None
+    try:
+        novo_id = db.execute(_INSERIR, parametros).scalar()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Conflito de integridade capturado no insert (ignorado com segurança): {e}")
 
     if novo_id is None:
         achada = next((l for l in db.query(Bib).all()
@@ -452,9 +448,6 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
 
 
 def promover_rascunho(db: Session, *, raca, sexo) -> Optional[int]:
-    """
-    Chamada ao FINALIZAR a triagem: o RASCUNHO do perfil/sexo do animal passa a PENDENTE.
-    """
     try:
         nome = _nome_do_perfil(raca)
         if nome is None:
