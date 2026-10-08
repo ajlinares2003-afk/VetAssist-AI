@@ -244,23 +244,24 @@ def _identificar_grupo_animal(especie: str, sub_especie: str) -> str:
 def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None, idade=None) -> str:
     grupo_animal = _identificar_grupo_animal(especie, sub_especie)
 
+    # Hierarquia de fontes estritamente alinhada à sua tabela oficial
     if grupo_animal == "Domésticos":
         fontes_prioritarias = (
-            "1ª Opção: Merck Veterinary Manual\n"
-            "2ª Opção: BSAVA Manual\n"
-            "3ª Opção: Blackwell"
+            "1ª Opção: MSD Vet Manual (Merck Veterinary Manual)\n"
+            "2ª Opção: Cornell eClinPath\n"
+            "3ª Opção: UC Davis Veterinary Medicine"
         )
     elif grupo_animal == "Produção":
         fontes_prioritarias = (
-            "1ª Opção: Merck Veterinary Manual\n"
+            "1ª Opção: MSD Saúde Animal / Produção\n"
             "2ª Opção: Embrapa\n"
-            "3ª Opção: OIE"
+            "3ª Opção: Iowa State University Veterinary College"
         )
     else:  # Silvestres/Exóticos
         fontes_prioritarias = (
-            "1ª Opção: Mader (Reptile Medicine/Exotic)\n"
-            "2ª Opção: Fowler's Zoo and Wild Animal Medicine\n"
-            "3ª Opção: BSAVA Exóticos"
+            "1ª Opção: ExoCalc\n"
+            "2ª Opção: VIN (Veterinary Information Network)\n"
+            "3ª Opção: Animal Diversity Web (ADW)"
         )
 
     return (
@@ -268,17 +269,17 @@ def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None
         "⚠️ REGRA SUPREMA: VOCÊ DEVE PESQUISAR EXCLUSIVAMENTE E ESTRITAMENTE NAS SEGUINTES FONTES OFICIAIS, "
         f"divididas por ordem de prioridade para o grupo ({grupo_animal}):\n"
         f"{fontes_prioritarias}\n"
-        "Caso não encontre nestas fontes exatas, utilize secundariamente as bases de ciência geral (PubMed, SciELO, Scholar). "
+        "Caso não encontre nestas fontes exatas, utilize secundariamente as bases acadêmicas indexadas (PubMed, SciELO). "
         "NUNCA utilize blogs, sites genéricos ou fóruns não acadêmicos.\n\n"
-        "Busque os parâmetros fisiológicos de referência cruzando obrigatoriamente todos os dados do paciente (Chave Multivariada):\n\n"
-        f"- Perfil / Raça comercial: {nome}\n"
+        "Busque os parâmetros fisiológicos de referência cruzando obrigatoriamente a Chave Multivariada:\n\n"
+        f"- Raça / Nome Comercial: {nome}\n"
         f"- Nome Científico (Taxonomia obrigatória): {nome_cientifico or 'Não informado'}\n"
         f"- Espécie / Sub-espécie: {especie or 'não informada'} / {sub_especie or 'não informada'}\n"
         f"- Porte: {porte or 'não informado'}\n"
         f"- Sexo: {sexo or 'indiferente'}\n"
         f"- Idade / Estágio de vida: {idade if idade is not None else 'não informada'} anos (Adapte para filhote, adulto ou idoso conforme a literatura)\n\n"
         "REGRAS CLÍNICAS:\n"
-        "- Respeite rigorosamente as variações fisiológicas de porte (pequeno, médio, grande, gigante), sexo e faixa etária.\n"
+        "- Respeite rigorosamente as variações fisiológicas de porte, sexo e faixa etária.\n"
         "- 'repouso' = animal calmo, sem estresse; 'clinica' = durante o atendimento/manejo hospitalar.\n"
         "- Se a literatura oficial primária não trouxer os parâmetros para essa combinação exata, "
         "responda obrigatoriamente com \"confianca\": \"baixa\" (nada será cadastrado).\n"
