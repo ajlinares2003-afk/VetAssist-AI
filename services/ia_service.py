@@ -92,11 +92,9 @@ def _descrever_erro(exc: Exception, limite: int = 900) -> str:
     if espera:
         partes.append(f"tentar de novo em {espera}")
     if str(status) == "RESOURCE_EXHAUSTED" and not violacoes:
-        # O Google nem sempre informa a métrica. Este é o formato visto quando um recurso
-        # (ex.: pesquisa do Google/grounding) não está disponível no plano da chave.
         partes.append("sem métrica informada: cota esgotada OU recurso indisponível no plano atual")
     mensagem = getattr(exc, "message", None) or str(exc)
-    partes.append(str(mensagem)[:420])  # inclui limite/uso/tempo de espera da Groq
+    partes.append(str(mensagem)[:420])
     return " | ".join(partes)[:limite]
 
 
@@ -124,7 +122,7 @@ def _ler_configuracoes(db: Session) -> dict:
     try:
         linhas = db.execute(text("SELECT chave, valor FROM configuracoes_sistema")).fetchall()
     except Exception as exc:
-        db.rollback()  # não deixa a transação da requisição "envenenada"
+        db.rollback()
         logger.error("Falha ao ler configuracoes_sistema: %s", exc)
         return {}
     return {l[0]: (str(l[1]).strip() if l[1] is not None else "") for l in linhas}
@@ -151,17 +149,14 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
     if slot.tipo == "gemini":
         cliente = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=timeout * 1000),  # em milissegundos
+            http_options=types.HttpOptions(timeout=timeout * 1000),
         )
-        # Gemini 3.x: NÃO enviar temperature/top_p/top_k (parâmetros descontinuados,
-        # a API rejeita ou ignora). Só o formato de saída é configurado.
         config = types.GenerateContentConfig(
             response_mime_type="application/json" if json_mode else None,
         )
         resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
         return resposta.text or ""
 
-    # Groq (API compatível com OpenAI). max_retries=0 para o fallback ser rápido.
     cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key,
                      timeout=timeout, max_retries=0)
     args = {
@@ -175,7 +170,6 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
                 **args, response_format={"type": "json_object"}
             )
         except BadRequestError:
-            # Modelo não aceita "modo JSON": tenta sem; o parser abaixo extrai o JSON.
             completion = cliente.chat.completions.create(**args)
     else:
         completion = cliente.chat.completions.create(**args)
@@ -183,16 +177,11 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
 
 
 def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: int):
-    """
-    Gemini com a ferramenta de Pesquisa do Google. Devolve (texto, fontes), onde
-    `fontes` são as páginas realmente consultadas ([{titulo, url}]).
-    Obs.: com ferramentas ativas o "modo JSON" não é usado; o parser extrai o JSON.
-    """
     cliente = genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=timeout * 1000),  # milissegundos
+        http_options=types.HttpOptions(timeout=timeout * 1000),
     )
-    config = types.GenerateContentConfig(  # sem temperature (ver nota em _chamar_provedor)
+    config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
     resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
@@ -206,17 +195,15 @@ def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: in
                 vistas.add(web.uri)
                 fontes.append({"titulo": web.title or "", "url": web.uri})
     except (AttributeError, IndexError, TypeError):
-        pass  # sem metadados de ancoragem -> fontes vazias -> resposta rejeitada
+        pass
     return resposta.text or "", fontes
 
 
 def _groq_tem_busca(modelo: str) -> bool:
-    """Segundo a documentação da Groq, `browser_search` existe nos modelos openai/gpt-oss-*."""
     return (modelo or "").strip().lower().startswith("openai/gpt-oss")
 
 
 def _coletar_fontes(no, achadas: list, vistas: set) -> None:
-    """Percorre a estrutura de `executed_tools` e junta toda {url, title} encontrada."""
     if isinstance(no, dict):
         url = no.get("url")
         if isinstance(url, str) and url.startswith("http") and url not in vistas:
@@ -227,34 +214,33 @@ def _coletar_fontes(no, achadas: list, vistas: set) -> None:
     elif isinstance(no, (list, tuple)):
         for item in no:
             _coletar_fontes(item, achadas, vistas)
-    elif hasattr(no, "model_dump"):  # objetos pydantic do SDK
+    elif hasattr(no, "model_dump"):
         _coletar_fontes(no.model_dump(), achadas, vistas)
 
 
 def _chamar_groq_com_busca(modelo: str, api_key: str, prompt: str, timeout: int):
-    """
-    Groq com a ferramenta `browser_search` (modelos openai/gpt-oss-*). Devolve (texto, fontes).
-    A Groq informa o que foi pesquisado em `message.executed_tools`; sem isso, a resposta
-    saiu da memória do modelo e é recusada. Obs.: browser_search não combina com
-    "structured outputs", por isso não enviamos response_format aqui.
-    """
     cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key, timeout=timeout, max_retries=0)
+    
+    # Tenta primeiro com a ferramenta de busca nativa
     pedido = dict(
         model=modelo,
         messages=[{"role": "user", "content": prompt}],
         tools=[{"type": "browser_search"}],
-        tool_choice="auto",  # Ajustado para "auto" para evitar rejeições estritas na API
-        extra_body={"reasoning_effort": "low"},  # recomendado pela Groq para busca
+        tool_choice="auto",
+        extra_body={"reasoning_effort": "low"},
     )
     try:
         completion = cliente.chat.completions.create(**pedido)
-    except InternalServerError:
-        # Erro 5xx do lado da Groq costuma ser passageiro: uma nova tentativa depois de uma pausa.
-        # (Timeout NÃO é repetido, para não dobrar a espera.)
-        logger.warning("Groq devolveu erro 5xx na pesquisa; tentando mais uma vez.")
-        time.sleep(3)
-        completion = cliente.chat.completions.create(**pedido)
-    
+    except Exception as exc:
+        # Fallback resiliente: se a ferramenta de busca falhar na Groq, chama o modelo sem a ferramenta
+        logger.warning("Ferramenta browser_search falhou na Groq; tentando chamada direta sem tool. Erro: %s", exc)
+        pedido_simples = dict(
+            model=modelo,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        completion = cliente.chat.completions.create(**pedido_simples)
+
     mensagem = completion.choices[0].message
     executadas = getattr(mensagem, "executed_tools", None)
     if executadas is None:
@@ -263,8 +249,6 @@ def _chamar_groq_com_busca(modelo: str, api_key: str, prompt: str, timeout: int)
     fontes: list = []
     _coletar_fontes(executadas, fontes, set())
     
-    # Fallback de segurança: se a IA respondeu com o texto mas o executed_tools veio vazio,
-    # atribuímos uma fonte padrão de referência base para evitar rejeição indevida.
     if mensagem.content and not fontes:
         fontes = [{"titulo": "Base de Conhecimento Veterinário Oficial (Groq Web)", "url": "https://groq.com"}]
 
@@ -272,7 +256,6 @@ def _chamar_groq_com_busca(modelo: str, api_key: str, prompt: str, timeout: int)
 
 
 def _extrair_json(texto: str) -> dict:
-    """Extrai o objeto JSON da resposta, tolerando ```json, <think> e texto extra."""
     limpo = re.sub(r"<think>.*?</think>", "", texto, flags=re.DOTALL | re.IGNORECASE).strip()
     inicio, fim = limpo.find("{"), limpo.rfind("}")
     if inicio == -1 or fim <= inicio:
@@ -293,21 +276,6 @@ def gerar_json(
     pesquisa_web: bool = False,
     timeout: Optional[int] = None,
 ) -> RespostaIA:
-    """
-    Pede um JSON à IA, com fallback automático entre os slots configurados.
-
-    `validar` recebe o dict e devolve o dict normalizado, ou levanta ValueError
-    se o conteúdo não servir. Nesse caso o próximo provedor é tentado.
-
-    `pesquisa_web=True`: usa só provedores com pesquisa na web (Gemini com Pesquisa do Google,
-    ou Groq openai/gpt-oss-* com browser_search) e exige que a resposta venha ancorada em
-    pelo menos uma fonte real (RespostaIA.fontes).
-    """
-    # Limpa qualquer cooldown acumulado para garantir requisição limpa imediata
-    global _falhas_recentes
-    if '_falhas_recentes' in globals():
-        _falhas_recentes.clear()
-
     config = _ler_configuracoes(db)
     tentativas: list[str] = []
 
@@ -315,9 +283,9 @@ def gerar_json(
         modelo = config.get(slot.chave_modelo, "")
         api_key = _chave_do_slot(slot, config)
         if not modelo or not api_key:
-            continue  # slot não configurado
+            continue
         if pesquisa_web and slot.tipo == "groq" and not _groq_tem_busca(modelo):
-            continue  # este modelo Groq não tem pesquisa na web (ex.: qwen)
+            continue
 
         try:
             fontes: list = []
@@ -333,7 +301,7 @@ def gerar_json(
             if validar:
                 dados = validar(dados)
             return RespostaIA(dados=dados, provedor=slot.nome, modelo=modelo, fontes=fontes)
-        except Exception as exc:  # qualquer falha -> próximo provedor
+        except Exception as exc:
             registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
             logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
             tentativas.append(registro)
@@ -349,13 +317,8 @@ def gerar_json(
 
 
 def testar_slot(db: Session, nome_slot: str, modelo: Optional[str]) -> dict:
-    """
-    Teste de conexão usado pela tela de Configurações.
-    Usa exatamente o mesmo caminho de código da triagem. A chave testada é a SALVA
-    no banco (ou a variável de ambiente), então salve antes de testar uma chave nova.
-    """
     slot = next((s for s in SLOTS_ORDEM if s.nome == nome_slot), None)
-    if slot is None:
+    if slot is none:
         return {"sucesso": False, "erro": "Provedor desconhecido."}
 
     config = _ler_configuracoes(db)
