@@ -49,6 +49,7 @@ CAMPOS_NUMERICOS = (
     ("fr_repouso_min", True), ("fr_repouso_max", True),
     ("fr_clinica_min", True), ("fr_clinica_max", True),
 )
+
 # Limites só para barrar lixo de formatação (ex.: "7-14" lido como 714).
 # NÃO são regra clínica; quem valida o conteúdo é o veterinário.
 SANIDADE = {"peso": (0.001, 10000), "temp": (25, 48), "fc": (5, 1000), "fr": (1, 500)}
@@ -60,12 +61,23 @@ SANIDADE = {"peso": (0.001, 10000), "temp": (25, 48), "fc": (5, 1000), "fr": (1,
 def _numero(valor, inteiro: bool):
     if isinstance(valor, bool):
         raise ValueError("valor booleano")
-    numero = float(str(valor).replace(",", ".").strip())
+    if valor is None:
+        raise ValueError("valor ausente")
+    texto = str(valor).strip()
+    if texto == "":
+        raise ValueError("valor vazio")
+    try:
+        numero = float(texto.replace(",", "."))
+    except (TypeError, ValueError):
+        raise ValueError("valor não numérico")
     return int(round(numero)) if inteiro else round(numero, 2)
 
 
 def validar_pesquisa(dados: dict) -> dict:
     """Normaliza e valida o JSON da pesquisa. Levanta ValueError se não servir."""
+    if not isinstance(dados, dict):
+        raise ValueError("JSON da pesquisa não é um objeto.")
+
     confianca = _norm(dados.get("confianca"))
     if confianca not in ("alta", "media"):
         raise ValueError("Literatura insuficiente (confiança baixa ou ausente).")
@@ -86,6 +98,8 @@ def validar_pesquisa(dados: dict) -> dict:
             raise ValueError(f"Faixa inconsistente em {base}: {minimo}-{maximo}")
 
     tpc = str(dados.get("tpc_ref") or "").strip()
+    if not tpc:
+        raise ValueError("tpc_ref ausente.")
     if not (re.search(r"\d", tpc) and re.search(r"seg|\d\s*s\b", tpc.lower())) or "°" in tpc:
         raise ValueError("tpc_ref não parece ser um tempo em segundos.")
     saida["tpc_ref"] = tpc
@@ -99,7 +113,24 @@ def validar_pesquisa(dados: dict) -> dict:
     citadas = dados.get("fontes_citadas")
     if not isinstance(citadas, list) or not any(isinstance(f, dict) and f.get("titulo") for f in citadas):
         raise ValueError("Nenhuma fonte bibliográfica citada.")
-    saida["fontes_citadas"] = [f for f in citadas if isinstance(f, dict)][:8]
+
+    saida["fontes_citadas"] = []
+    for f in citadas[:8]:
+        if not isinstance(f, dict):
+            continue
+        titulo = str(f.get("titulo") or "").strip()
+        if not titulo:
+            continue
+        saida["fontes_citadas"].append({
+            "titulo": titulo[:300],
+            "autores": str(f.get("autores") or "").strip()[:400],
+            "ano": str(f.get("ano") or "").strip()[:20],
+            "url": str(f.get("url") or "").strip()[:500],
+        })
+
+    if not saida["fontes_citadas"]:
+        raise ValueError("Nenhuma fonte bibliográfica citada.")
+
     saida["confianca"] = confianca
     saida["observacoes"] = str(dados.get("observacoes") or "").strip()[:1000]
     return saida
@@ -120,7 +151,7 @@ def _resumo_tentativa(texto: str) -> str:
     elif "tokens per minute" in t or "(tpm)" in t:
         motivo = "limite de tokens por minuto (TPM) atingido" + liberado
     elif "rate_limit" in t or "rate limit" in t:
-        motivo = "limite de uso da Groq atingido" + liberado
+        motivo = "limite de uso da IA atingido" + liberado
     elif "api key not valid" in t or "invalid api key" in t or "invalid_api_key" in t or "401" in t:
         motivo = "chave de API inválida: confira a chave em Configurações de IA"
     elif "not_found" in t or "no longer available" in t or "404" in t:
@@ -161,10 +192,31 @@ def _sexo_da_biblioteca(sexo) -> str:
 
 def _nome_do_perfil(raca) -> Optional[str]:
     """'Caracal - Lince do Deserto' -> 'Caracal (Lince do Deserto)'. Genérica -> None."""
-    partes = [p.strip() for p in re.split(r"\s+-\s+", str(raca or "")) if p.strip()]
-    if not partes or _norm(partes[0]) in GENERICAS:
+    texto = str(raca or "").strip()
+    if not texto:
         return None
-    return f"{partes[0]} ({' - '.join(partes[1:])})" if len(partes) > 1 else partes[0]
+
+    # aliases fortes para raça genérica ou indefinida
+    aliases = {
+        "srd", "sem raça", "sem raca", "sem raça definida", "sem raca definida",
+        "mestiço", "mestico", "vazio", "indefinido", "nao informado", "não informado",
+        "sem informação", "sem informacao", "generic", "genérico", "generico",
+        "mixed", "cruza", "sem perfil", "sem raça conhecida"
+    }
+
+    chave = _norm(texto)
+    if chave in aliases or chave.startswith("srd"):
+        return None
+
+    partes = [p.strip() for p in re.split(r"\s+-\s+", texto) if p.strip()]
+    if not partes:
+        return None
+
+    primeira = partes[0]
+    if _norm(primeira) in GENERICAS:
+        return None
+
+    return f"{primeira} ({' - '.join(partes[1:])})" if len(partes) > 1 else primeira
 
 
 def _perfil_existente(linhas, raca):
@@ -176,21 +228,22 @@ def _perfil_existente(linhas, raca):
 def _identificar_grupo_animal(especie: str, sub_especie: str) -> str:
     """Classifica o animal em um dos grupos da matriz de fontes oficiais."""
     texto = f"{especie or ''} {sub_especie or ''}".lower()
-    
-    prod_termos = {"bovino", "suino", "ovino", "caprino", "equino", "bubalino", "avestruz", "galinha", "suíno"}
+
+    prod_termos = {"bovino", "suino", "ovino", "caprino", "equino", "bubalino",
+                   "avestruz", "galinha", "suíno", "porco", "gado"}
     if any(t in texto for t in prod_termos):
         return "Produção"
-        
-    dom_termos = {"canino", "felino", "cao", "gato", "cachorro"}
+
+    dom_termos = {"canino", "felino", "cao", "gato", "cachorro", "dog", "cat"}
     if any(t in texto for t in dom_termos):
         return "Domésticos"
-        
+
     return "Silvestres/Exóticos"
 
 
 def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None, idade=None) -> str:
     grupo_animal = _identificar_grupo_animal(especie, sub_especie)
-    
+
     if grupo_animal == "Domésticos":
         fontes_prioritarias = (
             "1ª Opção: Merck Veterinary Manual\n"
@@ -343,13 +396,13 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
         resposta = gerar_json(
             db,
             _montar_prompt(
-                especie_perfil, 
-                sexo_bib, 
-                porte, 
-                sub_especie, 
-                especie, 
+                especie_perfil,
+                sexo_bib,
+                porte,
+                sub_especie,
+                especie,
                 nome_cientifico=nome_cientifico or getattr(base, "nome_cientifico", None),
-                idade=idade
+                idade=idade,
             ),
             validar=validar_pesquisa,
             pesquisa_web=True,
@@ -373,13 +426,19 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
         "tpc_ref": d["tpc_ref"],
         "mucosas_ref": d["mucosas_ref"],
         "ecc_ideal": ECC_IDEAL_PADRAO,
-        "fonte_bibliografica": (f"Pesquisa automática por IA, PENDENTE de validação veterinária. "
-                                f"Fontes oficiais: {titulos}")[:600],
-        "fontes": json.dumps({"citadas": d["fontes_citadas"], "web": resposta.fontes,
-                              "confianca": d["confianca"], "modelo": f"{resposta.provedor}/{resposta.modelo}"},
-                             ensure_ascii=False),
+        "fonte_bibliografica": (
+            f"Pesquisa automática por IA, PENDENTE de validação veterinária. "
+            f"Fontes oficiais: {titulos}"
+        )[:600],
+        "fontes": json.dumps({
+            "citadas": d["fontes_citadas"],
+            "web": resposta.fontes,
+            "confianca": d["confianca"],
+            "modelo": f"{resposta.provedor}/{resposta.modelo}",
+        }, ensure_ascii=False),
         "observacoes_ia": d["observacoes"],
     }
+
     novo_id = db.execute(_INSERIR, parametros).scalar()
     db.commit()
 
@@ -387,6 +446,7 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
         achada = next((l for l in db.query(Bib).all()
                        if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
         return achada, (None if achada else "conflito ao gravar a referência")
+
     return db.query(Bib).filter(Bib.id == novo_id).first(), None
 
 
@@ -395,17 +455,24 @@ def promover_rascunho(db: Session, *, raca, sexo) -> Optional[int]:
     Chamada ao FINALIZAR a triagem: o RASCUNHO do perfil/sexo do animal passa a PENDENTE.
     """
     try:
-        if _nome_do_perfil(raca) is None:
+        nome = _nome_do_perfil(raca)
+        if nome is None:
             return None
+
         from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
         linhas = db.query(Bib).order_by(Bib.id).all()
         existentes = _perfil_existente(linhas, raca)
+
         if len(existentes) != 1:
             return None
+
+        especie_perfil = existentes[0].linhas[0].especie
+        sexo_bib = _sexo_da_biblioteca(sexo)
+
         promovido = db.execute(
             text("UPDATE biblioteca_parametros_oficiais SET status = 'PENDENTE' "
                  "WHERE especie = :e AND sexo = :s AND status = 'RASCUNHO' RETURNING id"),
-            {"e": existentes[0].linhas[0].especie, "s": _sexo_da_biblioteca(sexo)},
+            {"e": especie_perfil, "s": sexo_bib},
         ).scalar()
         db.commit()
         return promovido
