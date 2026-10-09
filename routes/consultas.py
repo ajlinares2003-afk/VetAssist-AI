@@ -352,7 +352,8 @@ def listar_consultas(
     usuario_logado: str = Depends(obter_usuario_logado),
     db: Session = Depends(get_db)
 ):
-    consultas = db.query(Consulta).order_by(Consulta.id.desc()).all()
+    # Devolvemos a listagem ORM original, limpa e à prova de falhas
+    return db.query(Consulta).order_by(Consulta.id.desc()).all()
     
     # Consolida os dados de triagem diretamente para as consultas sem peso/temperatura
     for c in consultas:
