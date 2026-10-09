@@ -356,8 +356,8 @@ def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, port
     except Exception as exc:
         db.rollback()
         logger.exception("Falha na pesquisa automática de referência")
-        return None, (f"erro ao cadastrar a referência ({type(exc).__name__}). "
-                      "Confirme se a migração da biblioteca (faixa_etaria) foi executada.")
+        return None, (f"erro interno ao pesquisar/cadastrar a referência: "
+                      f"{type(exc).__name__}: {str(exc)[:200]} (detalhes no log do servidor)")
 
 
 def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cientifico,
@@ -365,6 +365,10 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
     from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
 
     faixa = faixa if faixa in FAIXAS else "adulto"
+    try:
+        idade = float(idade) if idade is not None else None  # Decimal/str -> float (JSON e prompt)
+    except (TypeError, ValueError):
+        idade = None
     sexo_bib = _sexo_da_biblioteca(sexo)
     linhas = db.query(Bib).order_by(Bib.id).all()
     raca_generica = _nome_do_perfil(raca) is None

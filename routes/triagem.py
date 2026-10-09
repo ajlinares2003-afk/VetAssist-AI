@@ -280,7 +280,7 @@ def calcular_referencias_ia(
             f"Porte: {perfil['porte'] or 'não informado'} | Faixa etária: {ROTULO_FAIXA[faixa]}"
         )
         indisponivel.update(faixa_etaria=faixa, nome_cientifico=perfil["nome_cientifico"],
-                            peso_ref_aplicavel=False)
+                            peso_ref_aplicavel=(faixa != FILHOTE))
         return indisponivel
 
     meta = metadados_da_linha(db, bib.id)
