@@ -1,5 +1,4 @@
-import time
-import requests
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -8,10 +7,13 @@ from schemas.animais import AnimalCreate, AnimalResponse
 from database.database import get_db, SessionLocal
 from models.animais import Animal
 from models.tutor import Tutor
+from services.nome_cientifico import buscar_nome_cientifico
 from services.security import (
     obter_usuario_logado,
     exigir_perfil
 )
+
+logger = logging.getLogger("vetassist.animais")
 
 router = APIRouter(
     prefix="/animais",
@@ -19,58 +21,22 @@ router = APIRouter(
 )
 
 def background_buscar_nome_cientifico(animal_id: int, especie: str, sub_especie: str, raca: str):
-    """Busca o nome científico na Groq aguardando a consolidação do registro na base de dados."""
-    time.sleep(1)
+    """Busca o nome científico pela camada de IA do sistema (Gemini -> Groq 1 -> Groq 2)."""
     db = SessionLocal()
     try:
-        resultados = db.execute(
-            text("SELECT chave, valor FROM configuracoes_sistema")
-        ).fetchall()
-
-        config = {row[0]: row[1] for row in resultados}
-        api_key = config.get("groq_api_key_1") or config.get("groq_api_key_2")
-        modelo = config.get("groq_model_1") or config.get("groq_model_2")
-
-        if not api_key or not modelo:
-            print("Aviso Background: Chave ou modelo Groq não encontrados nas configurações do sistema.")
+        nome = buscar_nome_cientifico(db, especie, sub_especie, raca)
+        if not nome:
+            logger.warning("Nome científico não obtido para o animal %s (IA indisponível).", animal_id)
             return
-
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        prompt = (
-            f"Retorne apenas o nome científico binomial (gênero e espécie) em formato de texto simples, "
-            f"sem pontuações extras ou explicações, para o animal: "
-            f"Espécie: {especie}, Sub-espécie/Tipo: {sub_especie}, Raça: {raca}. "
-            f"Se desconhecido, retorne o nome científico da espécie principal."
+        db.execute(
+            text("UPDATE animal SET nome_cientifico = :nc WHERE id = :id"),
+            {"nc": nome, "id": animal_id},
         )
-
-        payload = {
-            "model": modelo,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1
-        }
-
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            nome_cientifico = data["choices"][0]["message"]["content"].strip().replace('"', '')
-            
-            db.execute(
-                text("UPDATE animal SET nome_cientifico = :nc WHERE id = :id"),
-                {"nc": nome_cientifico, "id": animal_id}
-            )
-            db.commit()
-            print(f"Sucesso: Nome científico '{nome_cientifico}' gravado para o animal ID {animal_id}.")
-        else:
-            print(f"Erro Groq API ({response.status_code}): {response.text}")
-            
-    except Exception as e:
-        print(f"Exceção crítica em background ao buscar nome científico: {e}")
+        db.commit()
+        logger.info("Nome científico '%s' gravado para o animal %s.", nome, animal_id)
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao buscar o nome científico do animal %s", animal_id)
     finally:
         db.close()
 
@@ -250,12 +216,21 @@ def atualizar_animal(
         if animal.codigo:
             animal_db.codigo = animal.codigo
             
+        # compara ANTES de atribuir (antes, a comparação vinha depois e nunca detectava mudança)
+        identidade_mudou = (
+            animal_db.especie != animal.especie
+            or animal_db.sub_especie != animal.sub_especie
+            or animal_db.raca != animal.raca
+            or not animal_db.nome_cientifico
+        )
+
         animal_db.nome = animal.nome
         animal_db.especie = animal.especie
         animal_db.sub_especie = animal.sub_especie
         animal_db.raca = animal.raca
 
-        if animal_db.especie != animal.especie or animal_db.sub_especie != animal.sub_especie or animal_db.raca != animal.raca or not animal_db.nome_cientifico:
+        if identidade_mudou:
+            animal_db.nome_cientifico = None  # será regerado em segundo plano
             background_tasks.add_task(
                 background_buscar_nome_cientifico,
                 animal_db.id,

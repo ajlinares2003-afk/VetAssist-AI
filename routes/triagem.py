@@ -10,7 +10,11 @@ from models.animais import Animal
 from models.usuario import Usuario  # noqa: F401
 from models.triagem import Triagem
 from services.biblioteca_referencia import buscar_referencia_oficial
-from services.referencia_auto import metadados_da_linha, pesquisar_e_registrar, promover_rascunho
+from services.faixa_etaria import (
+    ADULTO, FILHOTE, ROTULO as ROTULO_FAIXA, calcular_faixa_etaria, faixa_e_aplicavel,
+)
+from services.nome_cientifico import buscar_nome_cientifico
+from services.referencia_auto import metadados_da_linha, pesquisar_e_registrar, promover_rascunho_por_id
 from services.ia_service import IAIndisponivelError, gerar_json
 from services.security import obter_usuario_logado
 
@@ -28,12 +32,16 @@ router = APIRouter(
 CORES_MANCHESTER = ("VERMELHO", "LARANJA", "AMARELO", "VERDE", "AZUL")
 ECC_REF_PADRAO = "💡 Ideal: 5/9 (Escala 1 a 9)"
 
+# Travão físico (regras originais mantidas). A FC foi retirada daqui de propósito:
+# cortes fixos (ex.: 200 bpm) classificam um Caracal normal em atendimento
+# (140-220 bpm) como emergência. A FC é avaliada pela IA com a faixa da espécie.
 LIMITE_TEMP_ALTA = 40.5
 LIMITE_TEMP_BAIXA = 35.0
 LIMITE_TPC_SEG = 3
 
 TERMOS_EMERGENCIA = ("inconsciente", "inconsciencia", "desmai", "decubito")
 
+# Lista de valores considerados raça genérica/SRD
 RACAS_GENERICAS = {
     "srd",
     "sem raça definida",
@@ -91,46 +99,116 @@ class AvaliacaoIARequest(BaseModel):
     mucosas: Optional[str] = "Normocoradas"
 
 class ReferenciasIARequest(BaseModel):
+    animal_id: Optional[int] = None  # preferido: os dados são lidos do cadastro (fonte única)
     especie: Optional[str] = "Felino"
     sub_especie: Optional[str] = None
     raca: Optional[str] = None
     porte: Optional[str] = None
     sexo: Optional[str] = None
     idade: Optional[float] = None
-    nome_cientifico: Optional[str] = None
+    nome_cientifico: Optional[str] = None  # 👈 Adicionado para receber o binômio científico
 
 # --------------------------------------------------------------------------- #
 # Auxiliares
 # --------------------------------------------------------------------------- #
 def _normalizar(texto: str) -> str:
+    """minúsculas e sem acentos, para comparar termos da queixa."""
     if not texto:
         return ""
     sem_acento = unicodedata.normalize("NFKD", texto.lower())
     return "".join(c for c in sem_acento if not unicodedata.combining(c))
 
 def _normalizar_raca(raca: Optional[str]) -> str:
+    """Padroniza o nome da raça para busca."""
     if not raca:
         return ""
     return _normalizar(raca.strip())
 
 def _eh_raca_generica(raca: Optional[str]) -> bool:
+    """Verifica se a raça é genérica/SRD."""
     return _normalizar_raca(raca) in RACAS_GENERICAS
 
-def _buscar_com_fallback(db: Session, perfil: dict, incluir_rascunhos: bool = False) -> tuple:
-    motivo = None
-    bib = buscar_referencia_oficial(db, incluir_rascunhos=incluir_rascunhos, **perfil)
-    
-    if not bib and _eh_raca_generica(perfil.get("raca")):
-        perfil_fallback = {
-            "especie": perfil.get("especie"),
-            "porte": perfil.get("porte"),
-            "sexo": perfil.get("sexo"),
-        }
-        bib = buscar_referencia_oficial(db, incluir_rascunhos=incluir_rascunhos, **perfil_fallback)
+def _perfil_do_animal(db: Session, animal_id: Optional[int], payload: dict):
+    """
+    Perfil do paciente. Com animal_id, TUDO vem do cadastro (espécie, sub-espécie, raça, porte,
+    sexo, idade, nome científico); o payload só é usado se o animal não existir.
+    """
+    animal = db.query(Animal).filter(Animal.id == animal_id).first() if animal_id else None
+    origem = (lambda k: getattr(animal, k, None)) if animal else (lambda k: payload.get(k))
+
+    def limpo(v):
+        return (str(v).strip() or None) if v is not None else None
+
+    perfil = dict(
+        especie=limpo(origem("especie")) or limpo(payload.get("especie")) or "Felino",
+        sub_especie=limpo(origem("sub_especie")),
+        raca=limpo(origem("raca")),
+        porte=limpo(origem("porte")),
+        sexo=limpo(origem("sexo")),
+        nome_cientifico=limpo(origem("nome_cientifico")),
+    )
+    return perfil, origem("idade"), animal
+
+
+def _garantir_nome_cientifico(db: Session, animal, perfil: dict) -> None:
+    """
+    O nome científico é gerado em segundo plano no cadastro; se a triagem abrir antes (ou se a IA
+    falhou na hora), gera agora e grava no animal. A chave da busca é o nome científico.
+    """
+    if perfil.get("nome_cientifico") or animal is None:
+        return
+    try:
+        nome = buscar_nome_cientifico(db, animal.especie, animal.sub_especie, animal.raca)
+        if nome:
+            animal.nome_cientifico = nome
+            db.commit()
+            perfil["nome_cientifico"] = nome
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao obter o nome científico do animal %s", getattr(animal, "id", "?"))
+
+
+def _faixa_do_paciente(perfil: dict, idade) -> str:
+    return calcular_faixa_etaria(
+        idade, especie=perfil["especie"], sub_especie=perfil["sub_especie"],
+        nome_cientifico=perfil["nome_cientifico"], porte=perfil["porte"],
+    )
+
+
+def _resolver_referencia(db: Session, perfil: dict, idade, faixa: str, *, pesquisar: bool):
+    """
+    Única rota de busca da referência (tela de referências E avaliação Manchester):
+      1. Biblioteca: nome científico -> perfil -> sexo + faixa etária.
+      2. (só se `pesquisar`) pesquisa automática nas fontes oficiais, gravada como RASCUNHO.
+      3. Paciente filhote/idoso sem linha própria: cai para a de ADULTO, MARCADA como tal.
+    Devolve (linha | None, info).
+    """
+    info = {"faixa": faixa, "fallback_adulto": False, "motivo": None, "motivo_pesquisa": None}
+    incluir = not pesquisar  # a avaliação enxerga os rascunhos que a tela de referências criou
+
+    bib = buscar_referencia_oficial(db, faixa_etaria=faixa, incluir_rascunhos=incluir, **perfil)
+    if bib:
+        info["motivo"] = "Perfil encontrado na biblioteca"
+        return bib, info
+
+    if pesquisar:
+        logger.info("Sem perfil — pesquisa automática: %s | %s | porte %s | faixa %s",
+                    perfil["especie"], perfil["nome_cientifico"], perfil["porte"], faixa)
+        bib, info["motivo_pesquisa"] = pesquisar_e_registrar(
+            db, idade=idade, faixa_etaria=faixa, **perfil)
         if bib:
-            motivo = f"Perfil genérico — referência por porte: {perfil.get('porte')}"
-    
-    return bib, motivo
+            info["motivo"] = "Perfil pesquisado nas fontes oficiais"
+            return bib, info
+        logger.warning("Pesquisa sem dados confiáveis: %s | %s",
+                       perfil["especie"], info["motivo_pesquisa"])
+
+    if faixa != ADULTO:
+        bib = buscar_referencia_oficial(db, faixa_etaria=ADULTO, incluir_rascunhos=incluir, **perfil)
+        if bib:
+            info.update(fallback_adulto=True, motivo="Sem referência para a faixa etária do paciente")
+            return bib, info
+    return None, info
+
 
 def _validar_avaliacao(dados: dict) -> dict:
     cor = str(dados.get("classificacao_risco", "")).strip().upper()
@@ -144,7 +222,7 @@ def _validar_avaliacao(dados: dict) -> dict:
 def _valor_ou_nao_aferido(valor, unidade: str) -> str:
     return f"{valor} {unidade}" if valor is not None else "não aferido"
 
-def _contexto_referencia(bib, pendente: bool = False) -> str:
+def _contexto_referencia(bib, pendente: bool = False, aviso_faixa: Optional[str] = None) -> str:
     if not bib:
         return (
             "NÃO HÁ faixas de referência para esta espécie/raça. Portanto NÃO julgue se os sinais "
@@ -158,6 +236,12 @@ def _contexto_referencia(bib, pendente: bool = False) -> str:
         "AINDA NÃO foram validadas por veterinário. Use com cautela e mencione isso na justificativa.\n"
         if pendente else ""
     )
+    if aviso_faixa:
+        aviso += (
+            f"ATENÇÃO: {aviso_faixa} Portanto NÃO use estas faixas para dizer se os sinais vitais "
+            "estão normais ou alterados; classifique pela queixa e diga na justificativa que os "
+            "sinais não puderam ser comparados com a faixa etária do paciente.\n"
+        )
     return (
         aviso +
         "Faixas de referência oficiais curadas para esta espécie/raça:\n"
@@ -180,54 +264,23 @@ def calcular_referencias_ia(
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
 ):
-    especie = (dados.especie or "").strip().capitalize()
-    sub_especie = (dados.sub_especie or "").strip() or None
-    raca = _normalizar_raca(dados.raca)
-    porte = (dados.porte or "").strip() or None
-    sexo = (dados.sexo or "").strip() or None
-    nome_cientifico = (dados.nome_cientifico or "").strip() or None
+    perfil, idade_cad, animal = _perfil_do_animal(db, dados.animal_id, dados.model_dump())
+    idade = idade_cad if idade_cad is not None else dados.idade
+    _garantir_nome_cientifico(db, animal, perfil)
+    faixa = _faixa_do_paciente(perfil, idade)
 
-    perfil = dict(
-        especie=especie,
-        sub_especie=sub_especie,
-        raca=raca,
-        porte=porte,
-        sexo=sexo,
-    )
-
-    bib = None
-    motivo = None
-
-    bib = buscar_referencia_oficial(db, **perfil)
-    if bib:
-        motivo = "Perfil encontrado diretamente"
-
-    if not bib and _eh_raca_generica(raca):
-        perfil_porte = dict(perfil)
-        perfil_porte["raca"] = None
-        bib = buscar_referencia_oficial(db, **perfil_porte)
-        if bib:
-            motivo = f"Raça genérica → usando referência por porte: {porte}"
-
-    motivo_pesquisa = None
-    if not bib:
-        logger.info(f"Perfil não encontrado — iniciando pesquisa automática: {especie} | porte: {porte} | científico: {nome_cientifico}")
-        perfil_pesquisa = dict(
-            perfil, 
-            raca=(dados.raca or "").strip() or None,
-            nome_cientifico=nome_cientifico
-        )
-        bib, motivo_pesquisa = pesquisar_e_registrar(db, **perfil_pesquisa)
-        if not bib:
-            logger.warning(f"Pesquisa automática sem dados confiáveis: {especie} | {motivo_pesquisa}")
+    bib, info = _resolver_referencia(db, perfil, idade, faixa, pesquisar=True)
 
     if not bib:
         indisponivel = dict(REFERENCIA_INDISPONIVEL)
         indisponivel["fonte_ref"] = (
             "⚠️ Sem referência oficial. "
-            f"Motivo: {motivo_pesquisa or 'perfil não encontrado'} | "
-            f"Espécie: {especie} | Porte: {porte or 'não informado'}"
+            f"Motivo: {info['motivo_pesquisa'] or 'perfil não encontrado'} | "
+            f"Espécie: {perfil['especie']} | Nome científico: {perfil['nome_cientifico'] or 'não informado'} | "
+            f"Porte: {perfil['porte'] or 'não informado'} | Faixa etária: {ROTULO_FAIXA[faixa]}"
         )
+        indisponivel.update(faixa_etaria=faixa, nome_cientifico=perfil["nome_cientifico"],
+                            peso_ref_aplicavel=False)
         return indisponivel
 
     meta = metadados_da_linha(db, bib.id)
@@ -236,27 +289,44 @@ def calcular_referencias_ia(
     pendente = status_ref in ("PENDENTE", "RASCUNHO")
     fontes_meta = meta.get("fontes") if isinstance(meta.get("fontes"), dict) else {}
     n_fontes = len(fontes_meta.get("web", []))
+    oficiais = sorted({o.get("fonte") for o in fontes_meta.get("oficiais", []) if o.get("fonte")})
+    txt_oficiais = f"; oficiais: {', '.join(oficiais)}" if oficiais else ""
 
     if rascunho:
         fonte = (
-            f"📝 RASCUNHO: pesquisa automática por IA ({n_fontes} fonte(s) consultada(s)). "
+            f"📝 RASCUNHO: pesquisa automática por IA ({n_fontes} fonte(s) consultada(s){txt_oficiais}). "
             "Será gravada na biblioteca ao finalizar a triagem, PENDENTE de validação veterinária | "
             f"Perfil: {bib.especie}"
         )
     elif pendente:
         fonte = (
             f"⚠️ PENDENTE de validação veterinária. "
-            f"Pesquisa automática por IA ({n_fontes} fonte(s) consultada(s)) | "
+            f"Pesquisa automática por IA ({n_fontes} fonte(s) consultada(s){txt_oficiais}) | "
             f"Perfil: {bib.especie}"
         )
     else:
         fonte = f"📚 Fonte: {bib.fonte_bibliografica} | Perfil: {bib.especie}"
 
-    if motivo:
-        fonte = f"{fonte} | {motivo}"
+    idade_txt = f" ({idade} anos)" if idade is not None else ""
+    fonte += f" | Faixa etária: {ROTULO_FAIXA[faixa]}{idade_txt}"
+    if perfil["nome_cientifico"]:
+        fonte += f" | {perfil['nome_cientifico']}"
+    if info["fallback_adulto"]:
+        fonte += (f" | 🚨 SEM referência para {ROTULO_FAIXA[faixa].lower()}: valores de ADULTO, "
+                  "NÃO usar como faixa normal deste paciente")
+    elif idade is not None and not faixa_e_aplicavel(
+            perfil["especie"], perfil["sub_especie"], perfil["nome_cientifico"]):
+        fonte += " | idade não ajustada (espécie sem corte etário definido)"
+    if info["motivo"] and not info["fallback_adulto"]:
+        fonte += f" | {info['motivo']}"
+
+    peso_aplicavel = faixa != FILHOTE
+    peso_txt = (f"💡 Ref. Peso: {bib.peso_min} - {bib.peso_max} kg" if peso_aplicavel else
+                f"💡 Peso adulto de ref.: {bib.peso_min} - {bib.peso_max} kg (não se aplica a filhote)")
 
     return {
-        "peso_ref": f"💡 Ref. Peso: {bib.peso_min} - {bib.peso_max} kg",
+        "peso_ref": peso_txt,
+        "peso_ref_aplicavel": peso_aplicavel,
         "ecc_ref": f"💡 Ideal: {bib.ecc_ideal}",
         "temperatura": (
             f"Normal: [Repouso: {bib.temp_repouso_min} - {bib.temp_repouso_max} °C | "
@@ -273,7 +343,10 @@ def calcular_referencias_ia(
         "tpc": f"{bib.tpc_ref}",
         "mucosas": f"💡 {bib.mucosas_ref}",
         "fonte_ref": fonte,
-        "validada": not pendente,
+        "faixa_etaria": faixa,
+        "nome_cientifico": perfil["nome_cientifico"],
+        "ref_adulta_fallback": info["fallback_adulto"],
+        "validada": not pendente and not info["fallback_adulto"],
         "rascunho": rascunho,
         "indisponivel": False,
     }
@@ -299,6 +372,7 @@ def avaliar_triagem_ia(
     queixa = (dados.queixa_principal or "").strip()
     queixa_norm = _normalizar(queixa)
 
+    # 🚨 TRAVÃO DE SEGURANÇA FÍSICO
     motivos = []
     if dados.temperatura is not None:
         if dados.temperatura >= LIMITE_TEMP_ALTA:
@@ -320,52 +394,43 @@ def avaliar_triagem_ia(
             "origem": "REGRA_FISICA",
         }
 
-    animal = (
-        db.query(Animal).filter(Animal.id == dados.animal_id).first()
-        if dados.animal_id else None
-    )
+    perfil, idade, _animal = _perfil_do_animal(db, dados.animal_id, dados.model_dump())
+    faixa = _faixa_do_paciente(perfil, idade)
 
-    especie = (
-        animal.especie.strip().lower()
-        if animal and animal.especie
-        else (dados.especie or "felino").strip().lower()
-    )
-    sub_especie = animal.sub_especie if animal else dados.sub_especie
-    raca = _normalizar_raca(animal.raca if animal else dados.raca)
-    porte = animal.porte if animal else dados.porte
-    sexo = animal.sexo if animal else None
-
-    perfil_busca = {
-        "especie": especie,
-        "sub_especie": sub_especie,
-        "raca": raca,
-        "porte": porte,
-        "sexo": sexo,
-    }
-
-    bib_ref, _ = _buscar_com_fallback(db, perfil_busca, incluir_rascunhos=True)
+    # mesma busca da tela de referências (sem pesquisar de novo: usa biblioteca e rascunhos)
+    bib_ref, info_ref = _resolver_referencia(db, perfil, idade, faixa, pesquisar=False)
 
     pendente_ref = False
     if bib_ref:
         meta = metadados_da_linha(db, bib_ref.id)
         pendente_ref = meta.get("status") in ("PENDENTE", "RASCUNHO")
+    aviso_faixa = (
+        f"o paciente é {ROTULO_FAIXA[faixa].lower()}, mas só existem faixas de ADULTO para esta espécie."
+        if info_ref["fallback_adulto"] else None
+    )
+    especie = perfil["especie"]
+    raca = perfil["raca"] or ""
+    porte = perfil["porte"]
+    idade_txt = f"{idade} anos" if idade is not None else "não informada"
 
     prompt = (
         "Você é um médico veterinário especialista em triagem de emergência "
         "(Protocolo Manchester adaptado à medicina veterinária). Classifique o paciente abaixo.\n\n"
         "DADOS DO PACIENTE:\n"
-        f"- Espécie/Raça: {especie.capitalize()} / {raca.capitalize() or 'não informada'}\n"
+        f"- Espécie/Raça: {especie.capitalize()} / {raca or 'não informada'}\n"
+        f"- Nome científico: {perfil['nome_cientifico'] or 'não informado'}\n"
         f"- Porte: {porte or 'não informado'}\n"
+        f"- Idade: {idade_txt} (faixa etária: {ROTULO_FAIXA[faixa]})\n"
         f"- Queixa principal: {queixa or 'não informada'}\n"
         f"- Temperatura: {_valor_ou_nao_aferido(dados.temperatura, '°C')}\n"
         f"- Frequência cardíaca: {_valor_ou_nao_aferido(dados.frequencia_cardiaca, 'bpm')}\n"
         f"- Frequência respiratória: {_valor_ou_nao_aferido(dados.frequencia_respiratoria, 'ir/min')}\n"
         f"- TPC: {_valor_ou_nao_aferido(dados.tpc_segundos, 's')}\n"
         f"- Mucosas: {dados.mucosas or 'não informadas'}\n\n"
-        f"{_contexto_referencia(bib_ref, pendente_ref)}\n"
+        f"{_contexto_referencia(bib_ref, pendente_ref, aviso_faixa)}\n"
         "REGRAS:\n"
         "- 'não aferido' NÃO significa normal; não presuma valores.\n"
-        "- Compare os valores com as faixas da espécie, nunca com as de gato ou cão doméstico.\n"
+        "- Compare os valores com as faixas da espécie E da faixa etária informadas, nunca com as de gato ou cão doméstico.\n"
         "- Em dúvida entre dois níveis, escolha o mais urgente.\n\n"
         "Retorne estritamente um objeto JSON puro com exatamente estas chaves:\n"
         "{\n"
@@ -442,16 +507,13 @@ def criar_ou_atualizar_triagem(
         if not animal_id:
             consulta = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
             animal_id = consulta.animal_id if consulta else None
-        animal_triado = db.query(Animal).filter(Animal.id == animal_id).first() if animal_id else None
-        if animal_triado:
-            # 💡 CORREÇÃO APLICADA: Passa espécie e porte juntamente com raça e sexo para evitar IntegrityError
-            referencia_gravada_id = promover_rascunho(
-                db, 
-                especie=animal_triado.especie,
-                raca=animal_triado.raca, 
-                porte=animal_triado.porte,
-                sexo=animal_triado.sexo
-            )
+        if animal_id:
+            perfil, idade, _animal = _perfil_do_animal(db, animal_id, {})
+            faixa = _faixa_do_paciente(perfil, idade)
+            bib_usada, info_usada = _resolver_referencia(db, perfil, idade, faixa, pesquisar=False)
+            # só promove se a linha é da faixa do paciente (nunca promove o fallback de adulto)
+            if bib_usada and not info_usada["fallback_adulto"]:
+                referencia_gravada_id = promover_rascunho_por_id(db, bib_usada.id)
     except Exception:
         db.rollback()
         logger.exception("Falha ao gravar a referência pesquisada após a triagem")

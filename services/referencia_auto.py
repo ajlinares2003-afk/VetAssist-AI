@@ -3,7 +3,8 @@ services/referencia_auto.py
 
 Quando o animal NÃO tem perfil na biblioteca oficial, a IA (Gemini com pesquisa na web)
 procura os parâmetros na literatura utilizando a chave multivariada:
-Nome Científico + Porte + Sexo + Idade, restrita estritamente às fontes oficiais da clínica,
+Nome Científico + Porte + Sexo + Faixa etária (idade), restrita às fontes oficiais da clínica
+(services/fontes_oficiais.py, conferidas no código a partir das páginas realmente consultadas),
 e cadastra o resultado na `biblioteca_parametros_oficiais` com status PENDENTE.
 
 Regras de segurança deste fluxo:
@@ -12,7 +13,8 @@ Regras de segurança deste fluxo:
   - O registro nasce como RASCUNHO: aparece na tela para o enfermeiro, mas NÃO entra na
     biblioteca ainda. Ao FINALIZAR a triagem ele vira PENDENTE (promover_rascunho) e só
     então o veterinário o valida (routers/referencias_admin.py).
-  - Nunca cria perfil para raça genérica (SRD): não dá para pesquisar "SRD".
+  - Raça genérica (SRD) só é pesquisada se houver NOME CIENTÍFICO: o perfil nasce do
+    nome científico (+ porte, para cães), nunca de "SRD".
   - Reaproveita o perfil existente (mesmo texto de `especie`) quando só falta o sexo,
     para não duplicar perfis e quebrar a busca.
 """
@@ -26,7 +28,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from services.biblioteca_referencia import (
-    GENERICAS, _montar_descritores, _norm, _partes, _sexo_chave,
+    GENERICAS, _escolher_descritor, _faixa_da_linha, _montar_descritores, _norm, _partes,
+    _sexo_chave,
+)
+from services.faixa_etaria import FAIXAS, ROTULO as ROTULO_FAIXA, faixa_e_aplicavel
+from services.fontes_oficiais import (
+    ESTRITO as FONTES_ESTRITAS, dominios_vistos, fontes_da_lista,
+    identificar_grupo, texto_prioridade,
 )
 from services.ia_service import IAIndisponivelError, gerar_json
 
@@ -140,6 +148,7 @@ def validar_pesquisa(dados: dict) -> dict:
 # Motivo da falha em linguagem simples
 # --------------------------------------------------------------------------- #
 def _resumo_tentativa(texto: str) -> str:
+    """'groq_1/openai/gpt-oss-120b: RateLimitError | ...' -> 'groq_1: limite diário de tokens (TPD) atingido'."""
     origem, _, detalhe = texto.partition(": ")
     nome = origem.split("/")[0] or origem
     t = detalhe.lower()
@@ -161,6 +170,8 @@ def _resumo_tentativa(texto: str) -> str:
         motivo = "requisição grande demais para o limite do plano"
     elif "sem consultar fontes" in t:
         motivo = "a IA respondeu sem pesquisar na web"
+    elif "fonte oficial da lista" in t:
+        motivo = "a IA não consultou as fontes oficiais da clínica. " + detalhe.split("| ")[-1][:200]
     elif "literatura insuficiente" in t:
         motivo = "literatura insuficiente para este perfil"
     else:
@@ -173,6 +184,7 @@ def _motivo_das_tentativas(tentativas: list) -> str:
 
 
 def limpar_falhas_pesquisa() -> None:
+    """Chamada quando a configuração de IA muda (ou um teste de conexão passa): libera novas tentativas."""
     _falhas_recentes.clear()
 
 
@@ -180,7 +192,7 @@ def limpar_falhas_pesquisa() -> None:
 # Auxiliares
 # --------------------------------------------------------------------------- #
 def _sexo_da_biblioteca(sexo) -> str:
-    n = _sexo_chave(sexo)
+    n = _sexo_chave(sexo)  # aceita "M"/"F" do cadastro e "macho"/"fêmea"
     if n == "macho":
         return "macho"
     if n == "femea":
@@ -189,10 +201,12 @@ def _sexo_da_biblioteca(sexo) -> str:
 
 
 def _nome_do_perfil(raca) -> Optional[str]:
+    """'Caracal - Lince do Deserto' -> 'Caracal (Lince do Deserto)'. Genérica -> None."""
     texto = str(raca or "").strip()
     if not texto:
         return None
 
+    # aliases fortes para raça genérica ou indefinida
     aliases = {
         "srd", "sem raça", "sem raca", "sem raça definida", "sem raca definida",
         "mestiço", "mestico", "vazio", "indefinido", "nao informado", "não informado",
@@ -216,66 +230,60 @@ def _nome_do_perfil(raca) -> Optional[str]:
 
 
 def _perfil_existente(linhas, raca):
+    """Descritor que já responde por essa raça (para só acrescentar o sexo que falta)."""
     partes_raca = {p for p in _partes(raca) if p not in GENERICAS}
     return [d for d in _montar_descritores(linhas) if partes_raca & (d.aliases | d.exemplos)]
 
 
-def _identificar_grupo_animal(especie: str, sub_especie: str) -> str:
-    texto = f"{especie or ''} {sub_especie or ''}".lower()
+def _nome_do_perfil_generico(especie, sub_especie, nome_cientifico, porte) -> Optional[str]:
+    """
+    Raça genérica (SRD) com nome científico: 'Felino Doméstico (Felis catus)'.
+    Cães levam o porte no nome ('Canino porte Médio (Canis lupus familiaris)'), pois mudam por porte.
+    """
+    cient = " ".join(str(nome_cientifico or "").split())
+    if not cient:
+        return None
+    base = " ".join(str(sub_especie or especie or "").split()) or cient
+    if _norm(cient).startswith("canis") and str(porte or "").strip():
+        base = f"{base} porte {str(porte).strip()}"
+    return f"{base} ({cient})"
 
-    prod_termos = {"bovino", "suino", "ovino", "caprino", "equino", "bubalino",
-                   "avestruz", "galinha", "suíno", "porco", "gado"}
-    if any(t in texto for t in prod_termos):
-        return "Produção"
 
-    dom_termos = {"canino", "felino", "cao", "gato", "cachorro", "dog", "cat"}
-    if any(t in texto for t in dom_termos):
-        return "Domésticos"
-
-    return "Silvestres/Exóticos"
-
-
-def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None, idade=None) -> str:
-    grupo_animal = _identificar_grupo_animal(especie, sub_especie)
-
-    if grupo_animal == "Domésticos":
-        fontes_prioritarias = (
-            "1ª Opção: MSD Vet Manual (Merck Veterinary Manual)\n"
-            "2ª Opção: Cornell eClinPath\n"
-            "3ª Opção: UC Davis Veterinary Medicine"
-        )
-    elif grupo_animal == "Produção":
-        fontes_prioritarias = (
-            "1ª Opção: MSD Saúde Animal / Produção\n"
-            "2ª Opção: Embrapa\n"
-            "3ª Opção: Iowa State University Veterinary College"
-        )
-    else:
-        fontes_prioritarias = (
-            "1ª Opção: ExoCalc\n"
-            "2ª Opção: VIN (Veterinary Information Network)\n"
-            "3ª Opção: Animal Diversity Web (ADW)"
-        )
+def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None,
+                   idade=None, faixa_etaria="adulto") -> str:
+    grupo_animal = identificar_grupo(especie, sub_especie)
+    fontes_prioritarias = texto_prioridade(grupo_animal)
+    faixa_txt = ROTULO_FAIXA.get(faixa_etaria, "Adulto")
+    idade_txt = f"{idade} anos" if idade is not None else "não informada"
+    aplica_faixa = faixa_e_aplicavel(especie, sub_especie, nome_cientifico)
 
     return (
         "Você é um pesquisador de medicina veterinária de alta exigência hospitalar. "
-        "⚠️ REGRA SUPREMA: VOCÊ DEVE PESQUISAR EXCLUSIVAMENTE E ESTRITAMENTE NAS SEGUINTES FONTES OFICIAIS, "
-        f"divididas por ordem de prioridade para o grupo ({grupo_animal}):\n"
+        "⚠️ REGRA SUPREMA: PESQUISE PRIMEIRO E PRINCIPALMENTE NAS FONTES OFICIAIS ABAIXO, "
+        f"nesta ordem de prioridade, para o grupo ({grupo_animal}). Use buscas com o nome científico "
+        "e o termo 'site:<domínio>' de cada fonte:\n"
         f"{fontes_prioritarias}\n"
-        "Caso não encontre nestas fontes exatas, utilize secundariamente as bases acadêmicas indexadas (PubMed, SciELO). "
-        "NUNCA utilize blogs, sites genéricos ou fóruns não acadêmicos.\n\n"
-        "Busque os parâmetros fisiológicos de referência cruzando obrigatoriamente a Chave Multivariada:\n\n"
-        f"- Raça / Nome Comercial: {nome}\n"
-        f"- Nome Científico (Taxonomia obrigatória): {nome_cientifico or 'Não informado'}\n"
+        "Só use bases acadêmicas (PubMed, SciELO, Google Scholar) como complemento, e cite quais. "
+        "NUNCA use blogs, lojas, sites genéricos ou fóruns.\n\n"
+        "Busque os parâmetros fisiológicos de referência para este paciente (chave multivariada):\n\n"
+        f"- Nome Científico (taxonomia obrigatória): {nome_cientifico or 'Não informado'}\n"
+        f"- Perfil / Raça: {nome}\n"
         f"- Espécie / Sub-espécie: {especie or 'não informada'} / {sub_especie or 'não informada'}\n"
         f"- Porte: {porte or 'não informado'}\n"
         f"- Sexo: {sexo or 'indiferente'}\n"
-        f"- Idade / Estágio de vida: {idade if idade is not None else 'não informada'} anos (Adapte para filhote, adulto ou idoso conforme a literatura)\n\n"
+        f"- Idade: {idade_txt} -> FAIXA ETÁRIA A PESQUISAR: {faixa_txt.upper()}\n\n"
         "REGRAS CLÍNICAS:\n"
-        "- Respeite rigorosamente as variações fisiológicas de porte, sexo e faixa etária.\n"
+        f"- Os parâmetros devem ser os da faixa etária {faixa_txt.upper()}"
+        + ("" if aplica_faixa else
+           " (para esta espécie não há corte de idade fixo: forneça os de ADULTO e, em observacoes, "
+           "diga se a idade informada muda os valores)") +
+        ".\n"
+        "- Respeite as variações de porte, sexo e faixa etária descritas na literatura.\n"
+        "- peso_min/peso_max = faixa de peso do ADULTO desta espécie/porte (referência de condição "
+        "corporal; não é peso de filhote).\n"
         "- 'repouso' = animal calmo, sem estresse; 'clinica' = durante o atendimento/manejo hospitalar.\n"
-        "- Se a literatura oficial primária não trouxer os parâmetros para essa combinação exata, "
-        "responda obrigatoriamente com \"confianca\": \"baixa\" (nada será cadastrado).\n"
+        "- Se as fontes não trouxerem os parâmetros para esta combinação, responda obrigatoriamente "
+        "com \"confianca\": \"baixa\" (nada será cadastrado). NÃO estime nem invente valores.\n"
         "- Números com ponto decimal. FC em bpm, FR em ir/min, temperatura em °C, peso em kg.\n"
         "- O campo tpc_ref traz SOMENTE o tempo de preenchimento capilar em segundos.\n"
         "- Cite cada publicação usada em fontes_citadas, com título, autores, ano e URL (se houver).\n\n"
@@ -299,20 +307,20 @@ def _montar_prompt(nome, sexo, porte, sub_especie, especie, nome_cientifico=None
 
 _INSERIR = text("""
     INSERT INTO biblioteca_parametros_oficiais
-      (classe_animal, grupo, especie, nome_cientifico, sexo, peso_min, peso_max,
+      (classe_animal, grupo, especie, nome_cientifico, sexo, faixa_etaria, peso_min, peso_max,
        temp_repouso_min, temp_repouso_max, temp_clinica_min, temp_clinica_max,
        fc_repouso_min, fc_repouso_max, fc_clinica_min, fc_clinica_max,
        fr_repouso_min, fr_repouso_max, fr_clinica_min, fr_clinica_max,
        tpc_ref, mucosas_ref, ecc_ideal, fonte_bibliografica,
        status, origem, fontes, observacoes_ia)
     VALUES
-      (:classe_animal, :grupo, :especie, :nome_cientifico, :sexo, :peso_min, :peso_max,
+      (:classe_animal, :grupo, :especie, :nome_cientifico, :sexo, :faixa_etaria, :peso_min, :peso_max,
        :temp_repouso_min, :temp_repouso_max, :temp_clinica_min, :temp_clinica_max,
        :fc_repouso_min, :fc_repouso_max, :fc_clinica_min, :fc_clinica_max,
        :fr_repouso_min, :fr_repouso_max, :fr_clinica_min, :fr_clinica_max,
        :tpc_ref, :mucosas_ref, :ecc_ideal, :fonte_bibliografica,
        'RASCUNHO', 'IA', CAST(:fontes AS jsonb), :observacoes_ia)
-    ON CONFLICT (especie, sexo) DO NOTHING
+    ON CONFLICT (especie, sexo, faixa_etaria) DO NOTHING
     RETURNING id
 """)
 
@@ -321,6 +329,7 @@ _INSERIR = text("""
 # API pública
 # --------------------------------------------------------------------------- #
 def metadados_da_linha(db: Session, linha_id: int) -> dict:
+    """status/origem/fontes da linha. Se a migração ainda não rodou, assume VALIDADO/MANUAL."""
     try:
         r = db.execute(
             text("SELECT status, origem, fontes, observacoes_ia "
@@ -335,40 +344,65 @@ def metadados_da_linha(db: Session, linha_id: int) -> dict:
     return {"status": "VALIDADO", "origem": "MANUAL", "fontes": None, "observacoes_ia": None}
 
 
-def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, porte, nome_cientifico=None, idade=None):
+def pesquisar_e_registrar(db: Session, *, especie, sub_especie, raca, sexo, porte,
+                          nome_cientifico=None, idade=None, faixa_etaria="adulto"):
+    """
+    Pesquisa na literatura utilizando a chave multivariada
+    (Nome Científico + Porte + Sexo + Faixa etária/Idade) e guarda o resultado como RASCUNHO.
+    """
     try:
-        return _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cientifico, idade)
+        return _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte,
+                                      nome_cientifico, idade, faixa_etaria)
     except Exception as exc:
         db.rollback()
         logger.exception("Falha na pesquisa automática de referência")
         return None, (f"erro ao cadastrar a referência ({type(exc).__name__}). "
-                      "Confirme se a migração da biblioteca foi executada.")
+                      "Confirme se a migração da biblioteca (faixa_etaria) foi executada.")
 
 
-def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cientifico, idade):
+def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cientifico,
+                           idade, faixa):
     from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
 
-    nome = _nome_do_perfil(raca)
-    if not nome:
-        logger.info("Raça genérica/vazia: não há o que pesquisar automaticamente.")
-        return None, "raça genérica ou vazia (SRD): é preciso um perfil curado para esse tipo de animal."
-
+    faixa = faixa if faixa in FAIXAS else "adulto"
     sexo_bib = _sexo_da_biblioteca(sexo)
     linhas = db.query(Bib).order_by(Bib.id).all()
+    raca_generica = _nome_do_perfil(raca) is None
 
-    existentes = _perfil_existente(linhas, raca)
-    if len(existentes) > 1:
-        logger.warning("Raça %r casa com mais de um perfil; não cadastrar.", raca)
-        return None, "a raça casa com mais de um perfil da biblioteca; revise os perfis duplicados."
-    base = existentes[0].linhas[0] if existentes else None
-    especie_perfil = base.especie if base else nome
+    # 1) Já existe um perfil para este animal? Reaproveita o MESMO texto de `especie`
+    #    (só falta a linha do sexo/faixa etária), para não duplicar perfis.
+    if raca_generica:
+        descritor = _escolher_descritor(_montar_descritores(linhas), especie, sub_especie,
+                                        raca, porte, nome_cientifico)
+    else:
+        existentes = _perfil_existente(linhas, raca)
+        if len(existentes) > 1:
+            logger.warning("Raça %r casa com mais de um perfil; não cadastrar.", raca)
+            return None, "a raça casa com mais de um perfil da biblioteca; revise os perfis duplicados."
+        descritor = existentes[0] if existentes else None
+    base = descritor.linhas[0] if descritor else None
 
+    # 2) Sem perfil: dá nome a um novo. SRD só é aceito com nome científico.
+    if base:
+        especie_perfil = base.especie
+        if all(_sexo_chave(getattr(l, "sexo", "")) == "indiferente" for l in descritor.linhas):
+            sexo_bib = "indiferente"  # perfil que não separa por sexo: uma pesquisa serve a todos
+    else:
+        especie_perfil = (_nome_do_perfil(raca) if not raca_generica else
+                          _nome_do_perfil_generico(especie, sub_especie, nome_cientifico, porte))
+        if not especie_perfil:
+            return None, ("raça genérica (SRD) e sem nome científico no cadastro: "
+                          "edite o animal para gerar o nome científico ou cadastre um perfil curado.")
+
+    # Concorrência: alguém pode já ter cadastrado este perfil + sexo + faixa etária.
     ja_existe = next((l for l in linhas
-                      if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)), None)
+                      if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)
+                      and _faixa_da_linha(l) == faixa), None)
     if ja_existe:
         return ja_existe, None
 
-    chave_falha = (_norm(especie_perfil), _norm(sexo_bib))
+    # Pausa após falha recente do mesmo perfil
+    chave_falha = (_norm(especie_perfil), _norm(sexo_bib), faixa)
     anterior = _falhas_recentes.get(chave_falha)
     if anterior:
         decorrido = time.monotonic() - anterior[0]
@@ -378,20 +412,24 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
                           "(para não gastar a cota das IAs)")
         _falhas_recentes.pop(chave_falha, None)
 
+    grupo = identificar_grupo(especie, sub_especie)
+
+    def _exigir_fonte_da_lista(fontes_web):
+        if not fontes_da_lista(fontes_web, grupo):
+            raise ValueError("nenhuma fonte oficial da lista foi consultada "
+                             f"(sites consultados: {dominios_vistos(fontes_web)})")
+
     try:
         resposta = gerar_json(
             db,
             _montar_prompt(
-                especie_perfil,
-                sexo_bib,
-                porte,
-                sub_especie,
-                especie,
+                especie_perfil, sexo_bib, porte, sub_especie, especie,
                 nome_cientifico=nome_cientifico or getattr(base, "nome_cientifico", None),
-                idade=idade,
+                idade=idade, faixa_etaria=faixa,
             ),
             validar=validar_pesquisa,
             pesquisa_web=True,
+            validar_fontes=_exigir_fonte_da_lista if FONTES_ESTRITAS else None,
         )
     except IAIndisponivelError as exc:
         logger.warning("Pesquisa automática sem resultado: %s | %s", exc, exc.tentativas)
@@ -401,6 +439,8 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
     _falhas_recentes.pop(chave_falha, None)
 
     d = resposta.dados
+    oficiais = fontes_da_lista(resposta.fontes, grupo)
+    nomes_oficiais = ", ".join(dict.fromkeys(o["fonte"] for o in oficiais)) or "fora da lista oficial"
     titulos = "; ".join(str(f.get("titulo"))[:120] for f in d["fontes_citadas"][:3] if f.get("titulo"))
     parametros = {
         **{campo: d[campo] for campo, _ in CAMPOS_NUMERICOS},
@@ -409,63 +449,49 @@ def _pesquisar_e_registrar(db, especie, sub_especie, raca, sexo, porte, nome_cie
         "nome_cientifico": nome_cientifico or getattr(base, "nome_cientifico", None) or d["nome_cientifico"],
         "especie": especie_perfil,
         "sexo": sexo_bib,
+        "faixa_etaria": faixa,
         "tpc_ref": d["tpc_ref"],
         "mucosas_ref": d["mucosas_ref"],
         "ecc_ideal": ECC_IDEAL_PADRAO,
         "fonte_bibliografica": (
-            f"Pesquisa automática por IA, PENDENTE de validação veterinária. "
-            f"Fontes oficiais: {titulos}"
+            f"Pesquisa automática por IA ({ROTULO_FAIXA[faixa]}), PENDENTE de validação veterinária. "
+            f"Fontes oficiais consultadas: {nomes_oficiais}. Referências: {titulos}"
         )[:600],
         "fontes": json.dumps({
             "citadas": d["fontes_citadas"],
             "web": resposta.fontes,
+            "oficiais": oficiais,
+            "grupo": grupo,
+            "faixa_etaria": faixa,
+            "idade_pesquisada": idade,
             "confianca": d["confianca"],
             "modelo": f"{resposta.provedor}/{resposta.modelo}",
         }, ensure_ascii=False),
         "observacoes_ia": d["observacoes"],
     }
 
-    # 💡 TRATAMENTO BLINDADO DE INTEGRITYERROR / CONFLITO:
-    # Tenta inserir; se já existir, apanha a exceção e recupera o registo existente sem falhar.
-    novo_id = None
-    try:
-        novo_id = db.execute(_INSERIR, parametros).scalar()
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.warning(f"Conflito capturado no insert (recuperando registo existente com segurança): {e}")
-        novo_id = None
+    novo_id = db.execute(_INSERIR, parametros).scalar()
+    db.commit()
 
     if novo_id is None:
-        achada = db.query(Bib).filter(
-            Bib.especie == especie_perfil,
-            Bib.sexo == sexo_bib
-        ).first()
-        return achada, None
+        achada = next((l for l in db.query(Bib).all()
+                       if l.especie == especie_perfil and _norm(l.sexo) == _norm(sexo_bib)
+                       and _faixa_da_linha(l) == faixa), None)
+        return achada, (None if achada else "conflito ao gravar a referência")
 
     return db.query(Bib).filter(Bib.id == novo_id).first(), None
 
 
-def promover_rascunho(db: Session, *, raca, sexo) -> Optional[int]:
+def promover_rascunho_por_id(db: Session, linha_id: int) -> Optional[int]:
+    """
+    Chamada ao FINALIZAR a triagem: a linha RASCUNHO usada por este paciente passa a PENDENTE
+    (fila de validação do veterinário). Por id, não por raça: funciona também para SRD.
+    """
     try:
-        nome = _nome_do_perfil(raca)
-        if nome is None:
-            return None
-
-        from models.biblioteca_oficial import BibliotecaParametrosOficiais as Bib
-        linhas = db.query(Bib).order_by(Bib.id).all()
-        existentes = _perfil_existente(linhas, raca)
-
-        if len(existentes) != 1:
-            return None
-
-        especie_perfil = existentes[0].linhas[0].especie
-        sexo_bib = _sexo_da_biblioteca(sexo)
-
         promovido = db.execute(
             text("UPDATE biblioteca_parametros_oficiais SET status = 'PENDENTE' "
-                 "WHERE especie = :e AND sexo = :s AND status = 'RASCUNHO' RETURNING id"),
-            {"e": especie_perfil, "s": sexo_bib},
+                 "WHERE id = :i AND status = 'RASCUNHO' RETURNING id"),
+            {"i": linha_id},
         ).scalar()
         db.commit()
         return promovido

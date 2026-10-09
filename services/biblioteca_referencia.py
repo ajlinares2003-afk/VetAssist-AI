@@ -12,6 +12,10 @@ Princípios:
   - A escolha é feita em duas etapas: primeiro o PERFIL (texto da coluna `especie`,
     ex.: "Gato Doméstico Comum / SRD") e só depois o SEXO dentro do perfil.
   - Comparação sem acento, sem maiúsculas e por palavra inteira.
+  - O NOME CIENTÍFICO do animal (ex.: "Felis catus") é a primeira chave: reduz os perfis
+    candidatos aos da mesma espécie biológica antes de olhar raça/porte.
+  - Cada perfil pode ter uma linha por (sexo, FAIXA ETÁRIA): filhote | adulto | idoso.
+    Linhas antigas, sem a coluna `faixa_etaria`, contam como "adulto".
 """
 import re
 import unicodedata
@@ -67,6 +71,31 @@ def _sexo_chave(sexo) -> str:
     return {"m": "macho", "f": "femea"}.get(n, n)
 
 
+# Sinônimos comuns, para "Canis familiaris" e "Canis lupus familiaris" serem a mesma espécie.
+SINONIMOS_CIENTIFICOS = {
+    "canis familiaris": "canis lupus",
+    "canis lupus familiaris": "canis lupus",
+    "felis domesticus": "felis catus",
+    "felis silvestris catus": "felis catus",
+}
+
+
+def chave_cientifica(nome) -> str:
+    """'Felis catus (Linnaeus, 1758)' -> 'felis catus'. Só gênero + espécie, com sinônimos."""
+    n = _norm(nome)
+    if not n:
+        return ""
+    completo = " ".join(n.split()[:3])
+    if completo in SINONIMOS_CIENTIFICOS:
+        return SINONIMOS_CIENTIFICOS[completo]
+    binomio = " ".join(n.split()[:2])
+    return SINONIMOS_CIENTIFICOS.get(binomio, binomio)
+
+
+def _faixa_da_linha(linha) -> str:
+    return _norm(getattr(linha, "faixa_etaria", None)) or "adulto"
+
+
 def _tokens(texto) -> set:
     """Palavras relevantes reduzidas a 4 letras (felino/felideos -> 'feli')."""
     return {w[:4] for w in _norm(texto).split() if w not in STOP}
@@ -81,6 +110,7 @@ class Descritor:
     exemplos: set = field(default_factory=set)   # itens de "(ex: A, B, C)"
     tokens: set = field(default_factory=set)
     palavras: set = field(default_factory=set)   # palavras do nome (para o porte)
+    cientificos: set = field(default_factory=set)  # chaves científicas das linhas do perfil
     linhas: list = field(default_factory=list)
 
 
@@ -110,12 +140,26 @@ def _montar_descritores(linhas) -> list:
         if texto not in por_texto:
             por_texto[texto] = _descrever(texto, getattr(linha, "grupo", "") or "")
         por_texto[texto].linhas.append(linha)
+        chave = chave_cientifica(getattr(linha, "nome_cientifico", None))
+        if chave:
+            por_texto[texto].cientificos.add(chave)
     return list(por_texto.values())
 
 
-def _escolher_descritor(descritores, especie, sub_especie, raca, porte) -> Optional[Descritor]:
+def _escolher_descritor(descritores, especie, sub_especie, raca, porte,
+                        nome_cientifico=None) -> Optional[Descritor]:
     raca_n = _norm(raca)
     partes_raca = {p for p in _partes(raca) if p not in GENERICAS}
+
+    # 0) Nome científico: fica só com perfis da MESMA espécie biológica. Se nenhum perfil
+    #    traz esse nome (biblioteca antiga), segue com todos, como antes.
+    chave_cient = chave_cientifica(nome_cientifico)
+    if chave_cient:
+        mesma_especie = [d for d in descritores if chave_cient in d.cientificos]
+        if len(mesma_especie) == 1 and not partes_raca:
+            return mesma_especie[0]
+        if mesma_especie:
+            descritores = mesma_especie
 
     # 1) Raça específica = nome do perfil ou item de "(ex: ...)". Único ou nada.
     if partes_raca:
@@ -160,21 +204,29 @@ def _escolher_descritor(descritores, especie, sub_especie, raca, porte) -> Optio
     return None  # ambíguo ou desconhecido: não adivinhar
 
 
-def _escolher_linha(descritor: Descritor, sexo):
-    por_sexo = {_sexo_chave(getattr(l, "sexo", "")): l for l in descritor.linhas}
+def _escolher_linha(descritor: Descritor, sexo, faixa_etaria="adulto"):
+    """
+    Linha do perfil para (sexo, faixa etária). Só a faixa pedida é aceita: um filhote nunca
+    recebe em silêncio a linha de adulto (devolve None; o chamador pesquisa ou avisa).
+    """
+    faixa = _norm(faixa_etaria) or "adulto"
+    por_chave = {(_sexo_chave(getattr(l, "sexo", "")), _faixa_da_linha(l)): l
+                 for l in descritor.linhas}
     sexo_n = _sexo_chave(sexo)
-    if sexo_n and sexo_n in por_sexo:
-        return por_sexo[sexo_n]
-    return por_sexo.get("indiferente")
+    if sexo_n and (sexo_n, faixa) in por_chave:
+        return por_chave[(sexo_n, faixa)]
+    return por_chave.get(("indiferente", faixa))
 
 
-def selecionar_referencia(linhas, *, especie, sub_especie, raca, sexo, porte):
+def selecionar_referencia(linhas, *, especie, sub_especie, raca, sexo, porte,
+                          nome_cientifico=None, faixa_etaria="adulto"):
     """Versão pura (sem banco): recebe as linhas e devolve a escolhida ou None."""
     descritores = _montar_descritores(linhas)
-    descritor = _escolher_descritor(descritores, especie, sub_especie, raca, porte)
+    descritor = _escolher_descritor(descritores, especie, sub_especie, raca, porte,
+                                    nome_cientifico)
     if descritor is None:
         return None
-    return _escolher_linha(descritor, sexo)
+    return _escolher_linha(descritor, sexo, faixa_etaria)
 
 
 def ids_rascunho(db) -> set:
@@ -190,6 +242,7 @@ def ids_rascunho(db) -> set:
 
 
 def buscar_referencia_oficial(db, *, especie, sub_especie, raca, sexo, porte,
+                              nome_cientifico=None, faixa_etaria="adulto",
                               incluir_rascunhos=False):
     """
     Lê a biblioteca (poucas dezenas de linhas) e escolhe a linha do animal.
@@ -203,4 +256,5 @@ def buscar_referencia_oficial(db, *, especie, sub_especie, raca, sexo, porte,
     return selecionar_referencia(
         linhas, especie=especie, sub_especie=sub_especie,
         raca=raca, sexo=sexo, porte=porte,
+        nome_cientifico=nome_cientifico, faixa_etaria=faixa_etaria,
     )
