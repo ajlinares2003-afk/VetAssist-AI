@@ -258,18 +258,20 @@ def _contexto_referencia(bib, pendente: bool = False, aviso_faixa: Optional[str]
 # --------------------------------------------------------------------------- #
 # Referências fisiológicas
 # --------------------------------------------------------------------------- #
-@router.post("/referencias-ia")
-def calcular_referencias_ia(
-    dados: ReferenciasIARequest,
-    db: Session = Depends(get_db),
-    usuario_logado = Depends(obter_usuario_logado)
-):
+def _montar_referencias(db: Session, dados: ReferenciasIARequest, pesquisar: bool):
+    """
+    Monta o payload de referências fisiológicas.
+      pesquisar=True  -> fluxo da triagem: gera o nome científico se faltar e, sem perfil na
+                         biblioteca, pesquisa nas fontes oficiais (RASCUNHO).
+      pesquisar=False -> leitura da biblioteca (atendimento): sem IA, sem web, sem gravar nada.
+    """
     perfil, idade_cad, animal = _perfil_do_animal(db, dados.animal_id, dados.model_dump())
     idade = idade_cad if idade_cad is not None else dados.idade
-    _garantir_nome_cientifico(db, animal, perfil)
+    if pesquisar:
+        _garantir_nome_cientifico(db, animal, perfil)
     faixa = _faixa_do_paciente(perfil, idade)
 
-    bib, info = _resolver_referencia(db, perfil, idade, faixa, pesquisar=True)
+    bib, info = _resolver_referencia(db, perfil, idade, faixa, pesquisar=pesquisar)
 
     if not bib:
         indisponivel = dict(REFERENCIA_INDISPONIVEL)
@@ -350,6 +352,31 @@ def calcular_referencias_ia(
         "rascunho": rascunho,
         "indisponivel": False,
     }
+
+
+@router.post("/referencias-ia")
+def calcular_referencias_ia(
+    dados: ReferenciasIARequest,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    return _montar_referencias(db, dados, pesquisar=True)
+
+
+@router.get("/referencias-salvas/{animal_id}")
+def referencias_salvas(
+    animal_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    """
+    Referências já gravadas na biblioteca (usada na tela de Atendimento).
+    Mesma resolução da triagem (nome científico -> perfil -> sexo + faixa etária),
+    mas sem pesquisa na web e sem criar rascunhos: resposta imediata.
+    """
+    if not db.query(Animal).filter(Animal.id == animal_id).first():
+        raise HTTPException(status_code=404, detail="Paciente (Animal) não encontrado.")
+    return _montar_referencias(db, ReferenciasIARequest(animal_id=animal_id), pesquisar=False)
 
 # --------------------------------------------------------------------------- #
 # Classificação Manchester
