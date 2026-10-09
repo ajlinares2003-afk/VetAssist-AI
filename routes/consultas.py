@@ -188,7 +188,6 @@ async def sugestoes_copiloto_multimodal(
         if nomes_arquivos:
             parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"
 
-        # Detecta automaticamente se há indicação cirúrgica no parecer da IA
         tem_indicacao = any(termo in sugestoes_extraidas.lower() for termo in ["cirurgia", "descompressão", "hemilaminectomia", "corpectomia"])
         
         justificativa_cirurgica_texto = ""
@@ -353,7 +352,22 @@ def listar_consultas(
     usuario_logado: str = Depends(obter_usuario_logado),
     db: Session = Depends(get_db)
 ):
-    return db.query(Consulta).order_by(Consulta.id.desc()).all()
+    consultas = db.query(Consulta).order_by(Consulta.id.desc()).all()
+    
+    # Consolida os dados de triagem diretamente para as consultas sem peso/temperatura
+    for c in consultas:
+        triagem = db.execute(
+            text("SELECT peso, temperatura FROM triagens WHERE consulta_id = :cid ORDER BY id DESC LIMIT 1"),
+            {"cid": c.id}
+        ).fetchone()
+        
+        if triagem:
+            if c.peso_atendimento is None:
+                c.peso_atendimento = triagem[0]
+            if c.temperatura is None:
+                c.temperatura = triagem[1]
+                
+    return consultas
 
 @router.post("/")
 def criar_consulta(
