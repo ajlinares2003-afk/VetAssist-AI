@@ -352,22 +352,34 @@ def listar_consultas(
     usuario_logado: str = Depends(obter_usuario_logado),
     db: Session = Depends(get_db)
 ):
-    # Devolvemos a listagem ORM original, limpa e à prova de falhas
-    return db.query(Consulta).order_by(Consulta.id.desc()).all()
+    consultas = db.query(Consulta).order_by(Consulta.id.desc()).all()
     
-    # Consolida os dados de triagem diretamente para as consultas sem peso/temperatura
     for c in consultas:
-        triagem = db.execute(
-            text("SELECT peso, temperatura FROM triagens WHERE consulta_id = :cid ORDER BY id DESC LIMIT 1"),
-            {"cid": c.id}
-        ).fetchone()
-        
-        if triagem:
-            if c.peso_atendimento is None:
-                c.peso_atendimento = triagem[0]
-            if c.temperatura is None:
-                c.temperatura = triagem[1]
-                
+        # Se faltar peso ou temperatura, procuramos na triagem de forma segura
+        if c.peso_atendimento is None or c.temperatura is None:
+            try:
+                # Tentativa 1: Tabela no singular (triagem)
+                triagem = db.execute(
+                    text("SELECT peso, temperatura FROM triagem WHERE consulta_id = :cid ORDER BY id DESC LIMIT 1"),
+                    {"cid": c.id}
+                ).fetchone()
+                if triagem:
+                    c.peso_atendimento = c.peso_atendimento or triagem[0]
+                    c.temperatura = c.temperatura or triagem[1]
+            except Exception:
+                db.rollback()  # Limpa o erro para a base de dados não bloquear
+                try:
+                    # Tentativa 2: Tabela no plural (triagens)
+                    triagem = db.execute(
+                        text("SELECT peso, temperatura FROM triagens WHERE consulta_id = :cid ORDER BY id DESC LIMIT 1"),
+                        {"cid": c.id}
+                    ).fetchone()
+                    if triagem:
+                        c.peso_atendimento = c.peso_atendimento or triagem[0]
+                        c.temperatura = c.temperatura or triagem[1]
+                except Exception:
+                    db.rollback()
+                    
     return consultas
 
 @router.post("/")
