@@ -16,6 +16,7 @@ from models.animais import Animal
 from models.usuario import Usuario  
 from schemas.consulta import ConsultaUpdate
 from services.security import obter_usuario_logado, exigir_perfil
+from services.texto_clinico import corrigir_siglas
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -140,11 +141,23 @@ async def sugestoes_copiloto_multimodal(
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
             f"- Exames/Laudos Anexados: {texto_anexos}\n"
-            f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}ir/min, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
+            f"- Parâmetros Vitais: Temperatura={temperatura} °C | FC (frequência cardíaca)={frequencia_cardiaca} bpm | "
+            f"FR (frequência respiratória)={frequencia_respiratoria} ir/min | "
+            f"TPC (Tempo de Preenchimento Capilar)={tpc_segundos} s | Mucosas={mucosas}\n\n"
             f"REGRAS OBRIGATÓRIAS:\n"
             f"1. Você DEVE fornecer uma suspeita diagnóstica principal (hipótese de trabalho).\n"
             f"2. Na análise clínica detalhada, comente explicitamente o estado do TPC e das Mucosas informados.\n"
-            f"3. Responda estritamente no formato:\n"
+            f"3. TERMINOLOGIA: TPC significa SEMPRE Tempo de Preenchimento Capilar (perfusão periférica, medido na mucosa gengival). "
+            f"FR é expressa em ir/min. Nunca invente o significado de siglas.\n"
+            f"4. MEDICINA VETERINÁRIA, NÃO HUMANA: considere a fisiologia da ESPÉCIE (ex.: gatos adultos não digerem lactose; "
+            f"não sugira 'teste de lactose', o diagnóstico é clínico). Não sugira exames ou condutas próprios da medicina humana.\n"
+            f"5. PROPORCIONALIDADE: a conduta deve ser compatível com a gravidade. Para quadros leves a moderados, não sugira opioides "
+            f"nem outros medicamentos de controle especial (ex.: buprenorfina, tramadol); reserve-os para dor moderada a intensa, "
+            f"pós-operatório ou trauma. Prefira medicamentos que o tutor consiga obter para o tratamento domiciliar.\n"
+            f"6. DOSES: informe apenas em mg/kg, dentro da faixa padrão da literatura veterinária (ex.: formulários como Plumb's). "
+            f"NÃO converta em comprimidos, gotas ou mL (isso é feito pelo sistema na receita) e, se não tiver segurança sobre a dose "
+            f"de um fármaco, escreva 'dose a confirmar' em vez de estimar.\n"
+            f"7. Responda estritamente no formato:\n"
             f"SUSPEITA: [Nome da doença ou alteração principal de forma direta, sem textos longos]\n"
             f"SUGESTOES: [Análise clínica dividida por tópicos, conduta e exames]"
         )
@@ -185,6 +198,8 @@ async def sugestoes_copiloto_multimodal(
         if not suspeita_extraida:
             suspeita_extraida = "Hipótese clínica a esclarecer"
 
+        suspeita_extraida = corrigir_siglas(suspeita_extraida)
+        sugestoes_extraidas = corrigir_siglas(sugestoes_extraidas)
         parecer_com_anexos = sugestoes_extraidas
         if nomes_arquivos:
             parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"

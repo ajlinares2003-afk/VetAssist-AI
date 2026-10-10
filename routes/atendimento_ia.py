@@ -30,6 +30,7 @@ from database.database import get_db
 from models.animais import Animal
 from services.ia_service import IAIndisponivelError, gerar_json
 from services.security import exigir_perfil
+from services.texto_clinico import corrigir_siglas
 
 logger = logging.getLogger("vetassist.atendimento_ia")
 
@@ -162,6 +163,13 @@ UNIDADES_CONCENTRACAO = {
 }
 
 DOSE_MAXIMA_MG_KG = 100.0   # trava de sanidade contra erro grosseiro da IA
+
+# Faixas de dose por tomada (mg/kg) usadas SÓ para alertar, nunca para alterar a dose.
+# Comece pequena e amplie com o formulário da clínica (Plumb's etc.). Confira antes de confiar.
+FAIXAS_DOSE_REFERENCIA = {
+    "omeprazol": (0.5, 1.0),
+    "maropitant": (1.0, 2.0),
+}
 PESO_MAXIMO_KG = 1500.0
 
 
@@ -426,6 +434,12 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
         if dose is not None and dose > DOSE_MAXIMA_MG_KG:
             alertas.append(f"{nome}: dose de {_fmt(dose)} mg/kg fora do plausível, item descartado.")
             continue
+        faixa = next((f for k, f in FAIXAS_DOSE_REFERENCIA.items() if k in nome_n), None)
+        if dose is not None and faixa and grupo in ("canino", "felino") and not faixa[0] <= dose <= faixa[1]:
+            alertas.append(
+                f"{nome}: dose de {_fmt(dose)} mg/kg fora da faixa de referência cadastrada "
+                f"({_fmt(faixa[0])} a {_fmt(faixa[1])} mg/kg). Confira no formulário antes de emitir."
+            )
         if dose is not None:
             dosagem = _calcular_dosagem(dose, peso, bruto.get("concentracao_valor"),
                                         conc_unidade, alertas, nome)
@@ -443,7 +457,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
         obs = str(bruto.get("observacao") or "").strip()[:400]
         observacoes = " ".join(p for p in (f"Via: {via}." if via else "", obs) if p)
 
-        recomendacoes = str(bruto.get("recomendacoes") or "").strip()[:300]
+        recomendacoes = corrigir_siglas(str(bruto.get("recomendacoes") or "").strip()[:300])
         lista_controle = _lista_controle_valida(bruto.get("lista_controle"))
         # A IA classifica; a lista fixa é só uma rede de segurança contra falso negativo.
         controlado = (_verdadeiro(bruto.get("controlado")) or bool(lista_controle)
@@ -474,7 +488,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
 
     for aviso in dados.get("alertas") or []:
         if isinstance(aviso, str) and aviso.strip():
-            alertas.append(aviso.strip()[:300])
+            alertas.append(corrigir_siglas(aviso.strip()[:300]))
     return {"itens": itens, "alertas": alertas[:15]}
 
 
@@ -504,7 +518,10 @@ def sugerir_receita(
         "5. frequencia_horas é o intervalo em horas (24, 12, 8, 6...). duracao_dias é um número.\n"
         "6. disponibilidade: \"HUMANO\" (comum em farmácia/drogaria), \"VETERINARIO\" (vendido em "
         "pet shop, agropecuária ou clínica veterinária) ou \"CLINICA\" (injetável aplicado na clínica).\n"
-        "7. Evite medicamentos de controle especial, a menos que sejam realmente necessários.\n"
+        "7. PROPORCIONALIDADE: a prescrição deve ser compatível com a gravidade do caso. Evite medicamentos de controle especial "
+        "(ex.: buprenorfina, tramadol, metadona) em quadros leves a moderados (ex.: gastrite leve, dor abdominal leve); reserve-os "
+        "para dor moderada a intensa, pós-operatório ou trauma. Considere a facilidade de o tutor obter o medicamento para o "
+        "tratamento domiciliar. Use doses dentro da faixa padrão da literatura veterinária; na dúvida, deixe dose_mg_kg null.\n"
         "8. controlado: true se o princípio ativo consta nas listas de controle especial da Portaria "
         "SVS/MS 344/98 (A1, A2, A3, B1, B2, C1, C2, C3, C4 ou C5); nesse caso informe a lista em "
         "lista_controle. Caso contrário, controlado false e lista_controle null.\n"
@@ -662,7 +679,7 @@ def _montar_exames(dados: dict) -> list:
             "nome": nome,
             "categoria": categoria,
             "prioridade": prioridade,
-            "justificativa": str(bruto.get("justificativa") or "").strip()[:300],
+            "justificativa": corrigir_siglas(str(bruto.get("justificativa") or "").strip()[:300]),
         })
     # Urgentes primeiro, mantendo a ordem original dentro de cada grupo.
     exames.sort(key=lambda e: 0 if e["prioridade"] == "URGENTE" else 1)
@@ -692,7 +709,9 @@ def sugerir_exames(
         "1. Peça só exames que mudem a conduta. Máximo de 8, do mais importante para o menos.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
         "(explique na justificativa).\n"
-        "3. Adeque os exames à espécie (ex.: valores e exames de rotina de répteis e aves diferem "
+        "3. Medicina veterinária, não humana: considere a fisiologia da espécie e NÃO peça exames próprios da medicina humana "
+        "(ex.: teste de intolerância à lactose em gato adulto; nessa situação o diagnóstico é clínico). "
+        "Adeque os exames à espécie (ex.: valores e exames de rotina de répteis e aves diferem "
         "dos de cães e gatos).\n"
         f"{preventivos}"
         "4. categoria: \"LABORATORIAL\", \"IMAGEM\" ou \"OUTRO\". prioridade: \"URGENTE\" (precisa "
@@ -786,7 +805,7 @@ def historico_do_paciente(
 
     consultas = db.execute(
         text(
-            "SELECT id, codigo, data_consulta, suspeita_diagnostica, peso_atendimento "
+            "SELECT id, codigo, data_consulta, suspeita_diagnostica, peso_atendimento, usuario_id "
             "FROM consulta WHERE animal_id = :a ORDER BY data_consulta DESC, id DESC LIMIT 50"
         ),
         {"a": animal_id},
@@ -801,6 +820,7 @@ def historico_do_paciente(
             "codigo": c["codigo"] or f"CNS-{c['id']:04d}",
             "data_consulta": _iso(c["data_consulta"]),
             "suspeita_diagnostica": c["suspeita_diagnostica"],
+            "usuario_id": c["usuario_id"],
             "peso_atendimento": float(c["peso_atendimento"]) if c["peso_atendimento"] is not None else None,
             "receitas": [],
             "exames": [],
