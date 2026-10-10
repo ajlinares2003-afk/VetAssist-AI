@@ -64,7 +64,7 @@ PROIBIDOS_POR_GRUPO = {
 # a lista vigente deve ser conferida pelo veterinário.
 POSSIVELMENTE_CONTROLADOS = (
     "tramadol", "morfina", "metadona", "fentanil", "cetamina", "ketamina",
-    "diazepam", "midazolam", "fenobarbital", "codeina", "petidina", "meperidina",
+    "diazepam", "midazolam", "fenobarbital", "codeina", "petidina", "meperidina", "buprenorfina",
 )
 
 RADICAIS_FELINO = (
