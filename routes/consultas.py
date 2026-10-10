@@ -451,32 +451,19 @@ def atualizar_consulta(
     if not consulta_db:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
 
-    if consulta.animal_id:
-        consulta_db.animal_id = consulta.animal_id
-    if consulta.usuario_id:
-        consulta_db.usuario_id = consulta.usuario_id
-    if consulta.codigo:
-        consulta_db.codigo = consulta.codigo
-    if hasattr(consulta, 'status') and consulta.status:
-        consulta_db.status = consulta.status
+    # Atualização parcial: só mexe nos campos que vieram na requisição.
+    # Campo ausente = mantém o valor salvo; campo enviado como null = limpa o valor.
+    dados = consulta.model_dump(exclude_unset=True)
 
-    consulta_db.queixa_principal = consulta.queixa_principal or consulta_db.queixa_principal
-    consulta_db.historico_clinico = consulta.historico_clinico
-    consulta_db.sintomas = consulta.sintomas
-    consulta_db.exame_fisico = consulta.exame_fisico
-    if hasattr(consulta, 'suspeita_diagnostica'):
-        consulta_db.suspeita_diagnostica = consulta.suspeita_diagnostica
-    consulta_db.peso_atendimento = consulta.peso_atendimento
-    consulta_db.temperatura = consulta.temperatura
-    consulta_db.frequencia_cardiaca = consulta.frequencia_cardiaca
-    consulta_db.frequencia_respiratoria = consulta.frequencia_respiratoria
-    consulta_db.parecer_copiloto = consulta.parecer_copiloto or consulta_db.parecer_copiloto
-    consulta_db.observacoes = consulta.observacoes
-    
-    if hasattr(consulta, 'indicacao_cirurgia'):
-        consulta_db.indicacao_cirurgia = consulta.indicacao_cirurgia
-    if hasattr(consulta, 'justificativa_cirurgica'):
-        consulta_db.justificativa_cirurgica = consulta.justificativa_cirurgica
+    # Estes nunca são apagados por valor vazio (mesmo comportamento anterior)
+    nao_aceitam_vazio = {"animal_id", "usuario_id", "codigo", "status", "queixa_principal", "parecer_copiloto"}
+
+    for campo, valor in dados.items():
+        if campo in nao_aceitam_vazio and not valor:
+            continue
+        # Só grava se a coluna existir no model (evita erro se TPC/mucosas ainda não foram criados)
+        if hasattr(Consulta, campo):
+            setattr(consulta_db, campo, valor)
 
     db.commit()
     db.refresh(consulta_db)

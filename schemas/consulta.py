@@ -20,6 +20,10 @@ class ConsultaBase(BaseModel):
     observacoes: Optional[str] = None
     indicacao_cirurgia: Optional[bool] = False
     justificativa_cirurgica: Optional[str] = None
+    tpc_segundos: Optional[float] = None
+    mucosas: Optional[str] = None
+    exames_anexados: Optional[str] = None
+    solicitar_exames_preventivos: Optional[bool] = False
 
 class ConsultaCreate(ConsultaBase):
     pass
@@ -42,6 +46,10 @@ class ConsultaUpdate(BaseModel):
     observacoes: Optional[str] = None
     indicacao_cirurgia: Optional[bool] = None
     justificativa_cirurgica: Optional[str] = None
+    tpc_segundos: Optional[float] = None
+    mucosas: Optional[str] = None
+    exames_anexados: Optional[str] = None
+    solicitar_exames_preventivos: Optional[bool] = None
 
 class ConsultaResponse(ConsultaBase):
     id: int
