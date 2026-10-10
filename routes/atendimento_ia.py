@@ -15,6 +15,7 @@ Princípios de segurança (a IA é APOIO; quem prescreve é o veterinário):
 Lembre de registrar no main.py:  app.include_router(atendimento_ia.router)
 """
 import logging
+import math
 import re
 import unicodedata
 import uuid
@@ -63,9 +64,92 @@ PROIBIDOS_POR_GRUPO = {
 # Possivelmente sujeitos a controle especial (Portaria SVS/MS 344/98). Só um aviso:
 # a lista vigente deve ser conferida pelo veterinário.
 POSSIVELMENTE_CONTROLADOS = (
-    "tramadol", "morfina", "metadona", "fentanil", "cetamina", "ketamina",
-    "diazepam", "midazolam", "fenobarbital", "codeina", "petidina", "meperidina", "buprenorfina",
+    "tramadol", "morfina", "metadona", "fentanil", "codeina", "petidina", "meperidina",
+    "buprenorfina", "oxicodona", "hidromorfona", "remifentanil", "sufentanil", "alfentanil",
+    "tapentadol", "cetamina", "ketamina", "tiletamina", "zolazepam", "diazepam", "midazolam",
+    "clonazepam", "alprazolam", "lorazepam", "clorazepato", "fenobarbital", "pentobarbital",
+    "amitriptilina", "clomipramina", "fluoxetina", "sertralina", "paroxetina", "carbamazepina",
 )
+
+LISTAS_CONTROLE = {"A1", "A2", "A3", "B1", "B2", "C1", "C2", "C3", "C4", "C5"}
+
+# Marcadores usados para guardar recomendações e quantidade dentro de item_prescricao.observacoes,
+# sem exigir novas colunas. O histórico separa de volta; em outras telas o texto continua legível.
+SEP_QUANTIDADE = "\n\nQuantidade: "
+SEP_RECOMENDACOES = "\n\nRecomendações adicionais: "
+
+_UNIDADES_EXT = ["zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez",
+                 "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"]
+_DEZENAS_EXT = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"]
+_CENTENAS_EXT = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos",
+                 "setecentos", "oitocentos", "novecentos"]
+
+
+def _extenso(n: int) -> str:
+    """Número por extenso (receituário de controle especial pede a quantidade em algarismos e por extenso)."""
+    if n < 20:
+        return _UNIDADES_EXT[n]
+    if n < 100:
+        d, u = divmod(n, 10)
+        return _DEZENAS_EXT[d] + (f" e {_UNIDADES_EXT[u]}" if u else "")
+    if n == 100:
+        return "cem"
+    if n < 1000:
+        c, r = divmod(n, 100)
+        return _CENTENAS_EXT[c] + (f" e {_extenso(r)}" if r else "")
+    return str(n)
+
+
+def _verdadeiro(valor) -> bool:
+    return valor is True or str(valor).strip().lower() in ("true", "sim", "1")
+
+
+def _lista_controle_valida(valor) -> Optional[str]:
+    lista = str(valor or "").strip().upper().replace(" ", "")
+    return lista if lista in LISTAS_CONTROLE else None
+
+
+def _empacotar_observacoes(observacoes, recomendacoes, quantidade) -> Optional[str]:
+    base = str(observacoes or "").strip()
+    if quantidade and str(quantidade).strip():
+        base += SEP_QUANTIDADE + str(quantidade).strip()[:200]
+    rec = str(recomendacoes or "").strip()
+    if rec:
+        orcamento = 1000 - len(base) - len(SEP_RECOMENDACOES)   # cabe em colunas de 1000 caracteres
+        if orcamento > 0:
+            base += SEP_RECOMENDACOES + rec[:orcamento]
+    return base or None
+
+
+def _desempacotar_observacoes(texto) -> dict:
+    texto = str(texto or "")
+    recomendacoes = quantidade = ""
+    if SEP_RECOMENDACOES in texto:
+        texto, recomendacoes = texto.split(SEP_RECOMENDACOES, 1)
+    if SEP_QUANTIDADE in texto:
+        texto, quantidade = texto.split(SEP_QUANTIDADE, 1)
+    return {"observacoes": texto.strip(), "recomendacoes": recomendacoes.strip(), "quantidade": quantidade.strip()}
+
+
+def _quantidade_total(dose, peso, conc_valor, conc_unidade, freq_horas, dias) -> Optional[str]:
+    """Quantidade a dispensar para o tratamento completo (só quando há dados para calcular)."""
+    conc, h, d = _numero(conc_valor), _numero(freq_horas), _numero(dias)
+    if dose is None or peso is None or conc is None or h is None or d is None:
+        return None
+    tomadas = max(1, math.ceil(d * 24 / h))
+    por_tomada_mg = dose * peso
+    if conc_unidade == "mg/mL":
+        total_ml = por_tomada_mg / conc * tomadas
+        return f"1 (um) frasco — volume do tratamento completo ≈ {_fmt(total_ml)} mL"
+    if conc_unidade in ("mg/comprimido", "mg/cápsula"):
+        unidade = "comprimido" if conc_unidade == "mg/comprimido" else "cápsula"
+        por_tomada = round(por_tomada_mg / conc * 4) / 4
+        if por_tomada <= 0:
+            return None
+        n = math.ceil(por_tomada * tomadas)
+        return f"{n} ({_extenso(n)}) {unidade if n == 1 else unidade + 's'} de {_fmt(conc)} mg"
+    return None
+
 
 RADICAIS_FELINO = (
     "gat", "felin", "felis", "caracal", "lince", "leopard", "jaguar", "onca",
@@ -113,6 +197,20 @@ class ItemReceita(BaseModel):
     duracao: Optional[str] = Field(None, max_length=200)
     tipo_uso: Optional[str] = Field(None, max_length=100)
     observacoes: Optional[str] = Field(None, max_length=1000)
+    recomendacoes: Optional[str] = Field(None, max_length=800)
+    quantidade: Optional[str] = Field(None, max_length=200)
+
+
+class MedicamentoAnalise(BaseModel):
+    medicamento: str = Field(..., min_length=1, max_length=300)
+    dosagem: Optional[str] = Field(None, max_length=500)
+    frequencia: Optional[str] = Field(None, max_length=200)
+    duracao: Optional[str] = Field(None, max_length=200)
+
+
+class AnaliseMedicamentos(ContextoClinico):
+    """Contexto do caso + a lista completa de medicamentos da receita (para considerar interações)."""
+    medicamentos: List[MedicamentoAnalise] = Field(..., min_length=1, max_length=12)
 
 
 class ReceitaSalvar(BaseModel):
@@ -258,7 +356,7 @@ def _texto_do_caso(d: dict) -> str:
     vitais = (
         f"Temp={d.get('temperatura') or 'não aferida'} °C; FC={d.get('frequencia_cardiaca') or 'não aferida'} bpm; "
         f"FR={d.get('frequencia_respiratoria') or 'não aferida'} ir/min; "
-        f"TPC={d.get('tpc_segundos') or 'não aferido'} s; Mucosas={d.get('mucosas') or 'não informadas'}"
+        f"TPC (tempo de preenchimento capilar)={d.get('tpc_segundos') or 'não aferido'} s; Mucosas={d.get('mucosas') or 'não informadas'}"
     )
     peso = f"{_fmt(d['peso'])} kg" if d.get("peso") else "NÃO INFORMADO"
     return (
@@ -345,12 +443,20 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
         obs = str(bruto.get("observacao") or "").strip()[:400]
         observacoes = " ".join(p for p in (f"Via: {via}." if via else "", obs) if p)
 
-        controlado = any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS)
+        recomendacoes = str(bruto.get("recomendacoes") or "").strip()[:300]
+        lista_controle = _lista_controle_valida(bruto.get("lista_controle"))
+        # A IA classifica; a lista fixa é só uma rede de segurança contra falso negativo.
+        controlado = (_verdadeiro(bruto.get("controlado")) or bool(lista_controle)
+                      or any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS))
+        quantidade = None
         if controlado:
             alertas.append(
-                f"{nome}: pode exigir receituário de controle especial (Portaria SVS/MS 344/98). "
-                "Confira a lista vigente antes de emitir."
+                f"{nome}: medicamento de controle especial"
+                f"{f' (lista {lista_controle})' if lista_controle else ''} (Portaria SVS/MS 344/98). "
+                "Confira a lista vigente e a quantidade antes de emitir."
             )
+            quantidade = _quantidade_total(dose, peso, bruto.get("concentracao_valor"), conc_unidade,
+                                           bruto.get("frequencia_horas"), bruto.get("duracao_dias"))
 
         itens.append({
             "medicamento": titulo,
@@ -361,6 +467,9 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
             "tipo_uso_rotulo": TIPO_USO_ROTULO[tipo],
             "observacoes": observacoes,
             "controlado": controlado,
+            "lista_controle": lista_controle,
+            "recomendacoes": recomendacoes,
+            "quantidade": quantidade,
         })
 
     for aviso in dados.get("alertas") or []:
@@ -398,12 +507,20 @@ def sugerir_receita(
         "6. disponibilidade: \"HUMANO\" (comum em farmácia/drogaria), \"VETERINARIO\" (vendido em "
         "pet shop, agropecuária ou clínica veterinária) ou \"CLINICA\" (injetável aplicado na clínica).\n"
         "7. Evite medicamentos de controle especial, a menos que sejam realmente necessários.\n"
-        "8. Não escreva nada fora do JSON.\n\n"
+        "8. controlado: true se o princípio ativo consta nas listas de controle especial da Portaria "
+        "SVS/MS 344/98 (A1, A2, A3, B1, B2, C1, C2, C3, C4 ou C5); nesse caso informe a lista em "
+        "lista_controle. Caso contrário, controlado false e lista_controle null.\n"
+        "9. recomendacoes: orientações práticas de administração para ESTE paciente: relação com "
+        "alimentação ou jejum, horário, intervalo em relação aos OUTROS medicamentos desta mesma receita, "
+        "interações e sinais para suspender e procurar a clínica. Máximo de 250 caracteres, em português, "
+        "sem repetir dose nem frequência. Inclua apenas conhecimento consolidado; se não houver nada "
+        "relevante, use null.\n"
+        "10. Não escreva nada fora do JSON.\n\n"
         "FORMATO (JSON):\n"
         "{\"medicamentos\": [{\"nome\": \"Dipirona sódica\", \"apresentacao\": \"gotas 500 mg/mL\", "
         "\"concentracao_valor\": 500, \"concentracao_unidade\": \"mg/mL\", \"dose_mg_kg\": 25, "
         "\"posologia_texto\": null, \"via\": \"oral\", \"frequencia_horas\": 8, \"duracao_dias\": 5, "
-        "\"disponibilidade\": \"HUMANO\", \"observacao\": \"Indicado para analgesia.\"}], "
+        "\"disponibilidade\": \"HUMANO\", \"controlado\": false, \"lista_controle\": null, \"recomendacoes\": \"Administrar junto com o alimento.\", \"observacao\": \"Indicado para analgesia.\"}], "
         "\"alertas\": [\"cuidados gerais, interações ou monitoramento\"]}"
     )
     try:
@@ -422,6 +539,68 @@ def sugerir_receita(
                  "conferidas pelo veterinário responsável antes da emissão.",
     })
     return receita
+
+
+def _validar_analise(dados: dict) -> dict:
+    if not isinstance(dados.get("medicamentos"), list):
+        raise ValueError("JSON sem a lista 'medicamentos'.")
+    return dados
+
+
+@router.post("/analisar-medicamentos")
+def analisar_medicamentos(
+    corpo: AnaliseMedicamentos,
+    usuario_logado=Depends(exigir_perfil(PERFIS_CLINICOS)),
+    db: Session = Depends(get_db),
+):
+    """
+    Para medicamentos incluídos/editados à mão: a IA classifica o controle especial e escreve
+    as recomendações de administração considerando o paciente e os demais itens da receita.
+    """
+    d = _carregar_contexto(db, corpo)
+    linhas = "\n".join(
+        f"{i + 1}. {m.medicamento}"
+        f" | dosagem: {m.dosagem or '-'} | frequência: {m.frequencia or '-'} | duração: {m.duracao or '-'}"
+        for i, m in enumerate(corpo.medicamentos)
+    )
+    prompt = (
+        "Você é um médico veterinário clínico experiente no Brasil, revisando uma receita.\n\n"
+        f"PACIENTE E CASO:\n{_texto_do_caso(d)}\n\n"
+        f"MEDICAMENTOS DA RECEITA:\n{linhas}\n\n"
+        "Para CADA medicamento, na MESMA ORDEM e com o mesmo nome:\n"
+        "1. controlado: true se o princípio ativo consta nas listas de controle especial da Portaria "
+        "SVS/MS 344/98 (A1, A2, A3, B1, B2, C1, C2, C3, C4 ou C5), informando a lista em lista_controle; "
+        "caso contrário false e null.\n"
+        "2. recomendacoes: orientações práticas de administração para ESTE paciente (espécie, peso e idade): "
+        "relação com alimentação ou jejum, horário, intervalo em relação aos OUTROS medicamentos desta "
+        "receita, interações e sinais para suspender e procurar a clínica. Máximo de 250 caracteres, em "
+        "português, sem repetir dose nem frequência. Apenas conhecimento consolidado; se não houver nada "
+        "relevante, use null.\n"
+        "Não escreva nada fora do JSON.\n\n"
+        "FORMATO (JSON):\n"
+        "{\"medicamentos\": [{\"nome\": \"Sucralfato\", \"controlado\": false, \"lista_controle\": null, "
+        "\"recomendacoes\": \"Manter intervalo de 2 horas em relação a outros medicamentos.\"}]}"
+    )
+    try:
+        resp = gerar_json(db, prompt, validar=_validar_analise)
+    except IAIndisponivelError as exc:
+        _erro_ia(exc)
+
+    brutos = [b for b in resp.dados["medicamentos"] if isinstance(b, dict)]
+    por_nome = {_norm(b.get("nome")): b for b in brutos if b.get("nome")}
+    saida = []
+    for i, m in enumerate(corpo.medicamentos):
+        bruto = brutos[i] if len(brutos) == len(corpo.medicamentos) else por_nome.get(_norm(m.medicamento), {})
+        lista = _lista_controle_valida(bruto.get("lista_controle"))
+        nome_n = _norm(m.medicamento)
+        saida.append({
+            "medicamento": m.medicamento,
+            "controlado": (_verdadeiro(bruto.get("controlado")) or bool(lista)
+                           or any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS)),
+            "lista_controle": lista,
+            "recomendacoes": str(bruto.get("recomendacoes") or "").strip()[:300],
+        })
+    return {"itens": saida, "provedor": resp.provedor, "modelo": resp.modelo}
 
 
 @router.post("/receita")
@@ -447,7 +626,8 @@ def salvar_receita(
                     "VALUES (:p, :m, :d, :f, :u, :t, :o)"
                 ),
                 {"p": prescricao_id, "m": item.medicamento, "d": item.dosagem, "f": item.frequencia,
-                 "u": item.duracao, "t": item.tipo_uso, "o": item.observacoes},
+                 "u": item.duracao, "t": item.tipo_uso,
+                 "o": _empacotar_observacoes(item.observacoes, item.recomendacoes, item.quantidade)},
             )
         db.commit()
     except Exception:
@@ -646,9 +826,9 @@ def historico_do_paciente(
             {"ids": [r["id"] for r in receitas]},
         ).mappings().all()
         for item in itens:
-            itens_por_receita.setdefault(item["prescricao_id"], []).append(
-                {k: item[k] for k in ("medicamento", "dosagem", "frequencia", "duracao", "tipo_uso", "observacoes")}
-            )
+            registro = {k: item[k] for k in ("medicamento", "dosagem", "frequencia", "duracao", "tipo_uso")}
+            registro.update(_desempacotar_observacoes(item["observacoes"]))
+            itens_por_receita.setdefault(item["prescricao_id"], []).append(registro)
     for r in receitas:
         por_consulta[r["consulta_id"]]["receitas"].append({
             "id": r["id"],
