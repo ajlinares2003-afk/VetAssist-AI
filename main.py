@@ -34,6 +34,8 @@ from routes.internacoes import router as internacoes_router
 from routes import triagem
 from routes import financeiro
 from routes import configuracoes
+from routes import atendimento_ia
+
 
 app = FastAPI(
     title="VetAssist AI",
@@ -89,6 +91,7 @@ app.include_router(internacoes_router)
 app.include_router(cirurgias.router)
 app.include_router(financeiro.router)
 app.include_router(configuracoes.router)
+app.include_router(atendimento_ia.router)
 
 @app.get("/")
 def home():

@@ -90,12 +90,12 @@ async def upload_anexo_exame(
     usuario_logado = Depends(obter_usuario_logado)
 ):
     try:
-        caminho_arquivo = UPLOADS_DIR / f"{file.filename}"
+        caminho_arquivo = UPLOADS_DIR / Path(file.filename).name
         with open(caminho_arquivo, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         return {
             "mensagem": "Arquivo enviado com sucesso!",
-            "nome_arquivo": file.filename,
+            "nome_arquivo": Path(file.filename).name,
             "caminho": str(caminho_arquivo)
         }
     except Exception as e:
@@ -125,10 +125,10 @@ async def sugestoes_copiloto_multimodal(
         nomes_arquivos = []
         for file in files:
             if file.filename:
-                caminho_arquivo = UPLOADS_DIR / f"{file.filename}"
+                caminho_arquivo = UPLOADS_DIR / Path(file.filename).name
                 with open(caminho_arquivo, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
-                nomes_arquivos.append(file.filename)
+                nomes_arquivos.append(Path(file.filename).name)
 
         texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
 
@@ -140,7 +140,7 @@ async def sugestoes_copiloto_multimodal(
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
             f"- Exames/Laudos Anexados: {texto_anexos}\n"
-            f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}mpm, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
+            f"- Parâmetros Vitais: Temp={temperatura}°C, FC={frequencia_cardiaca}bpm, FR={frequencia_respiratoria}ir/min, TPC={tpc_segundos}s, Mucosas={mucosas}\n\n"
             f"REGRAS OBRIGATÓRIAS:\n"
             f"1. Você DEVE fornecer uma suspeita diagnóstica principal (hipótese de trabalho).\n"
             f"2. Na análise clínica detalhada, comente explicitamente o estado do TPC e das Mucosas informados.\n"
@@ -160,9 +160,10 @@ async def sugestoes_copiloto_multimodal(
             )
             texto_resposta = response.choices[0].message.content
         else:
-            texto_resposta = (
-                "SUSPEITA: Dermatite alérgica a pulga (FAD)\n"
-                "SUGESTOES: Controle imediato de ectoparasitas, banho terapêutico e avaliação dos exames anexados."
+            # Nunca inventar um diagnóstico: sem IA configurada, avisa em vez de responder "de mentira".
+            raise HTTPException(
+                status_code=503,
+                detail="Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA.",
             )
 
         suspeita_extraida = ""
@@ -201,9 +202,10 @@ async def sugestoes_copiloto_multimodal(
             "suspeita_diagnostica": suspeita_extraida,
             "exames_anexados": texto_anexos if nomes_arquivos else None,
             "indicacao_cirurgia": tem_indicacao,
-            "justificativa_cirurgica": justificativa_cirurgica_texto,
-            "exames_sugeridos": ["Hemograma completo", "Tomografia ou Ressonância"]
+            "justificativa_cirurgica": justificativa_cirurgica_texto
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao processar IA: {str(e)}")
 
