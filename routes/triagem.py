@@ -485,6 +485,12 @@ def avaliar_triagem_ia(
 # --------------------------------------------------------------------------- #
 # Persistência e filas
 # --------------------------------------------------------------------------- #
+STATUS_EM_TRIAGEM = (
+    "AGUARDANDO_TRIAGEM", "Aguardando Triagem (Recepção)", "Aguardando Triagem",
+    "Chamando para Triagem", "Em Triagem",
+)
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def criar_ou_atualizar_triagem(
     dados: TriagemCreate,
@@ -524,6 +530,12 @@ def criar_ou_atualizar_triagem(
             justificativa_risco=dados.justificativa_risco
         )
         db.add(triagem_db)
+
+    # Triagem concluída: só agora o paciente entra na fila de consulta do veterinário.
+    # Só muda quem ainda está na triagem; reeditar uma triagem não "rebaixa" um atendimento em curso.
+    consulta_triada = db.query(Consulta).filter(Consulta.id == dados.consulta_id).first()
+    if consulta_triada and consulta_triada.status in STATUS_EM_TRIAGEM:
+        consulta_triada.status = "Aguardando Consulta (Fila Vet)"
 
     db.commit()
     db.refresh(triagem_db)
