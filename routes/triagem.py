@@ -572,7 +572,7 @@ def listar_fila_triagem(
     consultas_aguardando = db.query(Consulta).filter(
         Consulta.status.in_([
             "AGUARDANDO_TRIAGEM", "Aguardando Triagem (Recepção)", "Aguardando Triagem",
-            "Chamando para Triagem", "AGUARDANDO_VACINA", "Aguardando Vacina"
+            "Chamando para Triagem", "Em Triagem", "AGUARDANDO_VACINA", "Aguardando Vacina"
         ])
     ).order_by(Consulta.id.asc()).all()
 

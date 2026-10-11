@@ -348,6 +348,7 @@ def listar_fila_triagem(
             "Aguardando Triagem (Recepção)",
             "Aguardando Triagem",
             "Chamando para Triagem",
+            "Em Triagem",  # triagem iniciada e não concluída: continua na fila (senão o paciente "some")
             "AGUARDANDO_VACINA",
             "Aguardando Vacina"
         ])
