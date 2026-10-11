@@ -39,3 +39,33 @@ Na triagem minha ideia era que a IA através da informações cadastradas no che
 O enfermeiro realiza as as aferições reais FC, FR, Temperatura, TPC e Mucosas.
 A IA com base nessas informações mais a queixas principal realiza a classificação Manchester do paciente.
 Enviei os códigos Backend e Frontend para a sua análise.
+
+
+Estou tentando desenvolver um sistema para uma clinica Veterinária, esse sistema consta com aparte de cadastrado de animais, tutores, check-in, triagem e atendimento.
+Um dos propósitos do sistema é atuar como um assistente veterinário virtual com ajuda na triagem na triagem do paciente. Nesse módulo da triagem minha ideia era  desenvolver um sistema que analisasse o estado do paciente fizesse a classificação Manchester Automaticamente, por exemplo:
+O tutor chega na clinica com o pet se direciona a recepção, a recepcionista realiza o cadastro do tutor, nome, telefone, cep (o sistema já busca o endereço), número e e-mail.
+Em seguida realiza o cadastro do animal, informando, o nome: Zafira, Espécie: Felino , Sub espécie: Felino Doméstico, Raça: SRD, Porte: Médio e idade: 3 anos, através dessas informações cadastradas a IA  realiza uma busca do nome científico do animal Exemplo: Felis Catus.
+Após a realização do cadastro é feito o ckeck-in com os dados do paciente e tutor e a queixa principal. 
+Após o check-in o paciente é encaminhado para triagem (Aguarda na recepção a chamada pelo Painel de Atendimento).
+Na triagem ao selecionar o paciente a IA através de chaves de APIs, com as informações cadastradas do animal (Espécie, Sub espécie, Nome Cientifico, raça, porte e idade) com base em sites confiáveis me informasse na tela abaixo dos respectivos campos os parâmetros vitais normais e em situação de atendimento clínico; Frequência Cardíaca, Frequência Respiratória, Temperatura, TPC, Tipo de Mucosas Normocoradas. 
+O enfermeiro realiza as as aferições reais FC, FR, Temperatura, TPC e Mucosas.
+A IA com base nessas informações mais a queixas principal realiza a classificação Manchester do paciente.
+Enviei os códigos Backend e Frontend para a sua análise.
+Eu criei no cadastro de animais para quando a recepcionista estiver cadastrando o animal a IA buscar o nome científico, a intenção é facilitar no momento da triagem a busca dos parâmetros vitais da espécie a ser atendida.
+Pode me ajudar a implementar no modelo de triagem a busca dos parâmetros vitais da espécie,  pelo nome cientifico, considerando a idade e o porto do animal. 
+Segue anexo os arquivos de cadastro para a sua análise e entendimento para a ajuda na criação do novo modelo de triagem com o cientifico.
+Queria também a IA sempre buscasse os parâmetros nesses sites recomendados conforme a tabela em anexo.
+
+
+O Tody está vomitando há três dias. Eu venho oferecendo leite de vaca para ele achando que faz bem. Ele come ração, mas quando toma o leite acaba vomitando depois. Está mais quieto, mas continua bebendo água.
+Vômito de coloração entre marrom e amarelo (Parecido com cor da ração).
+
+Geral: Alerta, reativo, contato bom. Pelo sem brilho leve.
+Aparelho Digestivo: Abdome levemente sensível à palpação em região cranial. Sem massas, sem distensão gasosa acentuada.
+Mucosas: Normocoradas, úmidas.
+Cardiorespiratório: Sem sopros, sem ruídos adventícios. FR levemente elevada — provável estresse da consulta.
+Pele/Tecido Subcutâneo: Turgor normal. Sem sinais de desidratação.
+
+Achados Ortopédicos (Trauma da Queda): Edema moderado e calor na articulação fêmoro-tibio-patelar do membro pélvico direito. Dor aguda à palpação profunda e resistência total à extensão da perna, sem crepitação óssea evidente (sugerindo fratura fechada alinhada ou severa lesão ligamentar).
+Achados Toxicológicos (Paracetamol): Leve edema facial e inchaço nas patas dianteiras (um sinal patognomônico clássico da toxicidade por acetaminofeno em felinos). Presença de sialorreia (salivação excessiva), indicando náusea aguda.
+Evolução Visível: As mucosas, que na triagem rápida com o tutor pareciam apenas normocoradas, sob a luz branca do foco do consultório já começam a revelar um subtom levemente achocolatado/cianótico. Isto é o início da metemoglobinemia — o paracetamol já está a destruir a capacidade das hemácias do gato de transportar oxigênio.

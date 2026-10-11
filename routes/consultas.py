@@ -149,6 +149,10 @@ async def sugestoes_copiloto_multimodal(
             f"2. PROIBIÇÃO ABSOLUTA DE TRATAMENTOS TÓXICOS POR ESPÉCIE: Gatos NÃO toleram e NÃO PODEM receber Paracetamol, Permetrina, "
             f"Azul de Metileno (Methylene Blue) ou AINEs em contexto de insuficiência hepática/intoxicação. Sugerir Azul de Metileno "
             f"para um felino será considerado erro letal de conduta. Para intoxicação por Paracetamol em gatos, o antídoto padrão é a Acetilcisteína.\n"
+            f"2.1 TOXICOLOGIA DE LAGOMORFOS E ROEDORES: É EXPRESSAMENTE PROIBIDO prescrever ou ignorar o uso prévio de penicilinas (ex: Amoxicilina), "
+            f"lincosamidas ou cefalosporinas por via ORAL para coelhos, porquinhos-da-índia e chinchilas. A administração oral destes fármacos causa "
+            f"disbiose letal e enterotoxemia por supercrescimento clostridiano. Se o relato indicar uso destes fármacos, VOCÊ DEVE OBRIGATORIAMENTE "
+            f"apontar a enterotoxemia/disbiose medicamentosa como causa primária do quadro agudo.\n"
             f"3. IDIOMA ESTREITO E TÉCNICO (NÃO TRADUZA DO INGLÊS): Todo o raciocínio deve usar estritamente o vocabulário médico-veterinário brasileiro. "
             f"Use SEMPRE 'metemoglobinemia' (e não 'methemoglobinemia'), 'tala' (e não 'splint'), e 'claudicação' (e não 'lamença').\n"
             f"4. Na análise clínica detalhada, comente explicitamente o estado do TPC e das Mucosas informados.\n"
@@ -174,7 +178,6 @@ async def sugestoes_copiloto_multimodal(
             )
             texto_resposta = response.choices[0].message.content
         else:
-            # Nunca inventar um diagnóstico: sem IA configurada, avisa em vez de responder "de mentira".
             raise HTTPException(
                 status_code=503,
                 detail="Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA.",

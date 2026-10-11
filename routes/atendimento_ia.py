@@ -501,6 +501,15 @@ def sugerir_receita(
     d = _carregar_contexto(db, ctx)
     _exigir_parecer(d)
 
+    @router.post("/sugerir-receita")
+def sugerir_receita(
+    ctx: ContextoClinico,
+    usuario_logado=Depends(exigir_perfil(PERFIS_CLINICOS)),
+    db: Session = Depends(get_db),
+):
+    d = _carregar_contexto(db, ctx)
+    _exigir_parecer(d)
+
     prompt = (
         "Você é um médico veterinário clínico experiente no Brasil, apoiando a elaboração de uma "
         "receita. Com base SOMENTE no caso abaixo, sugira o tratamento medicamentoso necessário.\n\n"
@@ -509,6 +518,7 @@ def sugerir_receita(
         "1. Sugira TODOS os medicamentos justificados pelo parecer clínico para garantir um suporte terapêutico completo e seguro. NÃO omita itens essenciais (ex: protetores gástricos, analgésicos) ao gerar a prescrição.\n"
         "2. ESPÉCIE E TOXICOLOGIA VETERINÁRIA: Doses, segurança e antídotos dependem OBRIGATORIAMENTE da ESPÉCIE. "
         "É expressamente proibido sugerir tratamentos humanos tóxicos para animais (ex.: paracetamol/permetrina/azul de metileno para felinos; ibuprofeno/diclofenaco para cães). Para intoxicação por Paracetamol, o antídoto padrão é a Acetilcisteína.\n"
+        "2.1 TOXICOLOGIA DE LAGOMORFOS E ROEDORES: É TERMINANTEMENTE PROIBIDO prescrever penicilinas (ex: Amoxicilina), lincosamidas ou cefalosporinas por via ORAL para coelhos, porquinhos-da-índia e chinchilas. Estas substâncias causam enterotoxemia e morte nestas espécies. Se uma destas drogas tiver sido prescrita acidentalmente ou administrada pelo tutor, OBRIGATORIAMENTE gere um alerta sobre a necessidade de estabilização do choque e disbiose cecal.\n"
         "3. NÃO invente dose. Para espécie exótica/silvestre sem dose bem estabelecida na "
         "literatura, deixe dose_mg_kg como null e escreva em posologia_texto "
         "\"definir dose com o veterinário\".\n"
@@ -525,7 +535,7 @@ def sugerir_receita(
         "SVS/MS 344/98 da ANVISA (listas A1 a C5) OU nas normativas de controle especial do MAPA "
         "(ex: IN 35/2017 para anestésicos). Nesse caso informe a lista em lista_controle (ex: 'C1', 'MAPA'). Caso contrário, false e null.\n"
         "10. recomendacoes: orientações práticas de administração para ESTE paciente. Máximo de 250 caracteres, em português.\n"
-        "11. PROIBIDO INVENTAR CONCENTRAÇÕES (MATEMÁTICA PREGUIÇOSA): É terminantemente proibido criar apresentações fictícias (ex: \"1 mg/comprimido\" para Maropitant) apenas para contornar a matemática. Use EXATAMENTE os miligramas reais de prateleira da indústria (ex: 16 mg, 20 mg). O sistema Python fará o cálculo do fracionamento. Se incompatível com o peso, prescreva obrigatoriamente como Fórmula Manipulada.\n"
+        "11. PROIBIDO INVENTAR CONCENTRAÇÕES E DOSES (MATEMÁTICA PREGUIÇOSA): É terminantemente proibido criar apresentações fictícias (ex: \"1 mg/comprimido\" para Maropitant) apenas para contornar a matemática. Use EXATAMENTE os miligramas reais de prateleira da indústria (ex: 16 mg, 20 mg). O sistema Python fará o cálculo do fracionamento. Se incompatível com o peso, prescreva obrigatoriamente como Fórmula Manipulada. Se for uma ESPÉCIE EXÓTICA e a dose da medicação escolhida (ex: Enrofloxacino, Metoclopramida, Meloxicam) precisar ser confirmada, escreva na via 'A definir' e deixe a dose_mg_kg como null. Não adivinhe a quantidade em ml.\n"
         "12. É EXPRESSAMENTE PROIBIDO INVENTAR CONCENTRAÇÕES DE PRATELEIRA: Use as concentrações reais da indústria brasileira aprovadas pelos órgãos competentes. Se a IA decidir transformar um medicamento que só existe em comprimido (como Maropitant ou Famotidina) numa suspensão oral ou xarope, deve OBRIGATORIAMENTE escrever 'Fórmula Manipulada' no nome da apresentação.\n"
         "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\".\n"
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias).\n"
