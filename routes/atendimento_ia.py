@@ -501,15 +501,6 @@ def sugerir_receita(
     d = _carregar_contexto(db, ctx)
     _exigir_parecer(d)
 
-    @router.post("/sugerir-receita")
-def sugerir_receita(
-    ctx: ContextoClinico,
-    usuario_logado=Depends(exigir_perfil(PERFIS_CLINICOS)),
-    db: Session = Depends(get_db),
-):
-    d = _carregar_contexto(db, ctx)
-    _exigir_parecer(d)
-
     prompt = (
         "Você é um médico veterinário clínico experiente no Brasil, apoiando a elaboração de uma "
         "receita. Com base SOMENTE no caso abaixo, sugira o tratamento medicamentoso necessário.\n\n"
