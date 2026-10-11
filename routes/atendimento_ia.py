@@ -510,6 +510,8 @@ def sugerir_receita(
         "2. ESPÉCIE E TOXICOLOGIA VETERINÁRIA: Doses, segurança e antídotos dependem OBRIGATORIAMENTE da ESPÉCIE. "
         "É expressamente proibido sugerir tratamentos humanos tóxicos para animais (ex.: paracetamol/permetrina/azul de metileno para felinos; ibuprofeno/diclofenaco para cães). Para intoxicação por Paracetamol, o antídoto padrão é a Acetilcisteína.\n"
         "2.1 TOXICOLOGIA DE LAGOMORFOS E ROEDORES: É TERMINANTEMENTE PROIBIDO prescrever penicilinas (ex: Amoxicilina), lincosamidas ou cefalosporinas por via ORAL para coelhos, porquinhos-da-índia e chinchilas. Estas substâncias causam enterotoxemia e morte nestas espécies. Se uma destas drogas tiver sido prescrita acidentalmente ou administrada pelo tutor, OBRIGATORIAMENTE gere um alerta sobre a necessidade de estabilização do choque e disbiose cecal.\n"
+        "2.2 ANIMAIS DE PRODUÇÃO E AQUICULTURA: Para espécies de produção (corte/consumo humano), é OBRIGATORIAMENTE NECESSÁRIO informar no campo de "
+        "alertas ou recomendações o período de carência (retirada) regulamentado pelos órgãos competentes para o fármaco prescrito, garantindo a segurança alimentar.\n"
         "3. NÃO invente dose. Para espécie exótica/silvestre sem dose bem estabelecida na "
         "literatura, deixe dose_mg_kg como null e escreva em posologia_texto "
         "\"definir dose com o veterinário\".\n"
