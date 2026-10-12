@@ -54,7 +54,7 @@ def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
             client = Groq(api_key=api_key) if api_key else None
             return "groq", client, modelo
         else:
-            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")) .fetchone()
+            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
             r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_api_key'")).fetchone()
             
             modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.6-flash"
@@ -141,7 +141,7 @@ async def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
 
-prompt_ia = (
+        prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
             f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal rigorosamente exata e direta (ex: se os sintomas indicam corrimento nasal, nódulos ulcerados e febre em equinos, a suspeita oficial é exclusivamente Mormo - Burkholderia mallei):\n"
             f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
