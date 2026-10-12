@@ -1,11 +1,9 @@
 import os
 import shutil
-import time
-import base64
-from io import BytesIO
+import uuid
+import logging
 from pathlib import Path
 from typing import List, Optional
-from PIL import Image
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -17,12 +15,12 @@ from models.usuario import Usuario
 from schemas.consulta import ConsultaUpdate
 from services.security import obter_usuario_logado, exigir_perfil
 from services.texto_clinico import corrigir_siglas
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+from services.barragem_sanitaria import extrair_secoes, aplicar_barragem
 from groq import Groq
 from openai import OpenAI
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/consultas",
@@ -31,6 +29,42 @@ router = APIRouter(
 
 UPLOADS_DIR = Path("uploads/exames")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Ajuste conforme os tipos de laudo/imagem que a clínica realmente anexa.
+EXTENSOES_PERMITIDAS = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}
+TAMANHO_MAX_BYTES = 15 * 1024 * 1024  # 15 MB
+
+
+def salvar_anexo(file: UploadFile):
+    """Valida extensão/tamanho e salva com nome UUID. Retorna (nome_salvo, caminho)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Arquivo sem nome.")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in EXTENSOES_PERMITIDAS:
+        permitidas = ", ".join(sorted(EXTENSOES_PERMITIDAS))
+        raise HTTPException(status_code=400, detail=f"Tipo de arquivo não permitido. Use: {permitidas}.")
+
+    novo_nome = f"{uuid.uuid4().hex}{ext}"
+    caminho = UPLOADS_DIR / novo_nome
+    total = 0
+    try:
+        with open(caminho, "wb") as buffer:
+            while True:
+                bloco = file.file.read(1024 * 1024)
+                if not bloco:
+                    break
+                total += len(bloco)
+                if total > TAMANHO_MAX_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Arquivo excede o limite de {TAMANHO_MAX_BYTES // (1024 * 1024)} MB.",
+                    )
+                buffer.write(bloco)
+    except Exception:
+        caminho.unlink(missing_ok=True)  # não deixa arquivo parcial em disco
+        raise
+    return novo_nome, caminho
 
 load_dotenv()
 
@@ -51,7 +85,7 @@ def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
             key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
             api_key = key_db or os.getenv("GROQ_API_KEY")
             
-            client = Groq(api_key=api_key) if api_key else None
+            client = Groq(api_key=api_key, timeout=60.0) if api_key else None
             return "groq", client, modelo
         else:
             r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
@@ -64,14 +98,6 @@ def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
             return "gemini", api_key, modelo
     finally:
         db.close()
-
-# DICIONÁRIO GLOBAL DE PATOLOGIAS DE NOTIFICAÇÃO COMPULSÓRIA E CONTROLE OFICIAL
-DOENCAS_NOTIFICACAO_COMPULSORIA = [
-    "brucelose", "tuberculose", "mormo", "anemia infecciosa equina", "aie",
-    "raiva", "peste suina", "influenza aviaria", "newcastle", "mycobacterium"
-]
-
-ANIMAIS_GRANDE_PORTE = ["equino", "bovino", "bubalino", "equine", "bovine", "muar", "asinino"]
 
 class ConsultaCreate(BaseModel):
     codigo: Optional[str] = None
@@ -94,24 +120,26 @@ class ConsultaCreate(BaseModel):
     solicitar_exames_preventivos: Optional[bool] = False
 
 @router.post("/upload-anexo")
-async def upload_anexo_exame(
+def upload_anexo_exame(
     file: UploadFile = File(...),
     usuario_logado = Depends(obter_usuario_logado)
 ):
     try:
-        caminho_arquivo = UPLOADS_DIR / Path(file.filename).name
-        with open(caminho_arquivo, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        novo_nome, caminho_arquivo = salvar_anexo(file)
         return {
             "mensagem": "Arquivo enviado com sucesso!",
-            "nome_arquivo": Path(file.filename).name,
+            "nome_arquivo": novo_nome,
+            "nome_original": file.filename,
             "caminho": str(caminho_arquivo)
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo: {str(e)}")
+        logger.error(f"Erro ao salvar anexo: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno ao salvar o arquivo.")
 
 @router.post("/sugestoes-copiloto-multimodal")
-async def sugestoes_copiloto_multimodal(
+def sugestoes_copiloto_multimodal(
     queixa_principal: str = Form(...),
     animal_id: Optional[int] = Form(None),
     especie: Optional[str] = Form("Não informada"),
@@ -131,20 +159,24 @@ async def sugestoes_copiloto_multimodal(
     usuario_logado = Depends(obter_usuario_logado)
 ):
     try:
-        nomes_arquivos = []
+        # Busca a espécie real do banco, sobrepondo o que vem do formulário
+        animal_db = db.query(Animal).filter(Animal.id == animal_id).first() if animal_id else None
+        especie_real = (animal_db.especie if animal_db and animal_db.especie else especie) or "Não informada"
+
+        nomes_arquivos_originais = []
+        anexos_salvos = []
         for file in files:
             if file.filename:
-                caminho_arquivo = UPLOADS_DIR / Path(file.filename).name
-                with open(caminho_arquivo, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
-                nomes_arquivos.append(Path(file.filename).name)
+                novo_nome, _ = salvar_anexo(file)
+                nomes_arquivos_originais.append(file.filename)
+                anexos_salvos.append({"original": file.filename, "salvo": novo_nome})
 
-        texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
+        texto_anexos = ", ".join(nomes_arquivos_originais) if nomes_arquivos_originais else "Nenhum"
 
         prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
             f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal rigorosamente exata e direta (ex: se os sintomas indicam corrimento nasal, nódulos ulcerados e febre em equinos, a suspeita oficial é exclusivamente Mormo - Burkholderia mallei):\n"
-            f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
+            f"- Espécie: {especie_real} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
@@ -175,7 +207,7 @@ async def sugestoes_copiloto_multimodal(
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome exato e direto da doença oficial, ex: Mormo - Burkholderia mallei]\n"
-            f"SUGESTOES: [Análise clínica, conduta legal e sanitária de notificação e sacrifício, exames restritos apenas aos testes oficiais do PNSA/MAPA sem nenhum exame de imagem, sem NENHUM tratamento medicamentoso]"
+            f"SUGESTOES: [Análise clínica, conduta legal e sanitária de notificação e isolamento, exames restritos apenas aos testes oficiais do PNSA/MAPA sem nenhum exame de imagem, sem NENHUM tratamento medicamentoso]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
@@ -194,21 +226,9 @@ async def sugestoes_copiloto_multimodal(
                 detail="Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA.",
             )
 
-        suspeita_extraida = ""
-        sugestoes_extraidas = texto_resposta
-
-        if "SUSPEITA:" in texto_resposta:
-            partes = texto_resposta.split("SUSPEITA:")
-            if len(partes) > 1:
-                sub_partes = partes[1].split("SUGESTOES:")
-                suspeita_extraida = sub_partes[0].replace("**", "").strip()
-                if len(sub_partes) > 1:
-                    sugestoes_extraidas = sub_partes[1].strip()
-
-        if not suspeita_extraida and texto_resposta:
-            linhas_resp = [l.strip() for l in texto_resposta.split("\n") if l.strip()]
-            if linhas_resp:
-                suspeita_extraida = linhas_resp[0].replace("**", "").replace("-", "").strip()
+        # Utiliza o parser robusto do novo módulo
+        suspeita_extraida, sugestoes_extraidas = extrair_secoes(texto_resposta)
+        suspeita_bruta = suspeita_extraida  # guarda antes do fallback "Hipótese clínica a esclarecer"
 
         if not suspeita_extraida:
             suspeita_extraida = "Hipótese clínica a esclarecer"
@@ -216,53 +236,38 @@ async def sugestoes_copiloto_multimodal(
         suspeita_extraida = corrigir_siglas(suspeita_extraida)
         sugestoes_extraidas = corrigir_siglas(sugestoes_extraidas)
         
-        # BARRAGEM DETERMINÍSTICA DE BACKEND PARA DOENÇAS DE NOTIFICAÇÃO COMPULSÓRIA
-        suspeita_lower = suspeita_extraida.lower()
-        especie_lower = especie.lower()
-        
-        eh_notificacao = any(doenca in suspeita_lower for doenca in DOENCAS_NOTIFICACAO_COMPULSORIA)
-        eh_grande_porte = any(esp in especie_lower for esp in ANIMAIS_GRANDE_PORTE)
-        
-        if eh_notificacao and eh_grande_porte:
-            # Remove menções a exames de imagem ou diferenciais indesejados no texto do parecer se o modelo tentar burlar
-            linhas_parecer = []
-            for linha in sugestoes_extraidas.split("\n"):
-                linha_l = linha.lower()
-                if any(termo in linha_l for termo in ["hemograma", "ultrassom", "raio-x", "radiografia", "endoscopia", "bioquímica", "hemocultura"]):
-                    continue
-                linhas_parecer.append(linha)
-            sugestoes_extraidas = "\n".join(linhas_parecer)
-
-            sugestoes_extraidas += (
-                "\n\n🛡️ **Muralha Sanitária Ativada (Defesa Sanitária Oficial):** "
-                "Doença de notificação obrigatória e sacrifício/eutanásia obrigatória em animais de grande porte. "
-                "Tratamento medicamentoso (especialmente com fármacos humanos ou antimicrobianos) é expressamente PROIBIDO por lei. "
-                "Exames complementares de imagem e secundários bloqueados automaticamente. Interdite o trânsito e notifique imediatamente o órgão oficial (MAPA/CDA)."
-            )
+        # Aplica a guilhotina higienizada do módulo barragem_sanitaria
+        # Se o parsing não achou a suspeita, avalia o texto bruto (falha para o lado seguro)
+        suspeita_para_barragem = suspeita_bruta or texto_resposta
+        parecer_oficial = aplicar_barragem(suspeita_para_barragem, especie_real, texto_resposta)
+        if parecer_oficial:
+            sugestoes_extraidas = parecer_oficial
 
         parecer_com_anexos = sugestoes_extraidas
-        if nomes_arquivos:
+        if nomes_arquivos_originais:
             parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"
 
         tem_indicacao = any(termo in sugestoes_extraidas.lower() for termo in ["cirurgia", "descompressão", "hemilaminectomia", "corpectomia"])
         
-        justificativa_cirurgica_texto = ""
+        # Só exibe a justificativa se realmente houver indicação
+        justificativa_cirurgica_texto = None
         if tem_indicacao:
             justificativa_cirurgica_texto = "Se a imagem confirmar compressão medular significativa, encaminhar para cirurgia de descompressão dentro de 24-48 h."
-        else:
-            justificativa_cirurgica_texto = "Caso a lesão seja mínima e sem compressão crítica, manejo conservador com reabilitação intensiva."
 
         return {
             "sugestoes": parecer_com_anexos,
             "suspeita_diagnostica": suspeita_extraida,
-            "exames_anexados": texto_anexos if nomes_arquivos else None,
+            "exames_anexados": texto_anexos if nomes_arquivos_originais else None,
+            "anexos": anexos_salvos,
             "indicacao_cirurgia": tem_indicacao,
             "justificativa_cirurgica": justificativa_cirurgica_texto
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao processar IA: {str(e)}")
+        logger.error(f"Erro ao processar IA: {e}", exc_info=True)
+        # Oculta os detalhes internos de vazarem pro frontend
+        raise HTTPException(status_code=500, detail="Erro interno ao processar a análise com o copiloto.")
 
 @router.put("/{consulta_id}/chamar")
 def chamar_paciente_consulta(
@@ -484,7 +489,8 @@ def criar_consulta(
         db.refresh(nova_consulta)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao cadastrar consulta: {str(e)}")
+        logger.error(f"Erro ao cadastrar consulta: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno ao cadastrar a consulta.")
 
     return nova_consulta
 
