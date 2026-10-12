@@ -15,7 +15,7 @@ from models.usuario import Usuario
 from schemas.consulta import ConsultaUpdate
 from services.security import obter_usuario_logado, exigir_perfil
 from services.texto_clinico import corrigir_siglas
-from services.barragem_sanitaria import extrair_secoes, aplicar_barragem
+from services.barragem_sanitaria import extrair_secoes, aplicar_barragem, detectar_doenca_oficial, exames_oficiais
 from groq import Groq
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -175,7 +175,7 @@ def sugestoes_copiloto_multimodal(
 
         prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
-            f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal rigorosamente exata e direta (ex: se os sintomas indicam corrimento nasal, nódulos ulcerados e febre em equinos, a suspeita oficial é exclusivamente Mormo - Burkholderia mallei):\n"
+            f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal objetiva e direta, considerando os diferenciais compatíveis com a espécie (em equídeos com corrimento nasal, nódulos ulcerados e febre, Mormo deve constar entre as hipóteses e ser a principal quando o quadro for compatível):\n"
             f"- Espécie: {especie_real} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
@@ -206,8 +206,8 @@ def sugestoes_copiloto_multimodal(
             f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, avalie obrigatoriamente os sinais vitais. Classifique como 'ESTÁVEL' ou 'CRÍTICO'.\n"
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
-            f"SUSPEITA: [Nome exato e direto da doença oficial, ex: Mormo - Burkholderia mallei]\n"
-            f"SUGESTOES: [Análise clínica, conduta legal e sanitária de notificação e isolamento, exames restritos apenas aos testes oficiais do PNSA/MAPA sem nenhum exame de imagem, sem NENHUM tratamento medicamentoso]"
+            f"SUSPEITA: [Nome exato e direto da principal hipótese diagnóstica]\n"
+            f"SUGESTOES: [Análise clínica, conduta e exames pertinentes ao caso. Somente se a suspeita principal for doença de notificação oficial: apenas notificação, isolamento e testes oficiais do MAPA, sem exames de imagem e sem tratamento medicamentoso]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
@@ -217,7 +217,7 @@ def sugestoes_copiloto_multimodal(
             response = client_or_key.chat.completions.create(
                 model=modelo,
                 messages=[{"role": "user", "content": prompt_ia}],
-                temperature=0.3
+                temperature=0.1
             )
             texto_resposta = response.choices[0].message.content
         else:
@@ -239,6 +239,7 @@ def sugestoes_copiloto_multimodal(
         # Aplica a guilhotina higienizada do módulo barragem_sanitaria
         # Se o parsing não achou a suspeita, avalia o texto bruto (falha para o lado seguro)
         suspeita_para_barragem = suspeita_bruta or texto_resposta
+        doenca_oficial = detectar_doenca_oficial(suspeita_para_barragem, especie_real)
         parecer_oficial = aplicar_barragem(suspeita_para_barragem, especie_real, texto_resposta)
         if parecer_oficial:
             sugestoes_extraidas = parecer_oficial
@@ -247,7 +248,7 @@ def sugestoes_copiloto_multimodal(
         if nomes_arquivos_originais:
             parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"
 
-        tem_indicacao = any(termo in sugestoes_extraidas.lower() for termo in ["cirurgia", "descompressão", "hemilaminectomia", "corpectomia"])
+        tem_indicacao = (not doenca_oficial) and any(termo in sugestoes_extraidas.lower() for termo in ["cirurgia", "descompressão", "hemilaminectomia", "corpectomia"])
         
         # Só exibe a justificativa se realmente houver indicação
         justificativa_cirurgica_texto = None
@@ -260,7 +261,9 @@ def sugestoes_copiloto_multimodal(
             "exames_anexados": texto_anexos if nomes_arquivos_originais else None,
             "anexos": anexos_salvos,
             "indicacao_cirurgia": tem_indicacao,
-            "justificativa_cirurgica": justificativa_cirurgica_texto
+            "justificativa_cirurgica": justificativa_cirurgica_texto,
+            "doenca_oficial": doenca_oficial["nome"] if doenca_oficial else None,
+            "exames_oficiais": exames_oficiais(doenca_oficial) if doenca_oficial else None,
         }
     except HTTPException:
         raise
