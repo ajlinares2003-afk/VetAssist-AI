@@ -141,9 +141,9 @@ async def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
 
-        prompt_ia = (
+prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
-            f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal:\n"
+            f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal rigorosamente exata e direta (ex: se os sintomas indicam corrimento nasal, nódulos ulcerados e febre em equinos, a suspeita oficial é exclusivamente Mormo - Burkholderia mallei):\n"
             f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
@@ -153,7 +153,7 @@ async def sugestoes_copiloto_multimodal(
             f"FR (frequência respiratória)={frequencia_respiratoria} ir/min | "
             f"TPC (Tempo de Preenchimento Capilar)={tpc_segundos} s | Mucosas={mucosas}\n\n"
             f"REGRAS OBRIGATÓRIAS:\n"
-            f"1. Você DEVE fornecer uma suspeita diagnóstica principal (hipótese de trabalho).\n"
+            f"1. Você DEVE fornecer uma suspeita diagnóstica principal exata, sem inventar nomes cruzados ou patologias de outras espécies.\n"
             f"2. PROIBIÇÃO ABSOLUTA DE TRATAMENTOS TÓXICOS POR ESPÉCIE: Gatos NÃO toleram e NÃO PODEM receber Paracetamol, Permetrina, Azul de Metileno ou AINEs em contexto de intoxicação.\n"
             f"2.1 TOXICOLOGIA DE ROEDORES/LAGOMORFOS: Proibido penicilinas, lincosamidas ou cefalosporinas via oral.\n"
             f"2.2 ANIMAIS DE PRODUÇÃO: DEVE incluir alerta explícito sobre o Período de Carência exigido para consumo humano de carne/leite.\n"
@@ -162,7 +162,7 @@ async def sugestoes_copiloto_multimodal(
             f"2.5 DEFESA SANITÁRIA E DOENÇAS OFICIAIS (PNCEBT/PNSA/MAPA): É EXPRESSAMENTE PROIBIDO sugerir tratamento farmacológico (cura) para doenças de notificação obrigatória e controle oficial, como Mormo, AIE, Brucelose, Tuberculose, Raiva, etc. A conduta DEVE ser EXCLUSIVAMENTE: notificação imediata ao órgão de defesa sanitária estadual/federal, isolamento do rebanho e descarte/sacrifício sanitário (ou eutanásia) dos positivos.\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação incorreta ou tratamentos empíricos.\n"
             f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
-            f"2.8 BARRAGEM ABSOLUTA DE EXAMES SECUNDÁRIOS E AINEs: Para surtos de doenças de notificação obrigatória e controle oficial (ex: Mormo, AIE, Brucelose, Tuberculose), é TERMINANTEMENTE PROIBIDO listar ou sugerir hemogramas, bioquímicas gerais, exames de imagem ou painéis de sorologias secundárias. A citação de exames DEVE conter exclusivamente e sem exceções apenas os testes oficiais e obrigatórios exigidos pelos manuais do MAPA/PNSA/PNCEBT (Ex: Fixação de Complemento para Mormo, AAT/CFT para Brucelose).\n"
+            f"2.8 BARRAGEM ABSOLUTA DE EXAMES SECUNDÁRIOS E AINEs: Para surtos de doenças de notificação obrigatória e controle oficial (ex: Mormo, AIE, Brucelose, Tuberculose), é TERMINANTEMENTE PROIBIDO listar ou sugerir hemogramas, bioquímicas gerais, exames de imagem (como endoscopia ou ultrassom) ou painéis de sorologias secundárias. A citação de exames DEVE conter exclusivamente e sem exceções apenas os testes oficiais e obrigatórios exigidos pelos manuais do MAPA/PNSA/PNCEBT (Ex: Fixação de Complemento para Mormo, AAT/CFT para Brucelose).\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia).\n"
             f"5. Comente o estado do TPC e Mucosas.\n"
@@ -174,8 +174,8 @@ async def sugestoes_copiloto_multimodal(
             f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, avalie obrigatoriamente os sinais vitais. Classifique como 'ESTÁVEL' ou 'CRÍTICO'.\n"
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
-            f"SUSPEITA: [Nome da doença ou alteração principal de forma direta]\n"
-            f"SUGESTOES: [Análise clínica, conduta legal e sanitária de notificação e sacrifício, exames restritos apenas aos testes oficiais do PNSA/MAPA, sem NENHUM tratamento medicamentoso]"
+            f"SUSPEITA: [Nome exato e direto da doença oficial, ex: Mormo - Burkholderia mallei]\n"
+            f"SUGESTOES: [Análise clínica, conduta legal e sanitária de notificação e sacrifício, exames restritos apenas aos testes oficiais do PNSA/MAPA sem nenhum exame de imagem, sem NENHUM tratamento medicamentoso]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
