@@ -493,6 +493,28 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
     return {"itens": itens, "alertas": alertas[:15]}
 
 
+def _doenca_oficial_do_caso(d: dict) -> Optional[dict]:
+    """Barragem sanitária: a doença oficial do caso (ou None). Usada pelas rotas que NÃO
+    podem consultar o LLM quando há doença de notificação/controle oficial."""
+    return doenca_do_parecer(d.get("parecer_copiloto"), d.get("especie")) or \
+        detectar_doenca_oficial(d.get("suspeita_diagnostica") or "", d.get("especie"))
+
+
+def _alertas_receita_oficial(doenca: dict) -> List[str]:
+    alertas = [
+        f"Suspeita de doença de notificação obrigatória: {doenca['nome']}.",
+        "Não há tratamento medicamentoso autorizado para esta condição: não prescrever fármacos "
+        "(antimicrobianos, AINEs, corticosteroides ou medicamentos humanos).",
+        "Isolar imediatamente os animais suspeitos e restringir o trânsito até a orientação oficial.",
+        "Notificar imediatamente o serviço veterinário oficial (MAPA / órgão estadual de defesa sanitária).",
+        "A destinação dos animais (ex.: sacrifício sanitário) é definida e conduzida exclusivamente "
+        "pelo serviço oficial após a confirmação laboratorial.",
+    ]
+    if doenca.get("aviso"):
+        alertas.append(doenca["aviso"])
+    return alertas
+
+
 @router.post("/sugerir-receita")
 def sugerir_receita(
     ctx: ContextoClinico,
@@ -501,6 +523,21 @@ def sugerir_receita(
 ):
     d = _carregar_contexto(db, ctx)
     _exigir_parecer(d)
+
+    # Barragem sanitária: doença oficial NÃO passa pelo LLM. Receita vazia + alerta fixo.
+    doenca = _doenca_oficial_do_caso(d)
+    if doenca:
+        logger.info("sugerir-receita: barragem aplicada (%s), LLM não consultado", doenca["nome"])
+        return {
+            "itens": [],
+            "alertas": _alertas_receita_oficial(doenca),
+            "peso_usado": d.get("peso"),
+            "provedor": "barragem_sanitaria",
+            "modelo": None,
+            "doenca_oficial": doenca["nome"],
+            "aviso": f"Suspeita de {doenca['nome']}: doença de notificação oficial. Nenhum medicamento "
+                     "é sugerido; o veterinário pode adicionar itens manualmente, sob sua responsabilidade.",
+        }
 
     prompt = (
         "Você é um médico veterinário clínico experiente no Brasil, apoiando a elaboração de uma "
@@ -710,8 +747,7 @@ def sugerir_exames(
 
     # Barragem sanitária: doença de notificação/controle oficial NÃO passa pelo LLM.
     # Só valem os exames oficiais (e nenhum preventivo/complementar fora do fluxo oficial).
-    doenca = doenca_do_parecer(d.get("parecer_copiloto"), d.get("especie")) or \
-        detectar_doenca_oficial(d.get("suspeita_diagnostica") or "", d.get("especie"))
+    doenca = _doenca_oficial_do_caso(d)
     if doenca:
         logger.info("sugerir-exames: barragem aplicada (%s), LLM não consultado", doenca["nome"])
         oficiais = _montar_exames({"exames": [
