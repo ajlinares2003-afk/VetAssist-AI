@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from database.database import get_db
 from models.animais import Animal
+from services.barragem_sanitaria import detectar_doenca_oficial, doenca_do_parecer
 from services.ia_service import IAIndisponivelError, gerar_json
 from services.security import exigir_perfil
 from services.texto_clinico import corrigir_siglas
@@ -706,6 +707,26 @@ def sugerir_exames(
 ):
     d = _carregar_contexto(db, ctx)
     _exigir_parecer(d)
+
+    # Barragem sanitária: doença de notificação/controle oficial NÃO passa pelo LLM.
+    # Só valem os exames oficiais (e nenhum preventivo/complementar fora do fluxo oficial).
+    doenca = doenca_do_parecer(d.get("parecer_copiloto"), d.get("especie")) or \
+        detectar_doenca_oficial(d.get("suspeita_diagnostica") or "", d.get("especie"))
+    if doenca:
+        logger.info("sugerir-exames: barragem aplicada (%s), LLM não consultado", doenca["nome"])
+        oficiais = _montar_exames({"exames": [
+            {"nome": e["nome"], "categoria": "laboratorial", "prioridade": "urgente",
+             "justificativa": e["justificativa"]}
+            for e in doenca["exames_lista"]
+        ]})
+        return {
+            "exames": oficiais,
+            "provedor": "barragem_sanitaria",
+            "modelo": None,
+            "doenca_oficial": doenca["nome"],
+            "aviso": f"Suspeita de {doenca['nome']}: doença de notificação oficial. Somente os exames "
+                     "do fluxo oficial são sugeridos; notifique o serviço veterinário oficial.",
+        }
 
     preventivos = (
         "ATENÇÃO: O tutor solicitou check-up / exames preventivos nesta visita. "

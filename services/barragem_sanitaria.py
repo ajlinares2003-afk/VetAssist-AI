@@ -39,7 +39,7 @@ GRUPOS_ESPECIE = {
 DOENCAS_OFICIAIS = [
     {
         "nome": "Mormo",
-        "padrao": r"\bmormo\b|burkholderia mallei",
+        "padrao": r"\bmormo\b|burkholderia mallei|\bglanders\b",
         "grupos": {"equideos"},
         "exames": "Colheita de amostras para os testes oficiais do PNSE (Fixação de Complemento "
                   "para triagem e confirmatório oficial, conforme a IN vigente).",
@@ -54,7 +54,7 @@ DOENCAS_OFICIAIS = [
     },
     {
         "nome": "Anemia Infecciosa Equina (AIE)",
-        "padrao": r"\baie\b|anemia infecciosa",
+        "padrao": r"\baie\b|\beia\b|anemia infecciosa|infectious an(a)?emia",
         "grupos": {"equideos"},
         "exames": "Colheita de amostra para o teste oficial de AIE (Imunodifusão em Ágar Gel - IDGA).",
         "exames_lista": [
@@ -118,19 +118,49 @@ def _especie_pertence(especie: str, grupos: set) -> bool:
     return any(palavras & GRUPOS_ESPECIE[g] for g in grupos)
 
 
-def detectar_doenca_oficial(suspeita: str, especie: str) -> Optional[dict]:
+def _mesclar(doencas: List[dict]) -> dict:
+    """Une doenças concorrentes no mesmo caso (ex.: LLM citou AIE e Mormo) em um único
+    registro com o mesmo formato, para que todos os chamadores continuem funcionando.
+    Nunca escolhe uma em silêncio: alerta e exames oficiais valem para TODAS."""
+    if len(doencas) == 1:
+        return doencas[0]
+    exames_lista, vistos = [], set()
+    for d in doencas:
+        for e in d["exames_lista"]:
+            if e["nome"] not in vistos:
+                vistos.add(e["nome"])
+                exames_lista.append(e)
+    avisos = [d["aviso"] for d in doencas if d.get("aviso")]
+    avisos.append("Mais de uma doença oficial citada no mesmo caso; o serviço veterinário "
+                  "oficial deve conduzir o diagnóstico diferencial.")
+    return {
+        "nome": " / ".join(d["nome"] for d in doencas),
+        "grupos": set().union(*(d["grupos"] for d in doencas)),
+        "exames": " ".join(d["exames"] for d in doencas),
+        "exames_lista": exames_lista,
+        "aviso": " ".join(avisos),
+    }
+
+
+def detectar_doencas_oficiais(suspeita: str, especie: str) -> List[dict]:
     s = normalizar(suspeita)
     desconhecida = _especie_desconhecida(especie)
+    achadas = []
     for d in DOENCAS_OFICIAIS:
         if not re.search(d["padrao"], s):
             continue
         if desconhecida:
             # Falha para o lado seguro: espécie ausente não pode desarmar a barragem.
             logger.warning("barragem: espécie desconhecida, aplicando %s por precaução", d["nome"])
-            return d
-        if _especie_pertence(especie, d["grupos"]):
-            return d
-    return None
+            achadas.append(d)
+        elif _especie_pertence(especie, d["grupos"]):
+            achadas.append(d)
+    return achadas
+
+
+def detectar_doenca_oficial(suspeita: str, especie: str) -> Optional[dict]:
+    achadas = detectar_doencas_oficiais(suspeita, especie)
+    return _mesclar(achadas) if achadas else None
 
 
 def doenca_do_parecer(parecer: Optional[str], especie: str) -> Optional[dict]:
