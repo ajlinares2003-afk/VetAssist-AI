@@ -1,12 +1,7 @@
-"""Barragem determinística para doenças de notificação/controle oficial (v2).
+"""Barragem determinística para doenças de notificação/controle oficial (v3).
 
-Mudanças em relação à v1:
-  * exames_oficiais(): lista ESTRUTURADA dos únicos exames permitidos (para a tela
-    "Solicitação de exames" não depender do LLM).
-  * doenca_do_parecer(): permite que qualquer outra rota (ex.: geração de exames)
-    descubra, a partir do parecer já salvo, que o caso é de doença oficial.
-  * Falha para o lado seguro quando a espécie é desconhecida.
-  * Grupos de espécie ampliados (equídeo, bovídeo, asno...).
+Adicionadas regras específicas para Encefalopatia Espongiforme Bovina (EEB)
+e Raiva dos Herbívoros em ruminantes e equídeos.
 """
 import logging
 import re
@@ -30,12 +25,14 @@ GRUPOS_ESPECIE = {
                  "muar", "mula", "burro", "asinino", "asno", "jumento", "jegue"},
     "bovideos": {"bovino", "bovina", "bovine", "bovideo", "boi", "vaca", "bezerro", "bezerra",
                  "novilha", "touro", "bubalino", "bufalo", "bufala"},
+    "ruminantes": {"bovino", "bovina", "bovine", "bovideo", "boi", "vaca", "bezerro", "bezerra",
+                   "novilha", "touro", "bubalino", "bufalo", "bufala", "ovino", "ovina",
+                   "carneiro", "oVELHA", "cordeiro", "caprino", "caprina", "bode", "cabra", "cabrito"},
     "suinos": {"suino", "suina", "suideo", "porco", "porca", "leitao"},
     "aves": {"ave", "galinha", "frango", "galo", "peru", "pato", "ganso"},
 }
 
 # CONFIRA os testes/normas contra a IN vigente de cada programa antes de usar em produção.
-# "exames_lista" é a ÚNICA fonte de exames permitidos para o caso (usada pela tela de exames).
 DOENCAS_OFICIAIS = [
     {
         "nome": "Mormo",
@@ -61,6 +58,28 @@ DOENCAS_OFICIAIS = [
             {"nome": "Teste oficial de AIE (Imunodifusão em Ágar Gel - IDGA)",
              "justificativa": "Único teste oficial de diagnóstico; laboratório credenciado pelo MAPA."},
         ],
+    },
+    {
+        "nome": "Encefalopatia Espongiforme Bovina (EEB / Mal da Vaca Louca)",
+        "padrao": r"\beeb\b|vaca louca|encefalopatia espongiforme",
+        "grupos": {"bovideos"},
+        "exames": "Colheita de tecido do Sistema Nervoso Central (Óbex) realizada exclusivamente pelo Serviço Veterinário Oficial (MAPA) após óbito ou sacrifício sanitário.",
+        "exames_lista": [
+            {"nome": "Colheita de tecido do SNC (Óbex) pelo Serviço Oficial",
+             "justificativa": "Diagnóstico post-mortem oficial para EEB, vedada a colheita clínica rotineira."},
+        ],
+        "aviso": "Doença de controle estrito da BSE (Mal da Vaca Louca): interdição total da propriedade e isolamento imediato.",
+    },
+    {
+        "nome": "Raiva dos Herbívoros",
+        "padrao": r"\braiva\b|rabies|paralisia bovina",
+        "grupos": {"ruminantes", "equideos"},
+        "exames": "Colheita de amostra de tecido encefálico para diagnóstico laboratorial oficial (Imunofluorescência Direta e Prova Biológica).",
+        "exames_lista": [
+            {"nome": "Diagnóstico oficial de Raiva (IFD / Prova Biológica)",
+             "justificativa": "Executado exclusivamente em laboratório oficial de defesa sanitária."},
+        ],
+        "aviso": "Zoonose letal de alta gravidade: uso obrigatório de EPI completo (luvas grossas, óculos e máscara) ao manipular animais com sialorréia ou paralisia.",
     },
     {
         "nome": "Brucelose",
@@ -119,9 +138,7 @@ def _especie_pertence(especie: str, grupos: set) -> bool:
 
 
 def _mesclar(doencas: List[dict]) -> dict:
-    """Une doenças concorrentes no mesmo caso (ex.: LLM citou AIE e Mormo) em um único
-    registro com o mesmo formato, para que todos os chamadores continuem funcionando.
-    Nunca escolhe uma em silêncio: alerta e exames oficiais valem para TODAS."""
+    """Une doenças concorrentes no mesmo caso em um único registro."""
     if len(doencas) == 1:
         return doencas[0]
     exames_lista, vistos = [], set()
@@ -150,7 +167,6 @@ def detectar_doencas_oficiais(suspeita: str, especie: str) -> List[dict]:
         if not re.search(d["padrao"], s):
             continue
         if desconhecida:
-            # Falha para o lado seguro: espécie ausente não pode desarmar a barragem.
             logger.warning("barragem: espécie desconhecida, aplicando %s por precaução", d["nome"])
             achadas.append(d)
         elif _especie_pertence(especie, d["grupos"]):
@@ -164,16 +180,12 @@ def detectar_doenca_oficial(suspeita: str, especie: str) -> Optional[dict]:
 
 
 def doenca_do_parecer(parecer: Optional[str], especie: str) -> Optional[dict]:
-    """Para rotas que só têm o parecer salvo (ex.: geração de exames).
-    Só considera casos em que a barragem já atuou (marcador do alerta)."""
     if not parecer or MARCADOR_ALERTA not in parecer:
         return None
     return detectar_doenca_oficial(parecer, especie)
 
 
 def exames_oficiais(doenca: Optional[dict]) -> List[dict]:
-    """Lista estruturada dos únicos exames permitidos. Ajuste as chaves ao formato
-    que a tela 'Solicitação de exames' já consome."""
     if not doenca:
         return []
     return [
@@ -184,8 +196,7 @@ def exames_oficiais(doenca: Optional[dict]) -> List[dict]:
 
 
 def extrair_secoes(texto: str) -> Tuple[str, str]:
-    """Extrai (suspeita, sugestoes) tolerando 'Suspeita:', 'SUGESTÕES:', negrito etc."""
-    texto = re.sub(r"<think>.*?</think>", "", texto or "", flags=re.S | re.I)  # modelos com raciocínio
+    texto = re.sub(r"<think>.*?</think>", "", texto or "", flags=re.S | re.I)
     m = re.search(
         r"SUSPEITA(?:\s+DIAGN[ÓO]STICA)?\s*\**\s*:\s*\**(.*?)(?:SUGEST[ÕO]ES\s*\**\s*:\s*\**(.*))?\Z",
         texto, flags=re.S | re.I,
@@ -198,7 +209,6 @@ def extrair_secoes(texto: str) -> Tuple[str, str]:
 
 
 def aplicar_barragem(suspeita: str, especie: str, texto_completo: str = "") -> Optional[str]:
-    """Retorna o parecer oficial substituto, ou None se a barragem não se aplica."""
     doenca = detectar_doenca_oficial(suspeita, especie)
     logger.info("barragem: suspeita=%r especie=%r -> %s", suspeita[:80], especie,
                 doenca["nome"] if doenca else "não aplicada")
