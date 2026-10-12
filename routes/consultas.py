@@ -133,7 +133,7 @@ async def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
 
-prompt_ia = (
+        prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
             f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal:\n"
             f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
@@ -154,7 +154,7 @@ prompt_ia = (
             f"2.5 DEFESA SANITÁRIA E DOENÇAS OFICIAIS (PNCEBT/PNSA/MAPA): É EXPRESSAMENTE PROIBIDO sugerir tratamento farmacológico (cura) para doenças de notificação obrigatória e controle oficial, como Brucelose, Tuberculose, Anemia Infecciosa Equina, Mormo, Raiva, etc. A conduta DEVE ser EXCLUSIVAMENTE: notificação imediata ao órgão de defesa sanitária estadual/federal, isolamento do rebanho e descarte/abate sanitário (ou eutanásia) dos positivos.\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação com B19 para fêmeas bovinas adultas; restrita a fêmeas de 3 a 8 meses.\n"
             f"2.7 USO DE DROGAS EM GADO DE LEITE: É TERMINANTEMENTE PROIBIDO prescrever Enrofloxacino ou outros antimicrobianos sistêmicos banidos/com longa carência para fêmeas leiteiras em lactação.\n"
-            f"2.8 PROIBIÇÃO TOTAL DE EXAMES SECUNDÁRIOS E DIFERENCIAIS EM CASOS OFICIAIS: Para surtos de doenças de notificação obrigatória com foco de abate sanitário (ex: Brucelose), é TERMINANTEMENTE PROIBIDO sugerir hemogramas, bioquímicas gerais, exames de imagem ou painéis de sorologias diferenciais secundárias (como Leptospirose, Neospora, IBR, BVDV ou Toxoplasmose). A guia de exames DEVE conter **exclusivamente e sem exceções** os testes oficiais do PNCEBT para a doença-alvo (Ex: AAT/RFT e CFT). Qualquer outro exame fora desta estrita triagem oficial será considerado uma violação grave de protocolo.\n"
+            f"2.8 PROIBIÇÃO TOTAL DE EXAMES SECUNDÁRIOS E DIFERENCIAIS EM CASOS OFICIAIS: Para surtos de doenças de notificação obrigatória com foco de abate sanitário (ex: Brucelose), é TERMINANTEMENTE PROIBIDO sugerir hemogramas, bioquímicas gerais, exames de imagem ou painéis de sorologias diferenciais secundárias (como Leptospirose, Neospora, IBR, BVDV ou Toxoplasmose). A guia de exames DEVE conter exclusivamente e sem exceções os testes oficiais do PNCEBT para a doença-alvo (Ex: AAT/RFT e CFT). Qualquer outro exame fora desta estrita triagem oficial será considerado uma violação grave de protocolo.\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia).\n"
             f"5. Comente o estado do TPC e Mucosas.\n"
@@ -348,7 +348,7 @@ def listar_fila_triagem(
             "Aguardando Triagem (Recepção)",
             "Aguardando Triagem",
             "Chamando para Triagem",
-            "Em Triagem",  # triagem iniciada e não concluída: continua na fila (senão o paciente "some")
+            "Em Triagem",
             "AGUARDANDO_VACINA",
             "Aguardando Vacina"
         ])
@@ -380,10 +380,8 @@ def listar_consultas(
     consultas = db.query(Consulta).order_by(Consulta.id.desc()).all()
     
     for c in consultas:
-        # Se faltar peso ou temperatura, procuramos na triagem de forma segura
         if c.peso_atendimento is None or c.temperatura is None:
             try:
-                # Tentativa 1: Tabela no singular (triagem)
                 triagem = db.execute(
                     text("SELECT peso, temperatura FROM triagem WHERE consulta_id = :cid ORDER BY id DESC LIMIT 1"),
                     {"cid": c.id}
@@ -392,9 +390,8 @@ def listar_consultas(
                     c.peso_atendimento = c.peso_atendimento or triagem[0]
                     c.temperatura = c.temperatura or triagem[1]
             except Exception:
-                db.rollback()  # Limpa o erro para a base de dados não bloquear
+                db.rollback()
                 try:
-                    # Tentativa 2: Tabela no plural (triagens)
                     triagem = db.execute(
                         text("SELECT peso, temperatura FROM triagens WHERE consulta_id = :cid ORDER BY id DESC LIMIT 1"),
                         {"cid": c.id}
@@ -476,17 +473,12 @@ def atualizar_consulta(
     if not consulta_db:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
 
-    # Atualização parcial: só mexe nos campos que vieram na requisição.
-    # Campo ausente = mantém o valor salvo; campo enviado como null = limpa o valor.
     dados = consulta.model_dump(exclude_unset=True)
-
-    # Estes nunca são apagados por valor vazio (mesmo comportamento anterior)
     nao_aceitam_vazio = {"animal_id", "usuario_id", "codigo", "status", "queixa_principal", "parecer_copiloto"}
 
     for campo, valor in dados.items():
         if campo in nao_aceitam_vazio and not valor:
             continue
-        # Só grava se a coluna existir no model (evita erro se TPC/mucosas ainda não foram criados)
         if hasattr(Consulta, campo):
             setattr(consulta_db, campo, valor)
 
