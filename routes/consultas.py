@@ -175,9 +175,11 @@ async def sugestoes_copiloto_multimodal(
             f"9. DOSES: informe apenas em mg/kg, dentro da faixa padrão da literatura veterinária. NÃO converta em comprimidos, gotas ou mL (isso é feito "
             f"pelo sistema na receita). Se não tiver segurança sobre a dose de um fármaco, escreva 'dose a confirmar'.\n"
             f"10. RIGOR FARMACOLÓGICO E APRESENTAÇÕES COMERCIAIS: INDICAÇÕES E EFEITOS: NUNCA invente ou inverta efeitos terapêuticos. Restrinja-se estritamente à ação principal da droga segundo a literatura veterinária (ex: Plumb's). Jamais atribua efeito antiemético a opióides como o Tramadol (que, na verdade, podem causar emese). CLASSIFICAÇÃO DE VENDA: Se a apresentação farmacológica sugerida for de medicina humana (ex: Tramadol gotas 100mg/5mL, Dipirona gotas), o sistema DEVE classificá-la como 'Uso Humano (Farmácia/Drogaria)'. Reserve a classificação 'Uso Veterinário' apenas para apresentações desenvolvidas para animais (ex: comprimidos de Cronidor, Maxicam).\n"
-            f"11. Responda estritamente no formato:\n"
-            f"SUSPEITA: [Nome da doença ou alteração principal de forma direta, sem textos longos]\n"
-            f"SUGESTOES: [Análise clínica dividida por tópicos, conduta e exames]"
+            f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, você deve obrigatoriamente avaliar os sinais vitais fornecidos. Se a Temperatura, FC e TPC estiverem normais para a espécie, você DEVE classificar o paciente como 'ESTÁVEL'. Se o paciente for classificado como ESTÁVEL e a queixa for superficial (ex: pele, escoriação, trauma leve), o 'Protocolo de Politraumatismo' FICA BLOQUEADO. É estritamente proibido pedir raio-x de tórax/abdome ou painel de coagulação para pacientes ESTÁVEIS com lesões superficiais.\n"
+            f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
+            f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
+            f"SUSPEITA: [Nome da doença ou alteração principal de forma direta]\n"
+            f"SUGESTOES: [Análise clínica, conduta local, medicações permitidas e exames estritamente proporcionais]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
