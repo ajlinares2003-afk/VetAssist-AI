@@ -133,7 +133,7 @@ async def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos) if nomes_arquivos else "Nenhum"
 
-        prompt_ia = (
+prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
             f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal:\n"
             f"- Espécie: {especie} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
@@ -154,7 +154,7 @@ async def sugestoes_copiloto_multimodal(
             f"2.5 DEFESA SANITÁRIA E DOENÇAS OFICIAIS (PNCEBT/PNSA/MAPA): É EXPRESSAMENTE PROIBIDO sugerir tratamento farmacológico (cura) para doenças de notificação obrigatória e controle oficial, como Brucelose, Tuberculose, Anemia Infecciosa Equina, Mormo, Raiva, etc. A conduta DEVE ser EXCLUSIVAMENTE: notificação imediata ao órgão de defesa sanitária estadual/federal, isolamento do rebanho e descarte/abate sanitário (ou eutanásia) dos positivos.\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação com B19 para fêmeas bovinas adultas; restrita a fêmeas de 3 a 8 meses.\n"
             f"2.7 USO DE DROGAS EM GADO DE LEITE: É TERMINANTEMENTE PROIBIDO prescrever Enrofloxacino ou outros antimicrobianos sistêmicos banidos/com longa carência para fêmeas leiteiras em lactação.\n"
-            f"2.8 CONTROLE ABSOLUTO DE OVERTESTING, AINEs E EPIDEMIOLOGIA: Para surtos em rebanhos ou doenças de notificação obrigatória com indicação de abate sanitário (ex: Brucelose), é ESTRITAMENTE PROIBIDO prescrever anti-inflamatórios (AINEs), analgésicos sistêmicos ou tratamentos sintomáticos, bem como solicitar exames diferenciais secundários (ex: Toxoplasma, Leptospira, hemogramas gerais ou ultrassons). Restrinja os exames complementares **única e exclusivamente** aos testes oficiais obrigatórios do MAPA/PNCEBT para a doença-alvo (ex: triagem RBT/AAT e confirmatório CFT/RFT). Se há indicação de abate, o suporte clínico paliativo é interrompido.\n"
+            f"2.8 PROIBIÇÃO TOTAL DE EXAMES SECUNDÁRIOS E DIFERENCIAIS EM CASOS OFICIAIS: Para surtos de doenças de notificação obrigatória com foco de abate sanitário (ex: Brucelose), é TERMINANTEMENTE PROIBIDO sugerir hemogramas, bioquímicas gerais, exames de imagem ou painéis de sorologias diferenciais secundárias (como Leptospirose, Neospora, IBR, BVDV ou Toxoplasmose). A guia de exames DEVE conter **exclusivamente e sem exceções** os testes oficiais do PNCEBT para a doença-alvo (Ex: AAT/RFT e CFT). Qualquer outro exame fora desta estrita triagem oficial será considerado uma violação grave de protocolo.\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia).\n"
             f"5. Comente o estado do TPC e Mucosas.\n"
@@ -167,7 +167,7 @@ async def sugestoes_copiloto_multimodal(
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome da doença ou alteração principal de forma direta]\n"
-            f"SUGESTOES: [Análise clínica, conduta legal e sanitária, exames estritamente protocolares do MAPA sem prescrições de AINEs ou diferenciais]"
+            f"SUGESTOES: [Análise clínica, conduta legal e sanitária, exames estritamente limitados aos testes oficiais do PNCEBT sem nenhum diferencial e orientações ao produtor]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
