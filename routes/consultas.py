@@ -54,7 +54,7 @@ def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
             client = Groq(api_key=api_key) if api_key else None
             return "groq", client, modelo
         else:
-            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
+            r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")) .fetchone()
             r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_api_key'")).fetchone()
             
             modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.6-flash"
@@ -64,6 +64,14 @@ def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
             return "gemini", api_key, modelo
     finally:
         db.close()
+
+# DICIONÁRIO GLOBAL DE PATOLOGIAS DE NOTIFICAÇÃO COMPULSÓRIA E CONTROLE OFICIAL
+DOENCAS_NOTIFICACAO_COMPULSORIA = [
+    "brucelose", "tuberculose", "mormo", "anemia infecciosa equina", "aie",
+    "raiva", "peste suina", "influenza aviaria", "newcastle", "mycobacterium"
+]
+
+ANIMAIS_GRANDE_PORTE = ["equino", "bovino", "bubalino", "equine", "bovine", "muar", "asinino"]
 
 class ConsultaCreate(BaseModel):
     codigo: Optional[str] = None
@@ -151,10 +159,10 @@ async def sugestoes_copiloto_multimodal(
             f"2.2 ANIMAIS DE PRODUÇÃO: DEVE incluir alerta explícito sobre o Período de Carência exigido para consumo humano de carne/leite.\n"
             f"2.3 USO RACIONAL DE ANTIMICROBIANOS: Nunca recomende profilaxia antibiótica para feridas superficiais limpas.\n"
             f"2.4 COMBATE AO 'OVERTESTING': Não sugira exames excessivos de urgência para pacientes estáveis.\n"
-            f"2.5 DEFESA SANITÁRIA E DOENÇAS OFICIAIS (PNCEBT/PNSA/MAPA): É EXPRESSAMENTE PROIBIDO sugerir tratamento farmacológico (cura) para doenças de notificação obrigatória e controle oficial, como Brucelose, Tuberculose, Anemia Infecciosa Equina, Mormo, Raiva, etc. A conduta DEVE ser EXCLUSIVAMENTE: notificação imediata ao órgão de defesa sanitária estadual/federal, isolamento do rebanho e descarte/abate sanitário (ou eutanásia) dos positivos.\n"
-            f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação com B19 para fêmeas bovinas adultas; restrita a fêmeas de 3 a 8 meses.\n"
-            f"2.7 USO DE DROGAS EM GADO DE LEITE: É TERMINANTEMENTE PROIBIDO prescrever Enrofloxacino ou outros antimicrobianos sistêmicos banidos/com longa carência para fêmeas leiteiras em lactação.\n"
-            f"2.8 BARRAGEM ABSOLUTA DE EXAMES SECUNDÁRIOS E AINEs: Para surtos de doenças de notificação obrigatória e controle oficial (ex: Brucelose, Tuberculose, Mormo, AIE, Raiva, etc.), é TERMINANTEMENTE PROIBIDO listar ou sugerir no parecer hemogramas, bioquímicas gerais, exames de imagem, AINEs, analgésicos ou painéis de sorologias diferenciais secundárias. A citação de exames DEVE conter exclusivamente e sem exceções apenas os testes oficiais e obrigatórios exigidos pelos manuais do MAPA/PNCEBT/PNSA para a respectiva doença-alvo. Qualquer citação de exame fora desta estrita triagem oficial será considerada erro grave.\n"
+            f"2.5 DEFESA SANITÁRIA E DOENÇAS OFICIAIS (PNCEBT/PNSA/MAPA): É EXPRESSAMENTE PROIBIDO sugerir tratamento farmacológico (cura) para doenças de notificação obrigatória e controle oficial, como Mormo, AIE, Brucelose, Tuberculose, Raiva, etc. A conduta DEVE ser EXCLUSIVAMENTE: notificação imediata ao órgão de defesa sanitária estadual/federal, isolamento do rebanho e descarte/sacrifício sanitário (ou eutanásia) dos positivos.\n"
+            f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação incorreta ou tratamentos empíricos.\n"
+            f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
+            f"2.8 BARRAGEM ABSOLUTA DE EXAMES SECUNDÁRIOS E AINEs: Para surtos de doenças de notificação obrigatória e controle oficial (ex: Mormo, AIE, Brucelose, Tuberculose), é TERMINANTEMENTE PROIBIDO listar ou sugerir hemogramas, bioquímicas gerais, exames de imagem ou painéis de sorologias secundárias. A citação de exames DEVE conter exclusivamente e sem exceções apenas os testes oficiais e obrigatórios exigidos pelos manuais do MAPA/PNSA/PNCEBT (Ex: Fixação de Complemento para Mormo, AAT/CFT para Brucelose).\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia).\n"
             f"5. Comente o estado do TPC e Mucosas.\n"
@@ -162,12 +170,12 @@ async def sugestoes_copiloto_multimodal(
             f"7. Não sugira condutas de medicina humana.\n"
             f"8. Proporcionalidade na analgesia (ex: opioides só para dor moderada/grave).\n"
             f"9. Doses apenas em mg/kg.\n"
-            f"10. RIGOR FARMACOLÓGICO E APRESENTAÇÕES COMERCIAIS: NUNCA invente efeitos. Se a apresentação sugerida for de medicina humana (ex: Tramadol gotas, Dipirona gotas), o sistema DEVE classificá-la como 'Uso Humano (Farmácia/Drogaria)'.\n"
+            f"10. RIGOR FARMACOLÓGICO E APRESENTAÇÕES COMERCIAIS: NUNCA invente efeitos ou prescreva remédios humanos para grandes animais.\n"
             f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, avalie obrigatoriamente os sinais vitais. Classifique como 'ESTÁVEL' ou 'CRÍTICO'.\n"
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome da doença ou alteração principal de forma direta]\n"
-            f"SUGESTOES: [Análise clínica, conduta legal e sanitária, exames restritos apenas aos testes oficiais da doença-alvo, sem NENHUM exame secundário ou diferencial, e orientações ao produtor]"
+            f"SUGESTOES: [Análise clínica, conduta legal e sanitária de notificação e sacrifício, exames restritos apenas aos testes oficiais do PNSA/MAPA, sem NENHUM tratamento medicamentoso]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
@@ -207,6 +215,22 @@ async def sugestoes_copiloto_multimodal(
 
         suspeita_extraida = corrigir_siglas(suspeita_extraida)
         sugestoes_extraidas = corrigir_siglas(sugestoes_extraidas)
+        
+        # BARRAGEM DETERMINÍSTICA DE BACKEND PARA DOENÇAS DE NOTIFICAÇÃO COMPULSÓRIA
+        suspeita_lower = suspeita_extraida.lower()
+        especie_lower = especie.lower()
+        
+        eh_notificacao = any(doenca in suspeita_lower for doenca in DOENCAS_NOTIFICACAO_COMPULSORIA)
+        eh_grande_porte = any(esp in especie_lower for esp in ANIMAIS_GRANDE_PORTE)
+        
+        if eh_notificacao and eh_grande_porte:
+            sugestoes_extraidas += (
+                "\n\n🛡️ **Muralha Sanitária Ativada (Defesa Sanitária Oficial):** "
+                "Doença de notificação obrigatória e sacrifício/eutanásia obrigatória em animais de grande porte. "
+                "Tratamento medicamentoso (especialmente com fármacos humanos ou antimicrobianos) é expressamente PROIBIDO por lei. "
+                "Interdite o trânsito e notifique imediatamente o órgão oficial (MAPA/CDA)."
+            )
+
         parecer_com_anexos = sugestoes_extraidas
         if nomes_arquivos:
             parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"
@@ -215,9 +239,9 @@ async def sugestoes_copiloto_multimodal(
         
         justificativa_cirurgica_texto = ""
         if tem_indicacao:
-            justificativa_cirurgica_texto = "Se a imagem confirmar compressão medular significativa (extrusão discal ou fratura com canal comprometido), encaminhar para cirurgia de descompressão (hemilaminectomia ou corpectomia) dentro de 24-48 h para otimizar prognóstico."
+            justificativa_cirurgica_texto = "Se a imagem confirmar compressão medular significativa, encaminhar para cirurgia de descompressão dentro de 24-48 h."
         else:
-            justificativa_cirurgica_texto = "Caso a lesão seja mínima e sem compressão crítica, manejo conservador com imobilização, fisioterapia e reabilitação intensiva."
+            justificativa_cirurgica_texto = "Caso a lesão seja mínima e sem compressão crítica, manejo conservador com reabilitação intensiva."
 
         return {
             "sugestoes": parecer_com_anexos,
