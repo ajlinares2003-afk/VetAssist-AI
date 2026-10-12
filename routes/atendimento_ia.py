@@ -503,7 +503,7 @@ def _doenca_oficial_do_caso(d: dict) -> Optional[dict]:
 def _alertas_receita_oficial(doenca: dict) -> List[str]:
     alertas = [
         f"Suspeita de doença de notificação obrigatória: {doenca['nome']}.",
-        "Não há tratamento medicamentoso autorizado para esta condição: não prescrever fármacos "
+        doenca.get("tratamento") or "Não há tratamento medicamentoso autorizado para esta condição: não prescrever fármacos "
         "(antimicrobianos, AINEs, corticosteroides ou medicamentos humanos).",
         "Isolar imediatamente os animais suspeitos e restringir o trânsito até a orientação oficial.",
         "Notificar imediatamente o serviço veterinário oficial (MAPA / órgão estadual de defesa sanitária).",
