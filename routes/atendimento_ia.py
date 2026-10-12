@@ -614,6 +614,31 @@ def analisar_medicamentos(
     as recomendações de administração considerando o paciente e os demais itens da receita.
     """
     d = _carregar_contexto(db, corpo)
+
+    # Barragem sanitária: em doença oficial não há análise de receita pelo LLM. Quem adicionou o
+    # medicamento à mão recebe o alerta fixo; o controle especial segue só a lista fixa (sem LLM).
+    doenca = _doenca_oficial_do_caso(d)
+    if doenca:
+        logger.info("analisar-medicamentos: barragem aplicada (%s), LLM não consultado", doenca["nome"])
+        alerta = (f"Prescrição não recomendada: suspeita de {doenca['nome']}, doença de notificação "
+                  "oficial sem tratamento medicamentoso autorizado. Notifique o serviço veterinário oficial.")
+        saida = []
+        for m in corpo.medicamentos:
+            nome_n = _norm(m.medicamento)
+            saida.append({
+                "medicamento": m.medicamento,
+                "controlado": any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS),
+                "lista_controle": None,
+                "recomendacoes": alerta,
+            })
+        return {
+            "itens": saida,
+            "alertas": _alertas_receita_oficial(doenca),
+            "provedor": "barragem_sanitaria",
+            "modelo": None,
+            "doenca_oficial": doenca["nome"],
+        }
+
     linhas = "\n".join(
         f"{i + 1}. {m.medicamento}"
         f" | dosagem: {m.dosagem or '-'} | frequência: {m.frequencia or '-'} | duração: {m.duracao or '-'}"

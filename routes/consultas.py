@@ -196,7 +196,10 @@ def sugestoes_copiloto_multimodal(
             f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
             f"2.8 BARRAGEM ABSOLUTA DE EXAMES SECUNDÁRIOS E AINEs: Para surtos de doenças de notificação obrigatória e controle oficial (ex: Mormo, AIE, Brucelose, Tuberculose), é TERMINANTEMENTE PROIBIDO listar ou sugerir hemogramas, bioquímicas gerais, exames de imagem (como endoscopia ou ultrassom) ou painéis de sorologias secundárias. A citação de exames DEVE conter exclusivamente e sem exceções apenas os testes oficiais e obrigatórios exigidos pelos manuais do MAPA/PNSA/PNCEBT (Ex: Fixação de Complemento para Mormo, AAT/CFT para Brucelose).\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
-            f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia).\n"
+            f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
+            f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
+            f"(ex: 'Anemia Infecciosa Equina (AIE)', nunca 'Equine infectious anemia' ou 'EIA'; 'Mormo', nunca 'glanders'). "
+            f"Cite UMA única doença na SUSPEITA, sem parênteses com outra doença; os diferenciais vão em SUGESTOES.\n"
             f"5. Comente o estado do TPC e Mucosas.\n"
             f"6. TPC significa Tempo de Preenchimento Capilar.\n"
             f"7. Não sugira condutas de medicina humana.\n"
@@ -206,7 +209,7 @@ def sugestoes_copiloto_multimodal(
             f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, avalie obrigatoriamente os sinais vitais. Classifique como 'ESTÁVEL' ou 'CRÍTICO'.\n"
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
-            f"SUSPEITA: [Nome exato e direto da principal hipótese diagnóstica]\n"
+            f"SUSPEITA: [Nome exato e direto, em português do Brasil e sem termos em inglês, de UMA única hipótese principal]\n"
             f"SUGESTOES: [Análise clínica, conduta e exames pertinentes ao caso. Somente se a suspeita principal for doença de notificação oficial: apenas notificação, isolamento e testes oficiais do MAPA, sem exames de imagem e sem tratamento medicamentoso]"
         )
 
