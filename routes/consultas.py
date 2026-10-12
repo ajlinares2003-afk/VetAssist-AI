@@ -154,6 +154,7 @@ async def sugestoes_copiloto_multimodal(
             f"2.5 DEFESA SANITÁRIA E DOENÇAS OFICIAIS (PNCEBT/PNSA/MAPA): É EXPRESSAMENTE PROIBIDO sugerir tratamento farmacológico (cura) para doenças de notificação obrigatória e controle oficial, como Brucelose, Tuberculose, Anemia Infecciosa Equina, Mormo, Raiva, etc. A conduta DEVE ser EXCLUSIVAMENTE: notificação imediata ao órgão de defesa sanitária estadual/federal, isolamento do rebanho e descarte/abate sanitário (ou eutanásia) dos positivos.\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação com B19 para fêmeas bovinas adultas; restrita a fêmeas de 3 a 8 meses.\n"
             f"2.7 USO DE DROGAS EM GADO DE LEITE: É TERMINANTEMENTE PROIBIDO prescrever Enrofloxacino ou outros antimicrobianos sistêmicos banidos/com longa carência para fêmeas leiteiras em lactação.\n"
+            f"2.8 CONTROLE DE OVERTESTING EM GRANDES ANIMAIS E EPIDEMIOLOGIA: Para surtos em rebanhos ou doenças de notificação obrigatória (ex: Brucelose), é estritamente proibido solicitar baterias massivas de exames de imagem (como ultrassom transvaginal) ou exames redundantes para animais destinados ao abate sanitário. Restrinja os exames complementares exclusivamente aos testes oficiais exigidos pelos manuais do MAPA/PNCEBT (ex: triagem sorológica RBT/AAT e confirmatória CFT).\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia).\n"
             f"5. Comente o estado do TPC e Mucosas.\n"
@@ -162,11 +163,11 @@ async def sugestoes_copiloto_multimodal(
             f"8. Proporcionalidade na analgesia (ex: opioides só para dor moderada/grave).\n"
             f"9. Doses apenas em mg/kg.\n"
             f"10. RIGOR FARMACOLÓGICO E APRESENTAÇÕES COMERCIAIS: NUNCA invente efeitos. Se a apresentação sugerida for de medicina humana (ex: Tramadol gotas, Dipirona gotas), o sistema DEVE classificá-la como 'Uso Humano (Farmácia/Drogaria)'.\n"
-            f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, você deve obrigatoriamente avaliar os sinais vitais fornecidos. Se a Temperatura, FC e TPC estiverem normais para a espécie (ou com alterações leves sem choque sistêmico), classifique o paciente como 'ESTÁVEL'. Se crítico, classifique como 'CRÍTICO'.\n"
+            f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, avalie obrigatoriamente os sinais vitais. Classifique como 'ESTÁVEL' ou 'CRÍTICO'.\n"
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome da doença ou alteração principal de forma direta]\n"
-            f"SUGESTOES: [Análise clínica, conduta legal e sanitária (se aplicável), medicações permitidas e exames]"
+            f"SUGESTOES: [Análise clínica, conduta legal e sanitária, exames estritamente protocolares do MAPA e orientações ao produtor]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
