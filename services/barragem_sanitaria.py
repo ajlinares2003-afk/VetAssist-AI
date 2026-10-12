@@ -1,7 +1,7 @@
-"""Barragem determinística para doenças de notificação/controle oficial (v3).
+"""Barragem determinística para doenças de notificação/controle oficial (v4).
 
-Adicionadas regras específicas para Encefalopatia Espongiforme Bovina (EEB)
-e Raiva dos Herbívoros em ruminantes e equídeos.
+Inclui Mormo, AIE, EEB, Raiva, Brucelose, Tuberculose, Febre Aftosa,
+Leptospirose, Peste Suína, Influenza Aviária / Newcastle e Carbúnculo Hemático.
 """
 import logging
 import re
@@ -27,9 +27,10 @@ GRUPOS_ESPECIE = {
                  "novilha", "touro", "bubalino", "bufalo", "bufala"},
     "ruminantes": {"bovino", "bovina", "bovine", "bovideo", "boi", "vaca", "bezerro", "bezerra",
                    "novilha", "touro", "bubalino", "bufalo", "bufala", "ovino", "ovina",
-                   "carneiro", "oVELHA", "cordeiro", "caprino", "caprina", "bode", "cabra", "cabrito"},
+                   "carneiro", "ovelha", "cordeiro", "caprino", "caprina", "bode", "cabra", "cabrito"},
     "suinos": {"suino", "suina", "suideo", "porco", "porca", "leitao"},
     "aves": {"ave", "galinha", "frango", "galo", "peru", "pato", "ganso"},
+    "mamiferos": {"canino", "felino", "bovino", "equino", "suino", "ovino", "caprino", "cao", "gato", "boi", "vaca", "cavalo", "porco", "ovelha", "cabra", "rato", "camundongo", "cao selvagem"},
 }
 
 # CONFIRA os testes/normas contra a IN vigente de cada programa antes de usar em produção.
@@ -105,13 +106,35 @@ DOENCAS_OFICIAIS = [
         ],
     },
     {
-        "nome": "Peste Suína",
+        "nome": "Febre Aftosa",
+        "padrao": r"febre aftosa|aftosa",
+        "grupos": {"ruminantes", "suinos"},
+        "exames": "Inspeção clínica e colheita de epitélio vesicular ou sangue pelo Serviço Veterinário Oficial.",
+        "exames_lista": [
+            {"nome": "Colheita oficial para diagnóstico de Febre Aftosa",
+             "justificativa": "Executada exclusivamente pelo serviço oficial de defesa sanitária."},
+        ],
+        "aviso": "Doença vesicular de notificação ultra-urgente: alta contagiosidade e impacto severo no comércio internacional.",
+    },
+    {
+        "nome": "Leptospirose",
+        "padrao": r"leptospirose|leptospira",
+        "grupos": {"mamiferos"},
+        "exames": "Testes sorológicos oficiais (Microaglutinação - SMR / MAT) e exames laboratoriais complementares.",
+        "exames_lista": [
+            {"nome": "Sorologia para Leptospirose (MAT / SMR)",
+             "justificativa": "Confirmação laboratorial e monitoramento epidemiológico de zoonose."},
+        ],
+        "aviso": "Zoonose de relevância em saúde pública: cuidado no manejo de fluidos e urina de animais suspeitos.",
+    },
+    {
+        "nome": "Peste Suína (Clássica / Africana)",
         "padrao": r"peste suina",
         "grupos": {"suinos"},
         "exames": "Colheita de amostras exclusivamente pelo serviço veterinário oficial.",
         "exames_lista": [
             {"nome": "Colheita de amostras pelo serviço veterinário oficial",
-             "justificativa": "Nenhum exame deve ser solicitado pelo consultório."},
+             "justificativa": "Nenhum exame deve ser solicitado pelo consultório particular."},
         ],
     },
     {
@@ -121,8 +144,19 @@ DOENCAS_OFICIAIS = [
         "exames": "Colheita de amostras exclusivamente pelo serviço veterinário oficial.",
         "exames_lista": [
             {"nome": "Colheita de amostras pelo serviço veterinário oficial",
-             "justificativa": "Nenhum exame deve ser solicitado pelo consultório."},
+             "justificativa": "Nenhum exame deve ser solicitado pelo consultório particular."},
         ],
+    },
+    {
+        "nome": "Carbúnculo Hemático (Antraz)",
+        "padrao": r"carbunculo hematico|antraz|bacillus anthracis",
+        "grupos": {"ruminantes", "equideos"},
+        "exames": "Atenção: É PROIBIDA a necropsia de animais com suspeita de Antraz para evitar a esporulação da bactéria no solo. Colheita de sangue periférico em lâmina restrita ao serviço oficial.",
+        "exames_lista": [
+            {"nome": "Coleta oficial de sangue em distensão (sob supervisão oficial)",
+             "justificativa": "Proibida a abertura da carcaça; colheita estritamente controlada."},
+        ],
+        "aviso": "Zoonose grave e fulminante: risco altíssimo de infecção humana por esporos ambientais.",
     },
 ]
 
