@@ -174,7 +174,8 @@ async def sugestoes_copiloto_multimodal(
             f"reserve-os para dor moderada a intensa, pós-operatório ou trauma.\n"
             f"9. DOSES: informe apenas em mg/kg, dentro da faixa padrão da literatura veterinária. NÃO converta em comprimidos, gotas ou mL (isso é feito "
             f"pelo sistema na receita). Se não tiver segurança sobre a dose de um fármaco, escreva 'dose a confirmar'.\n"
-            f"10. Responda estritamente no formato:\n"
+            f"10. RIGOR FARMACOLÓGICO E APRESENTAÇÕES COMERCIAIS: INDICAÇÕES E EFEITOS: NUNCA invente ou inverta efeitos terapêuticos. Restrinja-se estritamente à ação principal da droga segundo a literatura veterinária (ex: Plumb's). Jamais atribua efeito antiemético a opióides como o Tramadol (que, na verdade, podem causar emese). CLASSIFICAÇÃO DE VENDA: Se a apresentação farmacológica sugerida for de medicina humana (ex: Tramadol gotas 100mg/5mL, Dipirona gotas), o sistema DEVE classificá-la como 'Uso Humano (Farmácia/Drogaria)'. Reserve a classificação 'Uso Veterinário' apenas para apresentações desenvolvidas para animais (ex: comprimidos de Cronidor, Maxicam).\n"
+            f"11. Responda estritamente no formato:\n"
             f"SUSPEITA: [Nome da doença ou alteração principal de forma direta, sem textos longos]\n"
             f"SUGESTOES: [Análise clínica dividida por tópicos, conduta e exames]"
         )
