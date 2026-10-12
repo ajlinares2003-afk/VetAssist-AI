@@ -224,11 +224,20 @@ async def sugestoes_copiloto_multimodal(
         eh_grande_porte = any(esp in especie_lower for esp in ANIMAIS_GRANDE_PORTE)
         
         if eh_notificacao and eh_grande_porte:
+            # Remove menções a exames de imagem ou diferenciais indesejados no texto do parecer se o modelo tentar burlar
+            linhas_parecer = []
+            for linha in sugestoes_extraidas.split("\n"):
+                linha_l = linha.lower()
+                if any(termo in linha_l for termo in ["hemograma", "ultrassom", "raio-x", "radiografia", "endoscopia", "bioquímica", "hemocultura"]):
+                    continue
+                linhas_parecer.append(linha)
+            sugestoes_extraidas = "\n".join(linhas_parecer)
+
             sugestoes_extraidas += (
                 "\n\n🛡️ **Muralha Sanitária Ativada (Defesa Sanitária Oficial):** "
                 "Doença de notificação obrigatória e sacrifício/eutanásia obrigatória em animais de grande porte. "
                 "Tratamento medicamentoso (especialmente com fármacos humanos ou antimicrobianos) é expressamente PROIBIDO por lei. "
-                "Interdite o trânsito e notifique imediatamente o órgão oficial (MAPA/CDA)."
+                "Exames complementares de imagem e secundários bloqueados automaticamente. Interdite o trânsito e notifique imediatamente o órgão oficial (MAPA/CDA)."
             )
 
         parecer_com_anexos = sugestoes_extraidas
