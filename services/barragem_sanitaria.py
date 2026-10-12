@@ -147,10 +147,10 @@ DOENCAS_OFICIAIS = [
              "justificativa": "Proibida a abertura da carcaça; colheita estritamente controlada."},
         ],
         "aviso": "Zoonose grave e fulminante: risco altíssimo de infecção humana por esporos ambientais.",
+        "sem_carencia": True,  # carcaça não é consumida: carência de carne/leite não se aplica
         # IN MAPA 50/2013, Anexo, Seção 2: notificação imediata de qualquer caso SUSPEITO.
         "conduta": [
-            "NÃO abra a carcaça: a exposição ao oxigênio favorece a formação de esporos, que contaminam o solo por décadas.",
-            "Colheita apenas pelo serviço oficial (ou sob sua supervisão): sangue periférico em lâmina, por punção de vaso superficial, com EPI completo.",
+            "A colheita (feita pelo serviço oficial ou sob sua supervisão) usa punção de vaso superficial e EPI completo.",
             "Carcaças: não abrir nem consumir. Destinação definida pelo serviço oficial (em geral incineração no local ou, se autorizado, sepultamento profundo com cal virgem).",
             "Propriedade em quarentena e com trânsito interditado; o lote afetado fica em monitoramento.",
         ],
@@ -322,8 +322,9 @@ def parecer_da_doenca(doenca: dict, por_sinais: bool = False) -> str:
         f"• {tratamento}",
         "• Não solicite exames complementares (hemograma, bioquímica, imagem, cultura ou PCR) "
         "fora do fluxo oficial.",
-        "• Em animais de produção, observe o período de carência para carne e leite.",
     ]
+    if not doenca.get("sem_carencia"):
+        linhas.append("• Em animais de produção, observe o período de carência para carne e leite.")
     for item in doenca.get("conduta", []):
         linhas.append(f"• {item}")
     if doenca.get("aviso"):

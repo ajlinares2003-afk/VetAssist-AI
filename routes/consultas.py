@@ -15,7 +15,10 @@ from models.usuario import Usuario
 from schemas.consulta import ConsultaUpdate
 from services.security import obter_usuario_logado, exigir_perfil
 from services.texto_clinico import corrigir_siglas
-from services.barragem_sanitaria import extrair_secoes, aplicar_barragem, detectar_doenca_oficial, exames_oficiais
+from services.barragem_sanitaria import (
+    extrair_secoes, aplicar_barragem, detectar_doenca_oficial, exames_oficiais,
+    doenca_por_sinais, parecer_da_doenca, doencas_da_especie, doencas_incompativeis,
+)
 from groq import Groq
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -173,9 +176,25 @@ def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos_originais) if nomes_arquivos_originais else "Nenhum"
 
+        # A conduta oficial (notificar, só testes oficiais, sem tratamento) é decidida em Python.
+        # Aqui a IA só NOMEIA a doença; regras de conduta no prompt fazem a IA aplicá-las a doenças
+        # que não são oficiais (e a citar doenças de outra espécie).
+        lista_oficiais = doencas_da_especie(especie_real)
+        if lista_oficiais:
+            regra_sanitaria = (
+                "DEFESA SANITÁRIA: se, e SOMENTE se, o quadro for compatível com doença de notificação "
+                f"obrigatória que ocorre nesta espécie ({'; '.join(lista_oficiais)}), cite-a na SUSPEITA pelo nome "
+                "em português. A conduta oficial é aplicada automaticamente pelo sistema: NÃO escreva "
+                "eutanásia, notificação nem 'sem tratamento' para nenhuma outra doença, e NUNCA cite "
+                "doença que não ocorre na espécie do paciente."
+            )
+        else:
+            regra_sanitaria = ("DEFESA SANITÁRIA: não cite doenças de notificação oficial de outras espécies. "
+                               "Não escreva eutanásia nem 'sem tratamento' como conduta padrão.")
+
         prompt_ia = (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
-            f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal objetiva e direta, considerando os diferenciais compatíveis com a espécie (em equídeos com corrimento nasal, nódulos ulcerados e febre, Mormo deve constar entre as hipóteses e ser a principal quando o quadro for compatível):\n"
+            f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal objetiva e direta, considerando os diferenciais compatíveis com a espécie:\n"
             f"- Espécie: {especie_real} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
@@ -191,14 +210,13 @@ def sugestoes_copiloto_multimodal(
             f"2.2 ANIMAIS DE PRODUÇÃO: DEVE incluir alerta explícito sobre o Período de Carência exigido para consumo humano de carne/leite.\n"
             f"2.3 USO RACIONAL DE ANTIMICROBIANOS: Nunca recomende profilaxia antibiótica para feridas superficiais limpas.\n"
             f"2.4 COMBATE AO 'OVERTESTING': Não sugira exames excessivos de urgência para pacientes estáveis.\n"
-            f"2.5 DEFESA SANITÁRIA E DOENÇAS OFICIAIS (PNCEBT/PNSA/MAPA): É EXPRESSAMENTE PROIBIDO sugerir tratamento farmacológico (cura) para doenças de notificação obrigatória e controle oficial, como Mormo, AIE, Brucelose, Tuberculose, Raiva, etc. A conduta DEVE ser EXCLUSIVAMENTE: notificação imediata ao órgão de defesa sanitária estadual/federal, isolamento do rebanho e descarte/sacrifício sanitário (ou eutanásia) dos positivos.\n"
+            f"2.5 {regra_sanitaria}\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação incorreta ou tratamentos empíricos.\n"
             f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
-            f"2.8 BARRAGEM ABSOLUTA DE EXAMES SECUNDÁRIOS E AINEs: Para surtos de doenças de notificação obrigatória e controle oficial (ex: Mormo, AIE, Brucelose, Tuberculose), é TERMINANTEMENTE PROIBIDO listar ou sugerir hemogramas, bioquímicas gerais, exames de imagem (como endoscopia ou ultrassom) ou painéis de sorologias secundárias. A citação de exames DEVE conter exclusivamente e sem exceções apenas os testes oficiais e obrigatórios exigidos pelos manuais do MAPA/PNSA/PNCEBT (Ex: Fixação de Complemento para Mormo, AAT/CFT para Brucelose).\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
             f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
-            f"(ex: 'Anemia Infecciosa Equina (AIE)', nunca 'Equine infectious anemia' ou 'EIA'; 'Mormo', nunca 'glanders'). "
+            f"(escreva o nome da doença por extenso em português). "
             f"Cite UMA única doença na SUSPEITA, sem parênteses com outra doença; os diferenciais vão em SUGESTOES.\n"
             f"5. Comente o estado do TPC e Mucosas.\n"
             f"6. TPC significa Tempo de Preenchimento Capilar.\n"
@@ -210,7 +228,7 @@ def sugestoes_copiloto_multimodal(
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome exato e direto, em português do Brasil e sem termos em inglês, de UMA única hipótese principal]\n"
-            f"SUGESTOES: [Análise clínica, conduta e exames pertinentes ao caso. Somente se a suspeita principal for doença de notificação oficial: apenas notificação, isolamento e testes oficiais do MAPA, sem exames de imagem e sem tratamento medicamentoso]"
+            f"SUGESTOES: [Análise clínica, conduta e exames pertinentes ao caso]"
         )
 
         provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
@@ -246,6 +264,22 @@ def sugestoes_copiloto_multimodal(
         parecer_oficial = aplicar_barragem(suspeita_para_barragem, especie_real, texto_resposta)
         if parecer_oficial:
             sugestoes_extraidas = parecer_oficial
+        else:
+            # A IA não nomeou doença oficial: confere pelos SINAIS (ex.: antraz descrito como "septicemia")
+            texto_clinico = " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico))
+            doenca_oficial = doenca_por_sinais(texto_clinico, especie_real)
+            if doenca_oficial:
+                logger.warning("barragem por sinais: %s (IA sugeriu %r)", doenca_oficial["nome"], suspeita_extraida)
+                sugestoes_extraidas = parecer_da_doenca(doenca_oficial, por_sinais=True)
+                suspeita_extraida = (f"{doenca_oficial['nome']} - suspeita pelos sinais clínicos "
+                                     f"(a IA sugeriu: {suspeita_extraida})")[:300]
+            else:
+                # Sem barragem: se a IA citou doença exclusiva de OUTRA espécie, avisa em vez de deixar passar
+                erradas = doencas_incompativeis(texto_resposta, especie_real)
+                if erradas:
+                    sugestoes_extraidas += ("\n\n⚠️ **Revisar:** o parecer cita " + "; ".join(erradas) +
+                                            f", incompatível com a espécie do paciente ({especie_real}). "
+                                            "Desconsidere essa menção e a conduta ligada a ela.")
 
         parecer_com_anexos = sugestoes_extraidas
         if nomes_arquivos_originais:
