@@ -15,6 +15,7 @@ from models.usuario import Usuario
 from schemas.consulta import ConsultaUpdate
 from services.security import obter_usuario_logado, exigir_perfil
 from services.texto_clinico import corrigir_siglas
+from services.ia_service import gerar_texto, IAIndisponivelError
 from services.barragem_sanitaria import (
     extrair_secoes, aplicar_barragem, detectar_doenca_oficial, exames_oficiais,
     doenca_por_sinais, parecer_da_doenca, doencas_da_especie, doencas_incompativeis,
@@ -121,6 +122,10 @@ class ConsultaCreate(BaseModel):
     indicacao_cirurgia: Optional[bool] = False
     justificativa_cirurgica: Optional[str] = None
     solicitar_exames_preventivos: Optional[bool] = False
+    # Só são gravados se a coluna existir no model Consulta (ver criar_consulta).
+    tpc_segundos: Optional[float] = None
+    mucosas: Optional[str] = None
+    ecc: Optional[str] = None
 
 @router.post("/upload-anexo")
 def upload_anexo_exame(
@@ -156,6 +161,7 @@ def sugestoes_copiloto_multimodal(
     frequencia_respiratoria: Optional[str] = Form(None),
     tpc_segundos: Optional[str] = Form(None),
     mucosas: Optional[str] = Form(None),
+    ecc: Optional[str] = Form(None),
     solicitar_exames_preventivos: Optional[str] = Form("false"),
     files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
@@ -199,10 +205,11 @@ def sugestoes_copiloto_multimodal(
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
-            f"- Exames/Laudos Anexados: {texto_anexos}\n"
+            f"- Exames/Laudos Anexados (SOMENTE os nomes dos arquivos; o conteúdo NÃO foi enviado a você): {texto_anexos}\n"
             f"- Parâmetros Vitais: Temperatura={temperatura} °C | FC (frequência cardíaca)={frequencia_cardiaca} bpm | "
             f"FR (frequência respiratória)={frequencia_respiratoria} ir/min | "
-            f"TPC (Tempo de Preenchimento Capilar)={tpc_segundos} s | Mucosas={mucosas}\n\n"
+            f"TPC (Tempo de Preenchimento Capilar)={tpc_segundos} s | Mucosas={mucosas} | "
+            f"ECC (Escore de Condição Corporal, escala 1 a 9)={ecc or 'não informado'}\n\n"
             f"REGRAS OBRIGATÓRIAS:\n"
             f"1. Você DEVE fornecer uma suspeita diagnóstica principal exata, sem inventar nomes cruzados ou patologias de outras espécies.\n"
             f"2. PROIBIÇÃO ABSOLUTA DE TRATAMENTOS TÓXICOS POR ESPÉCIE: Gatos NÃO toleram e NÃO PODEM receber Paracetamol, Permetrina, Azul de Metileno ou AINEs em contexto de intoxicação.\n"
@@ -225,27 +232,26 @@ def sugestoes_copiloto_multimodal(
             f"9. Doses apenas em mg/kg.\n"
             f"10. RIGOR FARMACOLÓGICO E APRESENTAÇÕES COMERCIAIS: NUNCA invente efeitos ou prescreva remédios humanos para grandes animais.\n"
             f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, avalie obrigatoriamente os sinais vitais. Classifique como 'ESTÁVEL' ou 'CRÍTICO'.\n"
+            f"11.1 ANEXOS: você NÃO viu o conteúdo dos arquivos anexados. Não descreva nem interprete laudos, imagens ou resultados de exames; se houver anexos, diga apenas que o veterinário deve avaliá-los.\n"
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome exato e direto, em português do Brasil e sem termos em inglês, de UMA única hipótese principal]\n"
             f"SUGESTOES: [Análise clínica, conduta e exames pertinentes ao caso]"
         )
 
-        provedor, client_or_key, modelo = obter_config_ia_dinamica("groq_1")
-        texto_resposta = ""
-
-        if provedor == "groq" and client_or_key:
-            response = client_or_key.chat.completions.create(
-                model=modelo,
-                messages=[{"role": "user", "content": prompt_ia}],
-                temperature=0.1
-            )
-            texto_resposta = response.choices[0].message.content
-        else:
+        # Mesmo caminho das outras telas: Gemini -> Groq 1 -> Groq 2, com fallback automático.
+        try:
+            resposta_ia = gerar_texto(db, prompt_ia, timeout=60)
+        except IAIndisponivelError as exc:
+            logger.error("Copiloto: nenhuma IA respondeu. %s", " || ".join(exc.tentativas) or exc)
+            if not exc.tentativas:  # nada configurado
+                raise HTTPException(status_code=503, detail=str(exc))
             raise HTTPException(
                 status_code=503,
-                detail="Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA.",
+                detail="Nenhuma IA respondeu agora. Tente de novo em instantes ou confira Configurações de IA.",
             )
+        texto_resposta = resposta_ia.texto
+        logger.info("Copiloto respondido por %s (%s)", resposta_ia.provedor, resposta_ia.modelo)
 
         # Utiliza o parser robusto do novo módulo
         suspeita_extraida, sugestoes_extraidas = extrair_secoes(texto_resposta)
@@ -283,7 +289,8 @@ def sugestoes_copiloto_multimodal(
 
         parecer_com_anexos = sugestoes_extraidas
         if nomes_arquivos_originais:
-            parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos}"
+            parecer_com_anexos += (f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos} "
+                                   "(arquivos registrados; o conteúdo não foi analisado pela IA)")
 
         tem_indicacao = (not doenca_oficial) and any(termo in sugestoes_extraidas.lower() for termo in ["cirurgia", "descompressão", "hemilaminectomia", "corpectomia"])
         
@@ -520,6 +527,12 @@ def criar_consulta(
         justificativa_cirurgica=getattr(consulta, 'justificativa_cirurgica', None)
     )
 
+    # Campos extras só entram se o model tiver a coluna (evita erro em bancos ainda sem a migração).
+    for campo in ("tpc_segundos", "mucosas", "ecc"):
+        valor = getattr(consulta, campo, None)
+        if valor is not None and hasattr(Consulta, campo):
+            setattr(nova_consulta, campo, valor)
+
     try:
         db.add(nova_consulta)
         db.flush()
@@ -535,7 +548,11 @@ def criar_consulta(
     return nova_consulta
 
 @router.get("/{consulta_id}")
-def buscar_consulta(consulta_id: int, db: Session = Depends(get_db)):
+def buscar_consulta(
+    consulta_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)  # prontuário: exige login
+):
     consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
     if not consulta:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")

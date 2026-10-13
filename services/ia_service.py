@@ -35,6 +35,7 @@ logger = logging.getLogger("vetassist.ia")
 
 TIMEOUT_SEGUNDOS = 20
 TIMEOUT_PESQUISA_SEGUNDOS = 90  # pesquisa na web demora mais que uma resposta comum
+TIMEOUT_TEXTO_SEGUNDOS = 60     # parecer clínico em texto livre (Copiloto) é mais longo que um JSON curto
 # O endpoint da Groq é compatível com o SDK da OpenAI. Pode ser sobrescrito por env.
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
@@ -110,6 +111,13 @@ class IAIndisponivelError(Exception):
 
 
 @dataclass
+class RespostaTexto:
+    texto: str
+    provedor: str  # nome do slot que respondeu
+    modelo: str    # modelo que respondeu (para auditoria)
+
+
+@dataclass
 class RespostaIA:
     dados: dict
     provedor: str  # nome do slot que respondeu
@@ -153,8 +161,10 @@ def _obter_cliente_gemini(api_key: str, timeout: int) -> genai.Client:
     return genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(
-            api_version="v1", 
-            timeout=timeout
+            api_version="v1",
+            # ATENÇÃO: no SDK do Gemini o timeout é em MILISSEGUNDOS (na Groq/OpenAI é em segundos).
+            # Passar 20 aqui dava 0,02 s de prazo e sempre estourava ReadTimeout.
+            timeout=int(timeout * 1000),
         ),
     )
 
@@ -365,6 +375,37 @@ def gerar_json(
             if pesquisa_web else
             "Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA."
         )
+    raise IAIndisponivelError("Todas as IAs configuradas falharam.", tentativas)
+
+
+def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None) -> RespostaTexto:
+    """
+    Pede um texto livre à IA (ex.: parecer do Copiloto), com o MESMO fallback automático de
+    `gerar_json`: Gemini -> Groq 1 -> Groq 2. Resposta vazia conta como falha do provedor.
+    Se todos falharem, levanta IAIndisponivelError (com `tentativas` só para log; sem chaves).
+    """
+    config = _ler_configuracoes(db)
+    tentativas: list[str] = []
+
+    for slot in SLOTS_ORDEM:
+        modelo = config.get(slot.chave_modelo, "")
+        api_key = _chave_do_slot(slot, config)
+        if not modelo or not api_key:
+            continue  # slot não configurado
+        try:
+            bruto = _chamar_provedor(slot, modelo, api_key, prompt, json_mode=False,
+                                     timeout=timeout or TIMEOUT_TEXTO_SEGUNDOS)
+            texto = re.sub(r"<think>.*?</think>", "", bruto or "", flags=re.DOTALL | re.IGNORECASE).strip()
+            if not texto:
+                raise ValueError("A IA devolveu uma resposta vazia.")
+            return RespostaTexto(texto=texto, provedor=slot.nome, modelo=modelo)
+        except Exception as exc:  # qualquer falha -> próximo provedor
+            registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
+            logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
+            tentativas.append(registro)
+
+    if not tentativas:
+        raise IAIndisponivelError("Nenhuma IA configurada. Cadastre modelo e chave em Configurações de IA.")
     raise IAIndisponivelError("Todas as IAs configuradas falharam.", tentativas)
 
 
