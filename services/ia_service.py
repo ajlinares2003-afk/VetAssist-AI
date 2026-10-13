@@ -22,6 +22,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Callable, Optional
 
 from google import genai
@@ -32,7 +33,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger("vetassist.ia")
 
-TIMEOUT_SEGUNDOS = 60
+TIMEOUT_SEGUNDOS = 20
 TIMEOUT_PESQUISA_SEGUNDOS = 90  # pesquisa na web demora mais que uma resposta comum
 # O endpoint da Groq é compatível com o SDK da OpenAI. Pode ser sobrescrito por env.
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
@@ -145,14 +146,35 @@ def _chave_do_slot(slot: Slot, config: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Chamada aos provedores
 # --------------------------------------------------------------------------- #
+
+@lru_cache(maxsize=4)
+def _obter_cliente_gemini(api_key: str, timeout: int) -> genai.Client:
+    """Reaproveita a conexão HTTP subjacente para o Google Gemini."""
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            api_version="v1", 
+            timeout=timeout
+        ),
+    )
+
+@lru_cache(maxsize=4)
+def _obter_cliente_groq(api_key: str, timeout: int) -> OpenAI:
+    """Reaproveita a conexão HTTP subjacente para a Groq."""
+    return OpenAI(
+        base_url=GROQ_BASE_URL, 
+        api_key=api_key, 
+        timeout=timeout, 
+        max_retries=0
+    )
+
+
 def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mode: bool,
                      timeout: int = TIMEOUT_SEGUNDOS) -> str:
     """Faz UMA chamada ao provedor e devolve o texto bruto. Lança exceção se falhar."""
     if slot.tipo == "gemini":
-        cliente = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(timeout=timeout * 1000),  # em milissegundos
-        )
+        cliente = _obter_cliente_gemini(api_key, timeout)
+        
         # Gemini 3.x: NÃO enviar temperature/top_p/top_k (parâmetros descontinuados,
         # a API rejeita ou ignora). Só o formato de saída é configurado.
         config = types.GenerateContentConfig(
@@ -162,8 +184,7 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
         return resposta.text or ""
 
     # Groq (API compatível com OpenAI). max_retries=0 para o fallback ser rápido.
-    cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key,
-                     timeout=timeout, max_retries=0)
+    cliente = _obter_cliente_groq(api_key, timeout)
     args = {
         "model": modelo,
         "messages": [{"role": "user", "content": prompt}],
@@ -188,10 +209,8 @@ def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: in
     `fontes` são as páginas realmente consultadas ([{titulo, url}]).
     Obs.: com ferramentas ativas o "modo JSON" não é usado; o parser extrai o JSON.
     """
-    cliente = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=timeout * 1000),  # milissegundos
-    )
+    cliente = _obter_cliente_gemini(api_key, timeout)
+    
     config = types.GenerateContentConfig(  # sem temperature (ver nota em _chamar_provedor)
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
@@ -238,7 +257,8 @@ def _chamar_groq_com_busca(modelo: str, api_key: str, prompt: str, timeout: int)
     saiu da memória do modelo e é recusada. Obs.: browser_search não combina com
     "structured outputs", por isso não enviamos response_format aqui.
     """
-    cliente = OpenAI(base_url=GROQ_BASE_URL, api_key=api_key, timeout=timeout, max_retries=0)
+    cliente = _obter_cliente_groq(api_key, timeout)
+    
     pedido = dict(
         model=modelo,
         messages=[{"role": "user", "content": prompt}],
