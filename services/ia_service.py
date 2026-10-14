@@ -455,10 +455,13 @@ def testar_slot(db: Session, nome_slot: str, modelo: Optional[str]) -> dict:
     if not api_key:
         return {"sucesso": False, "erro": "Chave de API não configurada para este provedor."}
 
+    inicio = time.monotonic()
     try:
         resposta = _chamar_provedor(
             slot, modelo, api_key, "Responda apenas: 'Conexao bem sucedida!'", json_mode=False
         )
-        return {"sucesso": True, "resposta": resposta.strip()}
+        # O tempo ajuda a separar "provedor lento" de "provedor fora do ar".
+        return {"sucesso": True, "resposta": f"{resposta.strip()} ({time.monotonic() - inicio:.1f}s)"}
     except Exception as exc:
-        return {"sucesso": False, "erro": _descrever_erro(exc, 900)}
+        return {"sucesso": False,
+                "erro": f"{_descrever_erro(exc, 850)} (após {time.monotonic() - inicio:.0f}s)"}
