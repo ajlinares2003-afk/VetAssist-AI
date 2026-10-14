@@ -37,6 +37,8 @@ MIME_POR_EXTENSAO = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".jpeg": "
                      ".png": "image/png", ".webp": "image/webp"}
 # O Gemini aceita ~20 MB por requisição com arquivos embutidos: ficamos abaixo disso.
 MAX_ANEXOS_IA = 4
+# Prazo da análise com anexos (Gemini). Se estourar, a Groq responde só com o texto clínico.
+TIMEOUT_ANEXOS_SEGUNDOS = int(os.getenv("IA_TIMEOUT_ANEXOS", "60"))
 MAX_BYTES_ANEXOS_IA = 14 * 1024 * 1024
 
 # Termos que indicam cirurgia no parecer; só valem se NÃO vierem negados ("sem indicação de cirurgia").
@@ -298,12 +300,15 @@ def sugestoes_copiloto_multimodal(
                     "iniciado por 'Achados nos anexos (segunda leitura, não substitui laudo):' e aponte se a imagem concorda "
                     "ou diverge do quadro clínico informado.\n")
             else:
-                linha_anexos = (f"- Exames/Laudos Anexados (SOMENTE os nomes dos arquivos; o conteúdo NÃO foi enviado a você): "
-                                f"{texto_anexos}\n")
+                # Sem o conteúdo, o NOME do arquivo também é omitido: modelos de texto deduzem o exame
+                # pelo nome ("Raio X Thor.jpg" virou "radiografia torácica").
+                n = len(nomes_arquivos_originais)
+                linha_anexos = (f"- Exames/Laudos Anexados: {n} arquivo(s) registrado(s); nomes e conteúdo NÃO foram "
+                                f"enviados a você\n" if n else "- Exames/Laudos Anexados: Nenhum\n")
                 regra_anexos = (
-                    "11.1 ANEXOS: você NÃO viu o conteúdo dos arquivos anexados. NÃO deduza o exame, a região anatômica ou o "
-                    "resultado pelo NOME do arquivo (o nome pode ser o do paciente). Não descreva nem interprete laudos, "
-                    "imagens ou resultados; se houver anexos, diga apenas que o veterinário deve avaliá-los.\n")
+                    "11.1 ANEXOS: você NÃO viu o conteúdo dos arquivos anexados. NÃO mencione, descreva, suponha nem solicite "
+                    "nenhum exame com base nos anexos (nem tipo de exame, nem região anatômica); apenas diga, em uma frase, "
+                    "que o veterinário deve avaliar os arquivos anexados.\n")
             return _prompt_base(linha_anexos, regra_anexos)
 
         prompt_sem_anexos = montar_prompt(False)
@@ -312,7 +317,7 @@ def sugestoes_copiloto_multimodal(
         # Mesmo caminho das outras telas: Gemini -> Groq 1 -> Groq 2, com fallback automático.
         # Com anexos, só o Gemini os recebe; se ele falhar, a Groq responde só com o texto clínico.
         try:
-            resposta_ia = gerar_texto(db, prompt_ia, timeout=90 if anexos_ia else 60,
+            resposta_ia = gerar_texto(db, prompt_ia, timeout=TIMEOUT_ANEXOS_SEGUNDOS if anexos_ia else 60,
                                       anexos=anexos_ia or None, prompt_sem_anexos=prompt_sem_anexos)
         except IAIndisponivelError as exc:
             logger.error("Copiloto: nenhuma IA respondeu. %s", " || ".join(exc.tentativas) or exc)

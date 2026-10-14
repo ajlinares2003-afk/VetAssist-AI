@@ -412,6 +412,7 @@ def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None,
         api_key = _chave_do_slot(slot, config)
         if not modelo or not api_key:
             continue  # slot não configurado
+        inicio = time.monotonic()
         try:
             com_anexos = bool(anexos) and slot.tipo == "gemini"
             if com_anexos:
@@ -426,7 +427,7 @@ def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None,
                 raise ValueError("A IA devolveu uma resposta vazia.")
             return RespostaTexto(texto=texto, provedor=slot.nome, modelo=modelo, anexos_analisados=com_anexos)
         except Exception as exc:  # qualquer falha -> próximo provedor
-            registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
+            registro = f"{slot.nome}/{modelo} (após {time.monotonic() - inicio:.0f}s): {_descrever_erro(exc)}"
             logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
             tentativas.append(registro)
 
