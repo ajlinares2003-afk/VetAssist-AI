@@ -32,6 +32,34 @@ router = APIRouter(
 )
 
 UPLOADS_DIR = Path("uploads/exames")
+
+MIME_POR_EXTENSAO = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                     ".png": "image/png", ".webp": "image/webp"}
+# O Gemini aceita ~20 MB por requisição com arquivos embutidos: ficamos abaixo disso.
+MAX_ANEXOS_IA = 4
+MAX_BYTES_ANEXOS_IA = 14 * 1024 * 1024
+
+# Termos que indicam cirurgia no parecer; só valem se NÃO vierem negados ("sem indicação de cirurgia").
+_TERMOS_CIRURGIA = ("cirurgia", "cirúrgic", "hemilaminectomia", "corpectomia", "osteossíntese",
+                    "laparotomia", "celiotomia")
+_NEGACOES = ("sem ", "não ", "nao ", "evitar", "evite", "descart", "nenhuma", "ausência", "sem necessidade",
+             "dispensa", "afasta")
+
+
+def ha_indicacao_cirurgica(texto: str) -> bool:
+    """True se o parecer indica cirurgia em pelo menos uma menção que não esteja negada."""
+    t = (texto or "").lower()
+    for termo in _TERMOS_CIRURGIA:
+        inicio = 0
+        while (pos := t.find(termo, inicio)) != -1:
+            antes = t[max(0, pos - 35):pos]
+            for sep in ".;:,\n":  # só vale a negação da MESMA oração
+                antes = antes.rsplit(sep, 1)[-1]
+            if not any(neg in antes for neg in _NEGACOES):
+                return True
+            inicio = pos + len(termo)
+    return False
+
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Ajuste conforme os tipos de laudo/imagem que a clínica realmente anexa.
@@ -182,6 +210,24 @@ def sugestoes_copiloto_multimodal(
 
         texto_anexos = ", ".join(nomes_arquivos_originais) if nomes_arquivos_originais else "Nenhum"
 
+        # Lê do disco os arquivos que vão para a IA (limites de quantidade e de tamanho total).
+        anexos_ia, nomes_ia, nomes_fora = [], [], []
+        total_bytes = 0
+        for anexo in anexos_salvos:
+            caminho = UPLOADS_DIR / anexo["salvo"]
+            try:
+                dados = caminho.read_bytes()
+            except OSError:
+                nomes_fora.append(anexo["original"])
+                continue
+            if len(anexos_ia) >= MAX_ANEXOS_IA or total_bytes + len(dados) > MAX_BYTES_ANEXOS_IA:
+                nomes_fora.append(anexo["original"])
+                continue
+            total_bytes += len(dados)
+            anexos_ia.append((dados, MIME_POR_EXTENSAO.get(caminho.suffix.lower(), "application/octet-stream"),
+                              anexo["original"]))
+            nomes_ia.append(anexo["original"])
+
         # A conduta oficial (notificar, só testes oficiais, sem tratamento) é decidida em Python.
         # Aqui a IA só NOMEIA a doença; regras de conduta no prompt fazem a IA aplicá-las a doenças
         # que não são oficiais (e a citar doenças de outra espécie).
@@ -198,14 +244,15 @@ def sugestoes_copiloto_multimodal(
             regra_sanitaria = ("DEFESA SANITÁRIA: não cite doenças de notificação oficial de outras espécies. "
                                "Não escreva eutanásia nem 'sem tratamento' como conduta padrão.")
 
-        prompt_ia = (
+        def _prompt_base(linha_anexos: str, regra_anexos: str) -> str:
+            return (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
             f"Analise o caso clínico abaixo e forneça obrigatoriamente uma suspeita diagnóstica principal objetiva e direta, considerando os diferenciais compatíveis com a espécie:\n"
             f"- Espécie: {especie_real} | Raça: {raca} | Idade: {idade} | Peso: {peso}\n"
             f"- Queixa Principal: {queixa_principal}\n"
             f"- Sintomas: {sintomas}\n"
             f"- Exame Físico: {exame_fisico}\n"
-            f"- Exames/Laudos Anexados (SOMENTE os nomes dos arquivos; o conteúdo NÃO foi enviado a você): {texto_anexos}\n"
+            f"{linha_anexos}"
             f"- Parâmetros Vitais: Temperatura={temperatura} °C | FC (frequência cardíaca)={frequencia_cardiaca} bpm | "
             f"FR (frequência respiratória)={frequencia_respiratoria} ir/min | "
             f"TPC (Tempo de Preenchimento Capilar)={tpc_segundos} s | Mucosas={mucosas} | "
@@ -232,16 +279,41 @@ def sugestoes_copiloto_multimodal(
             f"9. Doses apenas em mg/kg.\n"
             f"10. RIGOR FARMACOLÓGICO E APRESENTAÇÕES COMERCIAIS: NUNCA invente efeitos ou prescreva remédios humanos para grandes animais.\n"
             f"11. ESTRUTURA LÓGICA DE RACIOCÍNIO (CHAIN OF THOUGHT): Antes de sugerir a conduta, avalie obrigatoriamente os sinais vitais. Classifique como 'ESTÁVEL' ou 'CRÍTICO'.\n"
-            f"11.1 ANEXOS: você NÃO viu o conteúdo dos arquivos anexados. Não descreva nem interprete laudos, imagens ou resultados de exames; se houver anexos, diga apenas que o veterinário deve avaliá-los.\n"
+            f"{regra_anexos}"
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome exato e direto, em português do Brasil e sem termos em inglês, de UMA única hipótese principal]\n"
             f"SUGESTOES: [Análise clínica, conduta e exames pertinentes ao caso]"
-        )
+            )
+
+        def montar_prompt(com_anexos: bool) -> str:
+            if com_anexos:
+                linha_anexos = (f"- Exames/Laudos Anexados (imagens/PDFs enviados junto com este texto, na mesma ordem): "
+                                f"{', '.join(nomes_ia)}\n")
+                regra_anexos = (
+                    "11.1 ANEXOS: analise o que é VISÍVEL em cada arquivo como SEGUNDA LEITURA de apoio, nunca como laudo. "
+                    "Identifique a região anatômica e o tipo de exame SOMENTE pelo conteúdo da imagem, jamais pelo NOME do "
+                    "arquivo (o nome pode ser o do paciente). Se a qualidade, o posicionamento ou o recorte não permitirem "
+                    "concluir, escreva 'não é possível concluir'. Não invente achados. Em SUGESTOES inclua um parágrafo "
+                    "iniciado por 'Achados nos anexos (segunda leitura, não substitui laudo):' e aponte se a imagem concorda "
+                    "ou diverge do quadro clínico informado.\n")
+            else:
+                linha_anexos = (f"- Exames/Laudos Anexados (SOMENTE os nomes dos arquivos; o conteúdo NÃO foi enviado a você): "
+                                f"{texto_anexos}\n")
+                regra_anexos = (
+                    "11.1 ANEXOS: você NÃO viu o conteúdo dos arquivos anexados. NÃO deduza o exame, a região anatômica ou o "
+                    "resultado pelo NOME do arquivo (o nome pode ser o do paciente). Não descreva nem interprete laudos, "
+                    "imagens ou resultados; se houver anexos, diga apenas que o veterinário deve avaliá-los.\n")
+            return _prompt_base(linha_anexos, regra_anexos)
+
+        prompt_sem_anexos = montar_prompt(False)
+        prompt_ia = montar_prompt(True) if anexos_ia else prompt_sem_anexos
 
         # Mesmo caminho das outras telas: Gemini -> Groq 1 -> Groq 2, com fallback automático.
+        # Com anexos, só o Gemini os recebe; se ele falhar, a Groq responde só com o texto clínico.
         try:
-            resposta_ia = gerar_texto(db, prompt_ia, timeout=60)
+            resposta_ia = gerar_texto(db, prompt_ia, timeout=90 if anexos_ia else 60,
+                                      anexos=anexos_ia or None, prompt_sem_anexos=prompt_sem_anexos)
         except IAIndisponivelError as exc:
             logger.error("Copiloto: nenhuma IA respondeu. %s", " || ".join(exc.tentativas) or exc)
             if not exc.tentativas:  # nada configurado
@@ -251,7 +323,8 @@ def sugestoes_copiloto_multimodal(
                 detail="Nenhuma IA respondeu agora. Tente de novo em instantes ou confira Configurações de IA.",
             )
         texto_resposta = resposta_ia.texto
-        logger.info("Copiloto respondido por %s (%s)", resposta_ia.provedor, resposta_ia.modelo)
+        logger.info("Copiloto respondido por %s (%s); anexos analisados: %s",
+                    resposta_ia.provedor, resposta_ia.modelo, resposta_ia.anexos_analisados)
 
         # Utiliza o parser robusto do novo módulo
         suspeita_extraida, sugestoes_extraidas = extrair_secoes(texto_resposta)
@@ -289,15 +362,22 @@ def sugestoes_copiloto_multimodal(
 
         parecer_com_anexos = sugestoes_extraidas
         if nomes_arquivos_originais:
-            parecer_com_anexos += (f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos} "
-                                   "(arquivos registrados; o conteúdo não foi analisado pela IA)")
+            if resposta_ia.anexos_analisados:
+                nota = (f"analisados pela IA como segunda leitura ({', '.join(nomes_ia)}); NÃO substitui o laudo — "
+                        "confirme com o veterinário/radiologista")
+                if nomes_fora:
+                    nota += f". Não enviados à IA por limite de tamanho ou quantidade: {', '.join(nomes_fora)}"
+            else:
+                nota = "arquivos registrados; o conteúdo NÃO foi analisado pela IA"
+            parecer_com_anexos += f"\n\n📎 **Exames/Laudos Anexados:** {texto_anexos} ({nota})"
 
-        tem_indicacao = (not doenca_oficial) and any(termo in sugestoes_extraidas.lower() for termo in ["cirurgia", "descompressão", "hemilaminectomia", "corpectomia"])
-        
-        # Só exibe a justificativa se realmente houver indicação
+        tem_indicacao = (not doenca_oficial) and ha_indicacao_cirurgica(sugestoes_extraidas)
+
+        # Texto neutro: não presume o tipo de cirurgia (a justificativa fixa anterior falava de coluna).
         justificativa_cirurgica_texto = None
         if tem_indicacao:
-            justificativa_cirurgica_texto = "Se a imagem confirmar compressão medular significativa, encaminhar para cirurgia de descompressão dentro de 24-48 h."
+            justificativa_cirurgica_texto = ("O parecer menciona possível indicação cirúrgica. Confirme com exame clínico e "
+                                             "de imagem antes de decidir e agendar.")
 
         return {
             "sugestoes": parecer_com_anexos,

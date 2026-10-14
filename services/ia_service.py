@@ -115,6 +115,7 @@ class RespostaTexto:
     texto: str
     provedor: str  # nome do slot que respondeu
     modelo: str    # modelo que respondeu (para auditoria)
+    anexos_analisados: bool = False  # True só se imagens/PDFs foram realmente enviados ao modelo
 
 
 @dataclass
@@ -378,11 +379,30 @@ def gerar_json(
     raise IAIndisponivelError("Todas as IAs configuradas falharam.", tentativas)
 
 
-def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None) -> RespostaTexto:
+def _chamar_gemini_com_anexos(modelo: str, api_key: str, prompt: str, anexos: list, timeout: int) -> str:
+    """
+    Gemini multimodal: manda as imagens/PDFs junto com o prompt.
+    `anexos` = [(bytes, mime_type, nome)]. Só o Gemini lê imagem/PDF aqui (os modelos Groq
+    configurados são só de texto).
+    """
+    cliente = _obter_cliente_gemini(api_key, timeout)
+    partes = [types.Part.from_bytes(data=dados, mime_type=mime) for dados, mime, _ in anexos]
+    resposta = cliente.models.generate_content(model=modelo, contents=partes + [prompt])
+    return resposta.text or ""
+
+
+def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None,
+                anexos: Optional[list] = None,
+                prompt_sem_anexos: Optional[str] = None) -> RespostaTexto:
     """
     Pede um texto livre à IA (ex.: parecer do Copiloto), com o MESMO fallback automático de
     `gerar_json`: Gemini -> Groq 1 -> Groq 2. Resposta vazia conta como falha do provedor.
     Se todos falharem, levanta IAIndisponivelError (com `tentativas` só para log; sem chaves).
+
+    `anexos` = [(bytes, mime_type, nome)] (imagens/PDFs). Só o Gemini os recebe, com `prompt`.
+    Se o Gemini falhar, os provedores de texto (Groq) respondem SEM os anexos, usando
+    `prompt_sem_anexos` (que deve avisar que os arquivos não foram vistos), e a resposta vem
+    com `anexos_analisados=False` para a tela avisar o veterinário.
     """
     config = _ler_configuracoes(db)
     tentativas: list[str] = []
@@ -393,12 +413,18 @@ def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None) -> Resp
         if not modelo or not api_key:
             continue  # slot não configurado
         try:
-            bruto = _chamar_provedor(slot, modelo, api_key, prompt, json_mode=False,
-                                     timeout=timeout or TIMEOUT_TEXTO_SEGUNDOS)
+            com_anexos = bool(anexos) and slot.tipo == "gemini"
+            if com_anexos:
+                bruto = _chamar_gemini_com_anexos(modelo, api_key, prompt, anexos,
+                                                  timeout or TIMEOUT_TEXTO_SEGUNDOS)
+            else:
+                bruto = _chamar_provedor(slot, modelo, api_key,
+                                         (prompt_sem_anexos or prompt) if anexos else prompt,
+                                         json_mode=False, timeout=timeout or TIMEOUT_TEXTO_SEGUNDOS)
             texto = re.sub(r"<think>.*?</think>", "", bruto or "", flags=re.DOTALL | re.IGNORECASE).strip()
             if not texto:
                 raise ValueError("A IA devolveu uma resposta vazia.")
-            return RespostaTexto(texto=texto, provedor=slot.nome, modelo=modelo)
+            return RespostaTexto(texto=texto, provedor=slot.nome, modelo=modelo, anexos_analisados=com_anexos)
         except Exception as exc:  # qualquer falha -> próximo provedor
             registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
             logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
