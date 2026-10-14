@@ -37,8 +37,10 @@ MIME_POR_EXTENSAO = {".pdf": "application/pdf", ".jpg": "image/jpeg", ".jpeg": "
                      ".png": "image/png", ".webp": "image/webp"}
 # O Gemini aceita ~20 MB por requisição com arquivos embutidos: ficamos abaixo disso.
 MAX_ANEXOS_IA = 4
-# Prazo da análise com anexos (Gemini). Se estourar, a Groq responde só com o texto clínico.
-TIMEOUT_ANEXOS_SEGUNDOS = int(os.getenv("IA_TIMEOUT_ANEXOS", "60"))
+# Prazo total por tentativa do Copiloto. Aumentável pelo ambiente sem alterar o código.
+TIMEOUT_COPILOTO_SEGUNDOS = int(os.getenv("IA_TIMEOUT_COPILOTO", "90"))
+# Anexos podem demorar mais para serem enviados e analisados pelo Gemini.
+TIMEOUT_ANEXOS_SEGUNDOS = int(os.getenv("IA_TIMEOUT_ANEXOS", "120"))
 MAX_BYTES_ANEXOS_IA = 14 * 1024 * 1024
 
 # Termos que indicam cirurgia no parecer; só valem se NÃO vierem negados ("sem indicação de cirurgia").
@@ -125,7 +127,7 @@ def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
             r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
             r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_api_key'")).fetchone()
             
-            modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.6-flash"
+            modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.8-flash"
             key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
             api_key = key_db or os.getenv("GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
             
@@ -317,8 +319,11 @@ def sugestoes_copiloto_multimodal(
         # Mesmo caminho das outras telas: Gemini -> Groq 1 -> Groq 2, com fallback automático.
         # Com anexos, só o Gemini os recebe; se ele falhar, a Groq responde só com o texto clínico.
         try:
-            resposta_ia = gerar_texto(db, prompt_ia, timeout=TIMEOUT_ANEXOS_SEGUNDOS if anexos_ia else 60,
-                                      anexos=anexos_ia or None, prompt_sem_anexos=prompt_sem_anexos)
+            resposta_ia = gerar_texto(
+                db, prompt_ia,
+                timeout=TIMEOUT_ANEXOS_SEGUNDOS if anexos_ia else TIMEOUT_COPILOTO_SEGUNDOS,
+                anexos=anexos_ia or None, prompt_sem_anexos=prompt_sem_anexos,
+            )
         except IAIndisponivelError as exc:
             logger.error("Copiloto: nenhuma IA respondeu. %s", " || ".join(exc.tentativas) or exc)
             if not exc.tentativas:  # nada configurado

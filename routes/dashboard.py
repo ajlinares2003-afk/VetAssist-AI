@@ -46,7 +46,7 @@ def obter_config_ia_dinamica(provedor_desejado: str = "groq_1"):
             r_mod = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_model'")).fetchone()
             r_key = db.execute(text("SELECT valor FROM configuracoes_sistema WHERE chave = 'gemini_api_key'")).fetchone()
             
-            modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.6-flash"
+            modelo = r_mod[0] if r_mod and r_mod[0] else "gemini-3.8-flash"
             key_db = r_key[0] if r_key and r_key[0] and not str(r_key[0]).startswith("****") else None
             api_key = key_db or os.getenv("GEMINI_API_KEY_PRIMARY") or os.getenv("GEMINI_API_KEY")
             return api_key, modelo

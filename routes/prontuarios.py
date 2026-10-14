@@ -14,6 +14,7 @@ from services.security import exigir_perfil
 from pydantic import BaseModel
 
 from google import genai
+from google.genai import types
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -207,8 +208,11 @@ def obter_resumo(
         for tentativa in range(2):
             try:
                 response = gemini_client.models.generate_content(
-                    model="gemini-3.6-flash",
+                    model="gemini-3.8-flash",
                     contents=prompt,
+                    config=types.GenerateContentConfig(
+                        thinking_config=types.ThinkingConfig(thinking_level="low")
+                    ),
                 )
                 resumo_final = response.text
                 if resumo_final:

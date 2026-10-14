@@ -35,7 +35,7 @@ logger = logging.getLogger("vetassist.ia")
 
 TIMEOUT_SEGUNDOS = 20
 TIMEOUT_PESQUISA_SEGUNDOS = 90  # pesquisa na web demora mais que uma resposta comum
-TIMEOUT_TEXTO_SEGUNDOS = 60     # parecer clínico em texto livre (Copiloto) é mais longo que um JSON curto
+TIMEOUT_TEXTO_SEGUNDOS = 90     # prazo configurável pelo endpoint para pareceres livres do Copiloto
 # O endpoint da Groq é compatível com o SDK da OpenAI. Pode ser sobrescrito por env.
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
@@ -180,6 +180,16 @@ def _obter_cliente_groq(api_key: str, timeout: int) -> OpenAI:
     )
 
 
+def _thinking_config_gemini(modelo: str):
+    """Limita o raciocínio dinâmico do Gemini 3.x para reduzir latência sem afetar modelos antigos."""
+    identificador = (modelo or "").strip().lower()
+    if identificador.startswith("models/"):
+        identificador = identificador[len("models/"):]
+    if identificador.startswith("gemini-3."):
+        return types.ThinkingConfig(thinking_level="low")
+    return None
+
+
 def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mode: bool,
                      timeout: int = TIMEOUT_SEGUNDOS) -> str:
     """Faz UMA chamada ao provedor e devolve o texto bruto. Lança exceção se falhar."""
@@ -188,9 +198,13 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
         
         # Gemini 3.x: NÃO enviar temperature/top_p/top_k (parâmetros descontinuados,
         # a API rejeita ou ignora). Só o formato de saída é configurado.
-        config = types.GenerateContentConfig(
+        config_kwargs = dict(
             response_mime_type="application/json" if json_mode else None,
         )
+        thinking_config = _thinking_config_gemini(modelo)
+        if thinking_config:
+            config_kwargs["thinking_config"] = thinking_config
+        config = types.GenerateContentConfig(**config_kwargs)
         resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
         return resposta.text or ""
 
@@ -221,10 +235,12 @@ def _chamar_gemini_com_busca(modelo: str, api_key: str, prompt: str, timeout: in
     Obs.: com ferramentas ativas o "modo JSON" não é usado; o parser extrai o JSON.
     """
     cliente = _obter_cliente_gemini(api_key, timeout)
-    
-    config = types.GenerateContentConfig(  # sem temperature (ver nota em _chamar_provedor)
-        tools=[types.Tool(google_search=types.GoogleSearch())],
-    )
+
+    config_kwargs = {"tools": [types.Tool(google_search=types.GoogleSearch())]}
+    thinking_config = _thinking_config_gemini(modelo)
+    if thinking_config:
+        config_kwargs["thinking_config"] = thinking_config
+    config = types.GenerateContentConfig(**config_kwargs)  # sem temperature (ver nota em _chamar_provedor)
     resposta = cliente.models.generate_content(model=modelo, contents=prompt, config=config)
 
     fontes, vistas = [], set()
@@ -387,7 +403,9 @@ def _chamar_gemini_com_anexos(modelo: str, api_key: str, prompt: str, anexos: li
     """
     cliente = _obter_cliente_gemini(api_key, timeout)
     partes = [types.Part.from_bytes(data=dados, mime_type=mime) for dados, mime, _ in anexos]
-    resposta = cliente.models.generate_content(model=modelo, contents=partes + [prompt])
+    thinking_config = _thinking_config_gemini(modelo)
+    config = types.GenerateContentConfig(thinking_config=thinking_config) if thinking_config else None
+    resposta = cliente.models.generate_content(model=modelo, contents=partes + [prompt], config=config)
     return resposta.text or ""
 
 
