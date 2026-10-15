@@ -1,9 +1,12 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from database.database import engine, Base
 
-# IMPORTAÇÃO DE TODOS OS MODELOS VÁLIDOS PARA CRIAR AS TABELAS NO SUPABASE
+# IMPORTAÇÃO DE TODOS OS MODELOS (mantida para o mapeamento do ORM; as tabelas
+# são criadas manualmente no Supabase, pois o create_all está desativado)
 from models.usuario import Usuario
 from models.tutor import Tutor
 from models.animais import Animal
@@ -35,21 +38,66 @@ from routes import triagem
 from routes import financeiro
 from routes import configuracoes
 from routes import atendimento_ia
+from services import rag_service
+from services.rag_service import router as rag_router
 
+logger = logging.getLogger("vetassist.startup")
 
 app = FastAPI(
     title="VetAssist AI",
     version="0.1.0"
 )
 
-# 1. GARANTE A CRIAÇÃO DE TODAS AS TABELAS NO SUPABASE PRIMEIRO
-try:
-    Base.metadata.create_all(bind=engine)
-    print("✅ Todas as tabelas foram criadas/verificadas com sucesso no banco de dados!")
-except Exception as e:
-    print(f"⚠️ Erro ao criar tabelas: {e}")
 
-# 2. APLICA AJUSTES OPCIONAIS DE COLUNAS DE FORMA ISOLADA
+def _descrever_conexao(conn, rotulo: str) -> None:
+    """Mostra a qual banco esta conexão realmente chegou (sem expor a senha)."""
+    url = conn.engine.url
+    banco, usuario = conn.execute(
+        text("select current_database(), current_user")
+    ).one()
+    tabela_rag = conn.execute(
+        text("select to_regclass('public.documentos_veterinarios') is not null")
+    ).scalar()
+    print(
+        f"🔎 [{rotulo}] host={url.host} porta={url.port} banco={banco} "
+        f"usuario={usuario} | tabela documentos_veterinarios: "
+        f"{'OK' if tabela_rag else 'NÃO EXISTE'}"
+    )
+
+
+def verificar_conexoes() -> None:
+    """
+    Verificação REAL de conexão (a versão anterior imprimia sucesso sem conectar).
+    Compara o engine do main.py com o engine usado pelas rotas do RAG: se os dois
+    apontarem para bancos diferentes, o aviso aparece aqui, no arranque.
+    """
+    try:
+        with engine.connect() as conn:
+            _descrever_conexao(conn, "engine principal")
+        print("✅ Conexão com o banco estabelecida com sucesso!")
+    except Exception as e:
+        print(f"⚠️ Falha ao conectar no banco principal: {e}")
+        return
+
+    # Conexão exatamente como a rota /rag/ingerir a obtém (via get_db do rag_service)
+    obter_sessao = getattr(rag_service, "get_db", None)
+    if obter_sessao is None:
+        print("⚠️ rag_service não expõe get_db; verificação da sessão do RAG ignorada.")
+        return
+    gerador = obter_sessao()
+    try:
+        sessao = next(gerador)
+        with sessao.get_bind().connect() as conn:
+            _descrever_conexao(conn, "sessão do RAG")
+    except Exception as e:
+        print(f"⚠️ Falha ao verificar a sessão usada pelo RAG: {e}")
+    finally:
+        gerador.close()
+
+
+verificar_conexoes()
+
+# Ajustes opcionais de colunas, de forma isolada
 with engine.connect() as conn:
     try:
         conn.execute(text("ALTER TABLE consulta ALTER COLUMN frequencia_respiratoria DROP NOT NULL;"))
@@ -92,6 +140,8 @@ app.include_router(cirurgias.router)
 app.include_router(financeiro.router)
 app.include_router(configuracoes.router)
 app.include_router(atendimento_ia.router)
+app.include_router(rag_router)
+
 
 @app.get("/")
 def home():

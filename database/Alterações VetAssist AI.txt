@@ -26,6 +26,7 @@ Senha: Banco de dados na Nuvem
 postgresql://postgres:MatheusLinares98@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
 postgresql+psycopg2://postgres:MatheusLinares98@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres
 postgresql+psycopg2://postgres.ucndrmsekpgwijhrvkbz:MatheusLinares98@aws-0-sa-east-1.pooler.supabase.com:5432/postgres
+$env:DATABASE_URL = "postgresql+psycopg2://postgres:MatheusLinares98@db.ucndrmsekpgwijhrvkbz.supabase.co:5432/postgres"
 
 
 
