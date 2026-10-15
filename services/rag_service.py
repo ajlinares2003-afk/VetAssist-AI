@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 import pdfplumber
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from google.genai import types
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, Integer, String, Text, delete, select
@@ -63,7 +63,7 @@ RAG_TIMEOUT_CONSULTA = int(os.getenv("RAG_TIMEOUT_CONSULTA", "10"))
 
 def _ler_distancia_maxima() -> float | None:
     """Distância L2 máxima aceita (vetores normalizados: 0 = idêntico, 1,41 = sem relação).
-    Vazio = sem corte. Calibre com GET /rag/buscar, que mostra a distância de cada trecho."""
+    Vazio = sem corte. Calibre olhando as distâncias registradas em log por referencias_para_prompt."""
     bruto = os.getenv("RAG_DISTANCIA_MAXIMA", "").strip().replace(",", ".")
     try:
         return float(bruto) if bruto else None
@@ -626,25 +626,3 @@ def ingerir_literatura(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
     return {"titulo": r.titulo, "chunks_gravados": r.chunks_gravados, "chunks_total": r.chunks_total}
-
-
-# ROTA TEMPORÁRIA DE TESTE DA BUSCA (restrita a ADMIN) — remova depois de validar o RAG.
-@router.get("/buscar", dependencies=[Depends(exigir_admin)])
-def buscar_literatura(
-    pergunta: str = Query(..., min_length=3, max_length=2000),
-    db: Session = Depends(get_db),
-) -> dict[str, list[dict[str, object]]]:
-    """Devolve os trechos de literatura mais próximos da pergunta (para conferir a busca)."""
-    try:
-        vetor = gerar_embedding(pergunta, _obter_api_key_gemini(db), "RETRIEVAL_QUERY")
-        pares = buscar_referencias_com_distancia(db, vetor)
-    except RagError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-    # A distância serve para calibrar RAG_DISTANCIA_MAXIMA (menor = mais parecido).
-    return {
-        "resultados": [
-            {"titulo": t.titulo, "distancia": round(dist, 4), "trecho": t.conteudo[:300]}
-            for t, dist in pares
-        ]
-    }
