@@ -349,6 +349,151 @@ def fatiar_em_chunks(
     return chunks
 
 
+# --- Fatiamento por fármaco (bulários em formato de tabela) -----------------------
+_GRUPOS_BULARIO = re.compile(
+    r"\b(ANTI-INFLAMAT[ÓO]RIOS N[ÃA]O ESTEROIDAIS E ANALG[ÉE]SICOS"
+    r"|ANTI-INFLAMAT[ÓO]RIOS ESTEROIDAIS"
+    r"|OUTROS PRINC[ÍI]PIOS ATIVOS"
+    r"|ANTIMICROBIANOS|ANTIF[ÚU]NGICOS|ANTIPARASIT[ÁA]RIOS?|ANOTAÇ[ÕO]ES)\b"
+)
+_SENTINELA_GRUPO = re.compile(r"^§(\d+)§$")
+_CODIGO_ESPECIE = re.compile(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{3}:$")  # AVE:, FER:, ROE: ...
+_INICIO_DESCRICAO = re.compile(r"^[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-zà-ú]")
+_ABREV_DOSE = {"VO", "SID", "BID", "TID", "QID", "UI", "IM", "IV", "SC"}
+MIN_FARMACOS = 3
+
+
+def _eh_maiuscula(tok: str) -> bool:
+    """Palavra de nome de fármaco: tudo em maiúsculas, não é sigla de via/frequência."""
+    if tok == "+":
+        return True
+    nucleo = tok.strip("()+,.;")
+    if not nucleo or tok.endswith(":") or not any(c.isalpha() for c in nucleo):
+        return False
+    if nucleo != nucleo.upper():
+        return False
+    return not all(p in _ABREV_DOSE for p in nucleo.split("/"))
+
+
+def _comeca_descricao(tok: str) -> bool:
+    return bool(_INICIO_DESCRICAO.match(tok) or _CODIGO_ESPECIE.match(tok) or tok == "(continuação)")
+
+
+def _montar_chunks_farmaco(nome: str, grupo: str | None, linhas: list[str], max_chars: int) -> list[str]:
+    """Junta as linhas (descrição + uma por espécie) em chunks que SEMPRE começam pelo nome."""
+    def cabecalho(parte: int) -> str:
+        titulo = nome if parte == 0 else f"{nome} (continuação)"
+        return f"{titulo}\nGrupo: {grupo}" if grupo else titulo
+
+    # linhas maiores que o limite (raro) são quebradas por palavras
+    linhas_ok: list[str] = []
+    folga = max_chars - len(cabecalho(1)) - 1
+    for linha in linhas:
+        linhas_ok.extend(_quebrar_texto_longo(linha, folga) if len(linha) > folga else [linha])
+
+    chunks: list[str] = []
+    atual: list[str] = []
+    for linha in linhas_ok:
+        candidato = "\n".join([cabecalho(len(chunks)), *atual, linha])
+        if atual and len(candidato) > max_chars:
+            chunks.append("\n".join([cabecalho(len(chunks)), *atual]))
+            atual = []
+        atual.append(linha)
+    if atual or not chunks:
+        chunks.append("\n".join([cabecalho(len(chunks)), *atual]))
+    return chunks
+
+
+def fatiar_por_farmaco(texto: str, max_chars: int = CHUNK_MAX_CHARS) -> list[str]:
+    """Um (ou mais, se longo) chunk por fármaco, sempre iniciado pelo nome do medicamento.
+
+    Pensado para bulários em tabela: NOME EM MAIÚSCULAS + classe + linhas 'AVE: ...', 'FER: ...'.
+    Cabeçalhos de grupo repetidos a cada página (ANTIMICROBIANOS...) são removidos e viram o
+    campo 'Grupo'; entradas '(continuação)' são fundidas na entrada original.
+    """
+    texto = re.sub(r"\s+:", ":", texto)
+
+    grupos: list[str] = []
+
+    def _sentinela(m: re.Match[str]) -> str:
+        grupos.append(m.group(1))
+        return f" §{len(grupos) - 1}§ "
+
+    texto = _GRUPOS_BULARIO.sub(_sentinela, texto)
+    if not grupos:
+        raise IngestaoError("Cabeçalhos de grupo do bulário não encontrados; use a estratégia 'frases'.")
+    # tudo antes do primeiro cabeçalho é capa/legenda
+    texto = texto[texto.index("§0§") :]
+
+    tokens = texto.split()
+    n = len(tokens)
+
+    def proximo_real(j: int) -> int:
+        while j < n and _SENTINELA_GRUPO.match(tokens[j]):
+            j += 1
+        return j
+
+    # 1) localizar os inícios de entrada: (posição do 1º token, nome, posição após o nome, grupo)
+    inicios: list[tuple[int, str, int, str | None]] = []
+    grupo_atual: str | None = None
+    i = 0
+    while i < n:
+        m = _SENTINELA_GRUPO.match(tokens[i])
+        if m:
+            grupo_atual = grupos[int(m.group(1))]
+            i += 1
+            continue
+        if _eh_maiuscula(tokens[i]) and tokens[i] != "+":
+            j = i
+            while j < n and _eh_maiuscula(tokens[j]):
+                j += 1
+            fim = j
+            while fim > i and tokens[fim - 1] == "+":
+                fim -= 1
+            seguinte = proximo_real(j)
+            if fim > i and seguinte < n and _comeca_descricao(tokens[seguinte]):
+                inicios.append((i, " ".join(tokens[i:fim]).strip("()"), fim, grupo_atual))
+            i = j
+        else:
+            i += 1
+
+    # 2) montar as entradas, fundindo as '(continuação)'
+    entradas: list[dict] = []
+    for k, (pos, nome, apos_nome, grupo) in enumerate(inicios):
+        limite = inicios[k + 1][0] if k + 1 < len(inicios) else n
+        corpo = [t for t in tokens[apos_nome:limite] if not _SENTINELA_GRUPO.match(t)]
+        continuacao = bool(corpo) and corpo[0] == "(continuação)"
+        if continuacao and entradas and entradas[-1]["nome"] == nome:
+            corpo = corpo[1:]
+            # remove a descrição repetida no topo da continuação, se idêntica à original
+            cod = next((x for x, t in enumerate(corpo) if _CODIGO_ESPECIE.match(t)), len(corpo))
+            repetida = " ".join(corpo[:cod])
+            if repetida and entradas[-1]["corpo"].startswith(repetida):
+                corpo = corpo[cod:]
+            entradas[-1]["corpo"] += " " + " ".join(corpo)
+        else:
+            if continuacao:
+                corpo = corpo[1:]
+            entradas.append({"nome": nome, "grupo": grupo, "corpo": " ".join(corpo)})
+
+    if len(entradas) < MIN_FARMACOS:
+        raise IngestaoError(
+            f"Só {len(entradas)} fármaco(s) reconhecido(s); o PDF não parece um bulário. "
+            "Use a estratégia 'frases'."
+        )
+
+    # 3) cada entrada -> linhas (descrição + uma linha por espécie) -> chunks
+    chunks: list[str] = []
+    for e in entradas:
+        partes = re.split(r"\s(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{3}:)", e["corpo"].strip())
+        linhas = [p.strip() for p in partes if p.strip()]
+        chunks.extend(_montar_chunks_farmaco(e["nome"], e["grupo"], linhas, max_chars))
+    return chunks
+
+
+ESTRATEGIAS_FATIAMENTO = ("frases", "farmaco")
+
+
 @dataclass(frozen=True)
 class ResultadoIngestao:
     titulo: str
@@ -369,9 +514,18 @@ def _limpar_ingestao_parcial(db: Session, titulo: str) -> bool:
 
 
 def ingerir_pdf(
-    db: Session, arquivo: str | BinaryIO, titulo: str, api_key: str
+    db: Session,
+    arquivo: str | BinaryIO,
+    titulo: str,
+    api_key: str,
+    estrategia: str = "frases",
 ) -> ResultadoIngestao:
-    """Lê o PDF, fatia, vetoriza e grava por lotes. Se falhar, desfaz o que foi gravado."""
+    """Lê o PDF, fatia, vetoriza e grava por lotes. Se falhar, desfaz o que foi gravado.
+
+    estrategia: 'frases' (livros/textos corridos) ou 'farmaco' (bulário: um trecho por medicamento).
+    """
+    if estrategia not in ESTRATEGIAS_FATIAMENTO:
+        raise IngestaoError(f"Estratégia inválida. Use uma de: {', '.join(ESTRATEGIAS_FATIAMENTO)}.")
     titulo = (titulo or "").strip()
     if not titulo:
         raise IngestaoError("Título obrigatório.")
@@ -389,7 +543,8 @@ def ingerir_pdf(
     if ja_existe:
         raise IngestaoError(f"Já existe literatura ingerida com o título '{titulo}'.")
 
-    chunks = fatiar_em_chunks(extrair_texto_pdf(arquivo))
+    texto = extrair_texto_pdf(arquivo)
+    chunks = fatiar_por_farmaco(texto) if estrategia == "farmaco" else fatiar_em_chunks(texto)
     if not chunks:
         raise IngestaoError("Nenhum trecho gerado a partir do PDF.")
 
@@ -451,6 +606,7 @@ exigir_admin = exigir_perfil(["ADMIN"])
 def ingerir_literatura(
     titulo: str = Form(...),
     arquivo: UploadFile = File(...),
+    estrategia: str = Form("frases", description="'frases' (livros) ou 'farmaco' (bulário)"),
     db: Session = Depends(get_db),
 ) -> dict[str, int | str]:
     if arquivo.content_type != "application/pdf":
@@ -462,7 +618,7 @@ def ingerir_literatura(
     arquivo.file.seek(0)
 
     try:
-        r = ingerir_pdf(db, arquivo.file, titulo, _obter_api_key_gemini(db))
+        r = ingerir_pdf(db, arquivo.file, titulo, _obter_api_key_gemini(db), estrategia)
     except IngestaoError as exc:
         # 422 literal: o nome antigo da constante foi depreciado no Starlette
         raise HTTPException(422, str(exc)) from exc
