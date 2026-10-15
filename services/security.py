@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, UTC
 from datetime import timedelta
 from jose import jwt
@@ -6,7 +7,12 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi.security import OAuth2PasswordBearer
 
-SECRET_KEY = "vetassist-secret-key"
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    raise RuntimeError(
+        "Variável de ambiente SECRET_KEY não definida. "
+        "Gere uma com: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 480
 
