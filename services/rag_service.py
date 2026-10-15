@@ -57,6 +57,22 @@ EMBED_BATCH_COMMIT = 20          # commit a cada N chunks
 MAX_PDF_BYTES = 50 * 1024 * 1024
 MAX_TITULO_CHARS = 255
 
+# Uso dentro de outras rotas (ex.: Copiloto Clínico): a busca não pode atrasar nem derrubar a rota.
+RAG_TIMEOUT_CONSULTA = int(os.getenv("RAG_TIMEOUT_CONSULTA", "10"))
+
+
+def _ler_distancia_maxima() -> float | None:
+    """Distância L2 máxima aceita (vetores normalizados: 0 = idêntico, 1,41 = sem relação).
+    Vazio = sem corte. Calibre com GET /rag/buscar, que mostra a distância de cada trecho."""
+    bruto = os.getenv("RAG_DISTANCIA_MAXIMA", "").strip().replace(",", ".")
+    try:
+        return float(bruto) if bruto else None
+    except ValueError:
+        return None
+
+
+RAG_DISTANCIA_MAXIMA = _ler_distancia_maxima()
+
 _MARCAS_TRANSITORIAS = ("429", "resource_exhausted", "503", "unavailable", "timed out", "timeout")
 
 
@@ -88,9 +104,12 @@ def gerar_embedding(
     texto: str,
     api_key: str,
     tipo_tarefa: str = "RETRIEVAL_DOCUMENT",
+    tentativas: int = EMBEDDING_TENTATIVAS,
+    timeout: int = EMBEDDING_TIMEOUT,
 ) -> list[float]:
     """
     Gera o embedding (768 dims, normalizado) de `texto` reutilizando o cliente Gemini em cache.
+    `tentativas` e `timeout` podem ser reduzidos por rotas interativas (ver referencias_para_prompt).
 
     A normalização é necessária porque, com output_dimensionality menor que o
     tamanho nativo do modelo, o vetor não vem normalizado e a distância L2
@@ -102,10 +121,11 @@ def gerar_embedding(
     if not api_key:
         raise EmbeddingError("Chave de API do Gemini ausente.")
 
+    tentativas = max(1, tentativas)
     resposta = None
-    for tentativa in range(1, EMBEDDING_TENTATIVAS + 1):
+    for tentativa in range(1, tentativas + 1):
         try:
-            cliente = _obter_cliente_gemini(api_key, EMBEDDING_TIMEOUT)
+            cliente = _obter_cliente_gemini(api_key, timeout)
             resposta = cliente.models.embed_content(
                 model=EMBEDDING_MODEL,
                 contents=texto,
@@ -117,11 +137,11 @@ def gerar_embedding(
             break
         except Exception as exc:
             transitorio = any(m in str(exc).lower() for m in _MARCAS_TRANSITORIAS)
-            if transitorio and tentativa < EMBEDDING_TENTATIVAS:
+            if transitorio and tentativa < tentativas:
                 espera = 2 ** tentativa
                 logger.warning(
                     "Erro transitório no embedding (tentativa %d/%d); nova tentativa em %ds: %s",
-                    tentativa, EMBEDDING_TENTATIVAS, espera, exc,
+                    tentativa, tentativas, espera, exc,
                 )
                 time.sleep(espera)
                 continue
@@ -162,20 +182,44 @@ condutas como apoio à decisão clínica.
 """
 
 
+def buscar_referencias_com_distancia(
+    db: Session, embedding_consulta: list[float], limite: int = TOP_K
+) -> list[tuple[DocumentoVeterinario, float]]:
+    """Busca os `limite` trechos mais próximos pela distância L2 e devolve (trecho, distância)."""
+    try:
+        distancia = DocumentoVeterinario.embedding.l2_distance(embedding_consulta)
+        stmt = (
+            select(DocumentoVeterinario, distancia.label("distancia"))
+            .order_by(distancia)
+            .limit(limite)
+        )
+        return [(doc, float(dist)) for doc, dist in db.execute(stmt).all()]
+    except SQLAlchemyError as exc:
+        logger.exception("Falha na busca vetorial")
+        raise RagError("Falha ao consultar a base de literatura.") from exc
+
+
 def buscar_referencias(
     db: Session, embedding_consulta: list[float], limite: int = TOP_K
 ) -> list[DocumentoVeterinario]:
     """Busca os `limite` trechos mais próximos pela distância L2."""
-    try:
-        stmt = (
-            select(DocumentoVeterinario)
-            .order_by(DocumentoVeterinario.embedding.l2_distance(embedding_consulta))
-            .limit(limite)
-        )
-        return list(db.scalars(stmt).all())
-    except SQLAlchemyError as exc:
-        logger.exception("Falha na busca vetorial")
-        raise RagError("Falha ao consultar a base de literatura.") from exc
+    return [doc for doc, _ in buscar_referencias_com_distancia(db, embedding_consulta, limite)]
+
+
+def _filtrar_por_distancia(
+    pares: list[tuple[DocumentoVeterinario, float]],
+) -> list[tuple[DocumentoVeterinario, float]]:
+    """Descarta trechos distantes demais (só se RAG_DISTANCIA_MAXIMA estiver definida)."""
+    if RAG_DISTANCIA_MAXIMA is None:
+        return pares
+    return [(doc, dist) for doc, dist in pares if dist <= RAG_DISTANCIA_MAXIMA]
+
+
+def _formatar_referencias(trechos: list[DocumentoVeterinario]) -> str:
+    """Numera os trechos e informa a obra de origem de cada um."""
+    return "\n\n".join(
+        f"[{i}] ({t.titulo})\n{t.conteudo}" for i, t in enumerate(trechos, start=1)
+    )
 
 
 def construir_prompt_com_rag(db: Session, api_key: str, pergunta_clinica: str) -> str:
@@ -185,14 +229,11 @@ def construir_prompt_com_rag(db: Session, api_key: str, pergunta_clinica: str) -
         raise RagError("A pergunta clínica não pode ser vazia.")
 
     vetor = gerar_embedding(pergunta_clinica, api_key, tipo_tarefa="RETRIEVAL_QUERY")
-    trechos = buscar_referencias(db, vetor)
-
-    if trechos:
-        referencias = "\n\n".join(
-            f"[{i}] ({t.titulo})\n{t.conteudo}" for i, t in enumerate(trechos, start=1)
-        )
-    else:
-        referencias = "(Nenhuma referência encontrada na base de literatura.)"
+    pares = _filtrar_por_distancia(buscar_referencias_com_distancia(db, vetor))
+    referencias = (
+        _formatar_referencias([doc for doc, _ in pares])
+        or "(Nenhuma referência encontrada na base de literatura.)"
+    )
 
     return (
         f"{REGRAS_SISTEMA}\n"
@@ -200,6 +241,38 @@ def construir_prompt_com_rag(db: Session, api_key: str, pergunta_clinica: str) -
         f"=== CASO CLÍNICO ===\n{pergunta_clinica}\n\n"
         f"=== PARECER CLÍNICO (texto livre; cite as referências como [n] quando usadas) ==="
     )
+
+
+def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TOP_K) -> str:
+    """
+    Referências já formatadas para acrescentar ao prompt de OUTRAS rotas (ex.: Copiloto Clínico).
+
+    À prova de falhas: nunca levanta exceção e devolve "" se a base estiver vazia, a chave do
+    Gemini faltar, a API demorar ou o banco falhar; quem chama segue sem referências.
+    Usa 1 tentativa e timeout curto para não atrasar a rota principal.
+    """
+    texto = (consulta_clinica or "").strip()[:2000]
+    if not texto:
+        return ""
+    try:
+        vetor = gerar_embedding(
+            texto, _obter_api_key_gemini(db), "RETRIEVAL_QUERY",
+            tentativas=1, timeout=RAG_TIMEOUT_CONSULTA,
+        )
+        pares = _filtrar_por_distancia(buscar_referencias_com_distancia(db, vetor, limite))
+    except Exception as exc:  # noqa: BLE001 — uma falha do RAG não pode derrubar a rota que o usa
+        logger.warning("RAG indisponível; seguindo sem referências: %s", exc)
+        try:
+            db.rollback()  # uma falha SQL deixa a sessão inutilizável para o resto da rota
+        except Exception:  # noqa: BLE001
+            logger.exception("Falha ao desfazer a transação após erro do RAG")
+        return ""
+
+    logger.info(
+        "RAG: %d referência(s) recuperada(s) (distâncias: %s)",
+        len(pares), ", ".join(f"{dist:.3f}" for _, dist in pares) or "-",
+    )
+    return _formatar_referencias([doc for doc, _ in pares])
 
 
 # 4. Ingestão ------------------------------------------------------------------
@@ -404,16 +477,18 @@ def ingerir_literatura(
 def buscar_literatura(
     pergunta: str = Query(..., min_length=3, max_length=2000),
     db: Session = Depends(get_db),
-) -> dict[str, list[dict[str, str]]]:
+) -> dict[str, list[dict[str, object]]]:
     """Devolve os trechos de literatura mais próximos da pergunta (para conferir a busca)."""
     try:
         vetor = gerar_embedding(pergunta, _obter_api_key_gemini(db), "RETRIEVAL_QUERY")
-        trechos = buscar_referencias(db, vetor)
+        pares = buscar_referencias_com_distancia(db, vetor)
     except RagError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
+    # A distância serve para calibrar RAG_DISTANCIA_MAXIMA (menor = mais parecido).
     return {
         "resultados": [
-            {"titulo": t.titulo, "trecho": t.conteudo[:300]} for t in trechos
+            {"titulo": t.titulo, "distancia": round(dist, 4), "trecho": t.conteudo[:300]}
+            for t, dist in pares
         ]
     }
