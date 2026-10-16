@@ -326,10 +326,18 @@ def sugestoes_copiloto_multimodal(
                 regra_anexos = (
                     "11.1 ANEXOS: analise o que é VISÍVEL em cada arquivo como SEGUNDA LEITURA de apoio, nunca como laudo. "
                     "Identifique a região anatômica e o tipo de exame SOMENTE pelo conteúdo da imagem, jamais pelo NOME do "
-                    "arquivo (o nome pode ser o do paciente). Se a qualidade, o posicionamento ou o recorte não permitirem "
+                    "arquivo (o nome pode ser o do paciente). "
+                    "LINGUAGEM DE INCERTEZA: descreva os achados com 'compatível com', 'sugere' ou 'sugestivo de'; "
+                    "NUNCA use 'típico de', 'diagnóstico de' ou 'confirma'. Só afirme a espécie, a região anatômica ou "
+                    "uma estrutura (ex.: osso pneumático, fratura, massa) quando for inequívoco; se houver mais de uma "
+                    "interpretação possível, cite as alternativas. Se a imagem parecer de outra espécie ou de outra "
+                    "região que não a do paciente, escreva que ela 'não parece corresponder ao paciente' e NÃO a "
+                    "correlacione com o quadro clínico. "
+                    "Se a qualidade, o posicionamento ou o recorte não permitirem "
                     "concluir, escreva 'não é possível concluir'. Não invente achados. Em SUGESTOES inclua um parágrafo "
                     "iniciado por 'Achados nos anexos (segunda leitura, não substitui laudo):' e aponte se a imagem concorda "
-                    "ou diverge do quadro clínico informado.\n")
+                    "ou diverge do quadro clínico informado. Encerre esse parágrafo recomendando a confirmação dos achados "
+                    "pelo médico veterinário ou radiologista.\n")
             else:
                 # Sem o conteúdo, o NOME do arquivo também é omitido: modelos de texto deduzem o exame
                 # pelo nome ("Raio X Thor.jpg" virou "radiografia torácica").
