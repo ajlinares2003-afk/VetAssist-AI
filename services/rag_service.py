@@ -20,21 +20,22 @@ import logging
 import math
 import os
 import re
+import threading
 import unicodedata
 import time
 from dataclasses import dataclass
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 
 import pdfplumber
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from google.genai import types
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, Integer, String, Text, delete, select
+from sqlalchemy import Column, Integer, String, Text, delete, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 # --- Ajustado para a estrutura do seu projeto ---------------------------------
-from database.database import Base, get_db           # Base declarativa e sessão
+from database.database import Base, SessionLocal, get_db           # Base declarativa e sessão
 from services.ia_service import (
     _obter_cliente_gemini,
     _ler_configuracoes,
@@ -533,17 +534,20 @@ def _limpar_ingestao_parcial(db: Session, titulo: str) -> bool:
         return False
 
 
-def ingerir_pdf(
-    db: Session,
-    arquivo: str | BinaryIO,
-    titulo: str,
-    api_key: str,
-    estrategia: str = "frases",
-) -> ResultadoIngestao:
-    """Lê o PDF, fatia, vetoriza e grava por lotes. Se falhar, desfaz o que foi gravado.
+# Andamento das ingestões em segundo plano (em memória; vale para 1 processo/worker).
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
 
-    estrategia: 'frases' (livros/textos corridos) ou 'farmaco' (bulário: um trecho por medicamento).
-    """
+
+def _job_ativo(titulo: str) -> bool:
+    job = _JOBS.get(titulo)
+    return bool(job and job["estado"] == "processando")
+
+
+def preparar_ingestao(
+    db: Session, arquivo: str | BinaryIO, titulo: str, estrategia: str = "frases"
+) -> tuple[str, list[str]]:
+    """Valida, confere duplicidade, extrai o texto e fatia. Devolve (título limpo, trechos)."""
     estrategia = _normalizar_estrategia(estrategia)
     if estrategia not in ESTRATEGIAS_FATIAMENTO:
         raise IngestaoError(f"Estratégia inválida. Use uma de: {', '.join(ESTRATEGIAS_FATIAMENTO)}.")
@@ -561,14 +565,24 @@ def ingerir_pdf(
         db.rollback()
         logger.exception("Falha ao verificar duplicidade de '%s'", titulo)
         raise IngestaoError(f"Falha ao consultar a base de literatura: {exc}") from exc
-    if ja_existe:
+    if ja_existe or titulo in _JOBS:
         raise IngestaoError(f"Já existe literatura ingerida com o título '{titulo}'.")
 
     texto = extrair_texto_pdf(arquivo)
     chunks = fatiar_por_farmaco(texto) if estrategia == "farmaco" else fatiar_em_chunks(texto)
     if not chunks:
         raise IngestaoError("Nenhum trecho gerado a partir do PDF.")
+    return titulo, chunks
 
+
+def gravar_trechos(
+    db: Session,
+    titulo: str,
+    chunks: list[str],
+    api_key: str,
+    ao_progredir: Callable[[int], None] | None = None,
+) -> int:
+    """Vetoriza e grava por lotes, respeitando a cota. Se falhar, desfaz o que foi gravado."""
     gravados = 0
     intervalo = 60.0 / max(1, EMBED_REQ_POR_MINUTO)  # espaça as chamadas para respeitar a cota
     proxima_chamada = time.monotonic()
@@ -590,6 +604,8 @@ def ingerir_pdf(
             if i % EMBED_BATCH_COMMIT == 0:
                 db.commit()
                 gravados = i
+            if ao_progredir:
+                ao_progredir(i)
         db.commit()
         gravados = len(chunks)
     except (EmbeddingError, SQLAlchemyError) as exc:
@@ -602,8 +618,44 @@ def ingerir_pdf(
             else "Pode haver trechos parciais no banco; remova-os antes de tentar de novo."
         )
         raise IngestaoError(f"Ingestão interrompida: {exc} {situacao}") from exc
+    return gravados
 
+
+def ingerir_pdf(
+    db: Session,
+    arquivo: str | BinaryIO,
+    titulo: str,
+    api_key: str,
+    estrategia: str = "frases",
+) -> ResultadoIngestao:
+    """Lê o PDF, fatia, vetoriza e grava (modo síncrono).
+
+    estrategia: 'frases' (livros/textos corridos) ou 'farmaco' (bulário: um trecho por medicamento).
+    """
+    titulo, chunks = preparar_ingestao(db, arquivo, titulo, estrategia)
+    gravados = gravar_trechos(db, titulo, chunks, api_key)
     return ResultadoIngestao(titulo, gravados, len(chunks))
+
+
+def _processar_em_segundo_plano(titulo: str, chunks: list[str], api_key: str) -> None:
+    """Executa a gravação fora da requisição, com sessão própria, atualizando o andamento."""
+    def progresso(n: int) -> None:
+        with _JOBS_LOCK:
+            if titulo in _JOBS:
+                _JOBS[titulo]["feitos"] = n
+
+    db = SessionLocal()
+    try:
+        gravar_trechos(db, titulo, chunks, api_key, progresso)
+        with _JOBS_LOCK:
+            _JOBS.pop(titulo, None)  # concluída: a base passa a mostrá-la como pronta
+    except Exception as exc:  # noqa: BLE001 — nada pode escapar da thread sem registro
+        logger.exception("Ingestão em segundo plano falhou: '%s'", titulo)
+        with _JOBS_LOCK:
+            if titulo in _JOBS:
+                _JOBS[titulo].update(estado="erro", mensagem=str(exc))
+    finally:
+        db.close()
 
 
 # Rota FastAPI -------------------------------------------------------------------
@@ -655,3 +707,109 @@ def ingerir_literatura(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
     return {"titulo": r.titulo, "chunks_gravados": r.chunks_gravados, "chunks_total": r.chunks_total}
+
+
+# Gestão de publicações (tela do Administrador) ---------------------------------------
+def _validar_pdf(arquivo: UploadFile) -> None:
+    if arquivo.content_type != "application/pdf":
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Envie um arquivo PDF.")
+    arquivo.file.seek(0, os.SEEK_END)
+    if arquivo.file.tell() > MAX_PDF_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF acima de 50 MB.")
+    arquivo.file.seek(0)
+
+
+@router.get("/publicacoes", dependencies=[Depends(exigir_admin)])
+def listar_publicacoes(db: Session = Depends(get_db)) -> dict[str, list[dict[str, object]]]:
+    """Todas as publicações da base, com contagem de trechos e andamento das que estão sendo gravadas."""
+    try:
+        linhas = db.execute(
+            select(
+                DocumentoVeterinario.titulo,
+                func.count(DocumentoVeterinario.id),
+                func.coalesce(func.sum(func.length(DocumentoVeterinario.conteudo)), 0),
+                func.min(DocumentoVeterinario.id),
+            )
+            .group_by(DocumentoVeterinario.titulo)
+            .order_by(func.min(DocumentoVeterinario.id))
+        ).all()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Falha ao listar publicações")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Falha ao consultar a base.") from exc
+
+    with _JOBS_LOCK:
+        jobs = {t: dict(j) for t, j in _JOBS.items()}
+
+    itens: list[dict[str, object]] = []
+    for titulo, trechos, caracteres, _ in linhas:
+        job = jobs.pop(titulo, None)
+        item: dict[str, object] = {
+            "titulo": titulo, "trechos": int(trechos), "caracteres": int(caracteres),
+            "estado": "pronta", "feitos": None, "total": None, "mensagem": None,
+        }
+        if job:
+            item.update(estado=job["estado"], feitos=job["feitos"], total=job["total"], mensagem=job.get("mensagem"))
+        itens.append(item)
+    for titulo, job in jobs.items():  # em andamento/erro, ainda sem trechos gravados
+        itens.append({
+            "titulo": titulo, "trechos": 0, "caracteres": 0, "estado": job["estado"],
+            "feitos": job["feitos"], "total": job["total"], "mensagem": job.get("mensagem"),
+        })
+    return {"publicacoes": itens}
+
+
+@router.post(
+    "/publicacoes",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(exigir_admin)],
+)
+def incluir_publicacao(
+    background: BackgroundTasks,
+    titulo: str = Form(...),
+    arquivo: UploadFile = File(...),
+    estrategia: str = Form("frases", description="'frases' (livros) ou 'farmaco' (bulário)"),
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    """Valida e fatia o PDF na hora; a vetorização roda em segundo plano (acompanhe em GET /rag/publicacoes)."""
+    _validar_pdf(arquivo)
+    try:
+        api_key = _obter_api_key_gemini(db)
+        titulo_limpo, chunks = preparar_ingestao(db, arquivo.file, titulo, estrategia)
+    except IngestaoError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except RagError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    with _JOBS_LOCK:
+        if titulo_limpo in _JOBS:  # duas requisições simultâneas com o mesmo título
+            raise HTTPException(422, f"Já existe literatura ingerida com o título '{titulo_limpo}'.")
+        _JOBS[titulo_limpo] = {
+            "estado": "processando", "feitos": 0, "total": len(chunks), "mensagem": None,
+        }
+    background.add_task(_processar_em_segundo_plano, titulo_limpo, chunks, api_key)
+    return {"titulo": titulo_limpo, "trechos_total": len(chunks), "estado": "processando"}
+
+
+@router.delete("/publicacoes", dependencies=[Depends(exigir_admin)])
+def excluir_publicacao(
+    titulo: str = Query(..., min_length=1, max_length=MAX_TITULO_CHARS),
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    """Exclui todos os trechos de uma publicação (ou dispensa um erro de ingestão)."""
+    with _JOBS_LOCK:
+        if _job_ativo(titulo):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Publicação ainda em processamento; aguarde terminar.")
+        tinha_job = _JOBS.pop(titulo, None) is not None
+    try:
+        removidos = db.execute(
+            delete(DocumentoVeterinario).where(DocumentoVeterinario.titulo == titulo)
+        ).rowcount or 0
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Falha ao excluir '%s'", titulo)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Falha ao excluir a publicação.") from exc
+    if not removidos and not tinha_job:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Publicação não encontrada.")
+    return {"titulo": titulo, "trechos_removidos": int(removidos)}
