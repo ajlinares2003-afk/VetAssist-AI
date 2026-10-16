@@ -3,6 +3,7 @@ import unicodedata
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from database.database import get_db
 from models.consulta import Consulta
@@ -16,7 +17,7 @@ from services.faixa_etaria import (
 from services.nome_cientifico import buscar_nome_cientifico
 from services.referencia_auto import metadados_da_linha, pesquisar_e_registrar, promover_rascunho_por_id
 from services.ia_service import IAIndisponivelError, gerar_json
-from services.security import obter_usuario_logado
+from services.security import exigir_perfil, obter_usuario_logado
 
 logger = logging.getLogger("vetassist.triagem")
 
@@ -351,6 +352,12 @@ def _montar_referencias(db: Session, dados: ReferenciasIARequest, pesquisar: boo
         "validada": not pendente and not info["fallback_adulto"],
         "rascunho": rascunho,
         "indisponivel": False,
+        # usados pela tela de Atendimento para a validação veterinária da referência
+        "referencia_id": bib.id,
+        "status_ref": status_ref,
+        "perfil_ref": bib.especie,
+        "sexo_ref": getattr(bib, "sexo", None),
+        "faixa_ref": getattr(bib, "faixa_etaria", None),
     }
 
 
@@ -377,6 +384,73 @@ def referencias_salvas(
     if not db.query(Animal).filter(Animal.id == animal_id).first():
         raise HTTPException(status_code=404, detail="Paciente (Animal) não encontrado.")
     return _montar_referencias(db, ReferenciasIARequest(animal_id=animal_id), pesquisar=False)
+
+# --------------------------------------------------------------------------- #
+# Validação veterinária das referências da biblioteca
+# --------------------------------------------------------------------------- #
+PERFIS_VALIDADORES = ["ADMIN", "VETERINARIO"]
+
+
+def _alterar_status_referencia(db: Session, ref_id: int, de: str, para: str, usuario) -> None:
+    """
+    Troca o status de UMA linha da biblioteca, só se ela estiver em `de`.
+    Validar exige `status = 'PENDENTE'`: RASCUNHO (pesquisa por IA ainda não promovida pela
+    triagem) e linhas já VALIDADAS não são alteradas por aqui.
+    Requer as colunas `validado_por` e `validado_em` (migração em migracao_validacao_referencia.sql).
+    """
+    validar = para == "VALIDADO"
+    sql = (
+        "UPDATE biblioteca_parametros_oficiais "
+        "SET status = :para, validado_por = :uid, validado_em = CURRENT_TIMESTAMP "
+        "WHERE id = :id AND status = :de"
+        if validar else
+        "UPDATE biblioteca_parametros_oficiais "
+        "SET status = :para, validado_por = NULL, validado_em = NULL "
+        "WHERE id = :id AND status = :de"
+    )
+    params = {"id": ref_id, "de": de, "para": para}
+    if validar:
+        params["uid"] = getattr(usuario, "id", None)
+    try:
+        resultado = db.execute(text(sql), params)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao alterar o status da referência %s (%s -> %s)", ref_id, de, para)
+        raise HTTPException(
+            status_code=500,
+            detail="Não foi possível gravar. Confirme que a migração das colunas "
+                   "validado_por e validado_em foi executada.",
+        )
+    if resultado.rowcount == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Referência não encontrada ou não está com status {de}.",
+        )
+    logger.info("Referência %s: %s -> %s por usuário %s", ref_id, de, para, getattr(usuario, "id", None))
+
+
+@router.post("/referencias/{ref_id}/validar")
+def validar_referencia(
+    ref_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado=Depends(exigir_perfil(PERFIS_VALIDADORES)),
+):
+    """Veterinário confirma uma referência PENDENTE (vale para todos os pacientes do perfil)."""
+    _alterar_status_referencia(db, ref_id, "PENDENTE", "VALIDADO", usuario_logado)
+    return {"id": ref_id, "status": "VALIDADO"}
+
+
+@router.post("/referencias/{ref_id}/desfazer-validacao")
+def desfazer_validacao_referencia(
+    ref_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado=Depends(exigir_perfil(PERFIS_VALIDADORES)),
+):
+    """Volta uma referência VALIDADA para PENDENTE (o desfazer fica registrado no log)."""
+    _alterar_status_referencia(db, ref_id, "VALIDADO", "PENDENTE", usuario_logado)
+    return {"id": ref_id, "status": "PENDENTE"}
+
 
 # --------------------------------------------------------------------------- #
 # Classificação Manchester
