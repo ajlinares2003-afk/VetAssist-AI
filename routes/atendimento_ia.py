@@ -73,6 +73,31 @@ POSSIVELMENTE_CONTROLADOS = (
     "amitriptilina", "clomipramina", "fluoxetina", "sertralina", "paroxetina", "carbamazepina",
 )
 
+# Guarda-corpo determinístico: o que o prompt proíbe, o código também impõe.
+AINES = (
+    "meloxicam", "carprofeno", "firocoxibe", "cetoprofeno", "flunixina", "flunixin", "piroxicam",
+    "tenoxicam", "diclofenaco", "nimesulida", "robenacoxibe", "etodolaco", "ketoprofeno",
+)
+CORTICOIDES = (
+    "prednisolona", "prednisona", "dexametasona", "betametasona", "metilprednisolona",
+    "triancinolona", "hidrocortisona", "deflazacorte",
+)
+# Penicilinas, lincosamidas e cefalosporinas: enterotoxemia por via ORAL em lagomorfos e roedores.
+ANTIBIOTICOS_RISCO_ORAL_ROEDORES = (
+    "amoxicilina", "ampicilina", "penicilina", "clavulan", "clindamicina", "lincomicina",
+    "cefalexina", "cefadroxila", "cefovecina", "cefpodoxima", "ceftiofur", "cefalosporina",
+)
+RADICAIS_LAGOMORFO_ROEDOR = (
+    "coelh", "lagomorf", "oryctolagus", "porquinh", "cobaia", "cavia", "chinchila",
+    "hamster", "gerbil", "jerbo", "roedor", "rato", "camundong", "esquilo",
+)
+# Contexto em que AINE é proibido (intoxicação aguda, desidratação grave, falência renal/hepática).
+MARCADORES_CONTRAINDICACAO_AINE = (
+    "intoxicacao", "envenenamento", "desidratacao grave", "desidratacao severa",
+    "insuficiencia renal", "falencia renal", "doenca renal", "insuficiencia hepatica",
+    "falencia hepatica", "hepatopatia",
+)
+
 LISTAS_CONTROLE = {"A1", "A2", "A3", "B1", "B2", "C1", "C2", "C3", "C4", "C5"}
 
 # Marcadores usados para guardar recomendações e quantidade dentro de item_prescricao.observacoes,
@@ -327,6 +352,11 @@ def _calcular_dosagem(dose_mg_kg, peso, conc_valor, conc_unidade, alertas, nome)
     return texto + ")"
 
 
+def _roedor_ou_lagomorfo(*descricoes) -> bool:
+    palavras = _norm(" ".join(str(d) for d in descricoes if d)).split()
+    return any(p.startswith(RADICAIS_LAGOMORFO_ROEDOR) for p in palavras)
+
+
 def _carregar_contexto(db: Session, ctx: ContextoClinico) -> dict:
     """Junta o que veio da tela com o cadastro do animal (o cadastro manda na espécie/raça)."""
     dados = ctx.model_dump()
@@ -395,17 +425,37 @@ def _erro_ia(exc: IAIndisponivelError):
 # --------------------------------------------------------------------------- #
 # Receita
 # --------------------------------------------------------------------------- #
+_VIAS_NAO_ORAIS = ("subcut", "intraven", "intramus", "injet", "topic", "oftalm", "otolog",
+                   "cutane", "transdermic", "retal", "inalat")
+_VIAS_NAO_ORAIS_SIGLAS = {"sc", "sq", "iv", "im", "io"}
+_VIAS_TOPICAS = ("topic", "oftalm", "otolog", "cutane", "transdermic", "inalat")
+
+
+def _via_oral(via: str) -> bool:
+    """Na dúvida (via vazia ou 'a definir') trata como oral: é o lado seguro."""
+    tokens = _norm(via).split()
+    return not any(t.startswith(_VIAS_NAO_ORAIS) or t in _VIAS_NAO_ORAIS_SIGLAS for t in tokens)
+
+
+def _via_sistemica(via: str) -> bool:
+    return not any(t.startswith(_VIAS_TOPICAS) for t in _norm(via).split())
+
+
 def _validar_estrutura_receita(dados: dict) -> dict:
     if not isinstance(dados.get("medicamentos"), list):
         raise ValueError("JSON sem a lista 'medicamentos'.")
     return dados
 
 
-def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
+def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
+                    sensivel_oral: bool = False, texto_caso: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
     itens, alertas = [], []
     vistos = set()
     proibidos = PROIBIDOS_POR_GRUPO.get(grupo, PROIBIDOS_POR_GRUPO["outro"])
+    caso_n = _norm(texto_caso)
+    caso_contraindica_aine = any(m in caso_n for m in MARCADORES_CONTRAINDICACAO_AINE)
+    meta = []  # (nome normalizado, via sistêmica?) em paralelo a `itens`
 
     for bruto in dados["medicamentos"][:12]:
         if not isinstance(bruto, dict):
@@ -419,6 +469,22 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
             alertas.append(
                 f"{nome}: removido por segurança (risco conhecido para esta espécie). "
                 "O veterinário pode incluir manualmente, se julgar adequado."
+            )
+            continue
+        via_bruta = str(bruto.get("via") or "")
+        if sensivel_oral and _via_oral(via_bruta) \
+                and any(p in nome_n for p in ANTIBIOTICOS_RISCO_ORAL_ROEDORES):
+            alertas.append(
+                f"{nome}: removido por segurança (penicilina, lincosamida e cefalosporina por via oral "
+                "causam enterotoxemia em coelhos, roedores e cobaias). "
+                "O veterinário pode incluir manualmente, se julgar adequado."
+            )
+            continue
+        sistemica = _via_sistemica(via_bruta)
+        if sistemica and caso_contraindica_aine and any(p in nome_n for p in AINES):
+            alertas.append(
+                f"{nome}: AINE removido por segurança (o caso menciona intoxicação, desidratação grave "
+                "ou comprometimento renal/hepático). O veterinário pode incluir manualmente, se julgar adequado."
             )
             continue
         if nome_n in vistos:
@@ -486,6 +552,19 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str) -> dict:
             "recomendacoes": recomendacoes,
             "quantidade": quantidade,
         })
+        meta.append((nome_n, sistemica))
+
+    # AINE + corticosteroide na mesma receita: risco de úlcera. Remove os dois e deixa a escolha ao veterinário.
+    idx_aine = {i for i, (n, s) in enumerate(meta) if s and any(a in n for a in AINES)}
+    idx_cort = {i for i, (n, s) in enumerate(meta) if s and any(c in n for c in CORTICOIDES)}
+    if idx_aine and idx_cort:
+        remover = idx_aine | idx_cort
+        nomes = ", ".join(itens[i]["medicamento"].split(" ")[0] for i in sorted(remover))
+        itens = [it for i, it in enumerate(itens) if i not in remover]
+        alertas.append(
+            f"AINE e corticosteroide não podem ser prescritos juntos (risco de úlcera gastrointestinal). "
+            f"Itens removidos: {nomes}. Escolha um deles e inclua manualmente."
+        )
 
     for aviso in dados.get("alertas") or []:
         if isinstance(aviso, str) and aviso.strip():
@@ -515,6 +594,19 @@ def _alertas_receita_oficial(doenca: dict) -> List[str]:
     return alertas
 
 
+def _resposta_barragem_receita(doenca: dict, peso: Optional[float]) -> dict:
+    return {
+        "itens": [],
+        "alertas": _alertas_receita_oficial(doenca),
+        "peso_usado": peso,
+        "provedor": "barragem_sanitaria",
+        "modelo": None,
+        "doenca_oficial": doenca["nome"],
+        "aviso": f"Suspeita de {doenca['nome']}: doença de notificação oficial. Nenhum medicamento "
+                 "é sugerido; o veterinário pode adicionar itens manualmente, sob sua responsabilidade.",
+    }
+
+
 @router.post("/sugerir-receita")
 def sugerir_receita(
     ctx: ContextoClinico,
@@ -528,28 +620,20 @@ def sugerir_receita(
     doenca = _doenca_oficial_do_caso(d)
     if doenca:
         logger.info("sugerir-receita: barragem aplicada (%s), LLM não consultado", doenca["nome"])
-        return {
-            "itens": [],
-            "alertas": _alertas_receita_oficial(doenca),
-            "peso_usado": d.get("peso"),
-            "provedor": "barragem_sanitaria",
-            "modelo": None,
-            "doenca_oficial": doenca["nome"],
-            "aviso": f"Suspeita de {doenca['nome']}: doença de notificação oficial. Nenhum medicamento "
-                     "é sugerido; o veterinário pode adicionar itens manualmente, sob sua responsabilidade.",
-        }
+        return _resposta_barragem_receita(doenca, d.get("peso"))
 
     prompt = (
         "Você é um médico veterinário clínico experiente no Brasil, apoiando a elaboração de uma "
         "receita. Com base SOMENTE no caso abaixo, sugira o tratamento medicamentoso necessário.\n\n"
         f"CASO:\n{_texto_do_caso(d)}\n\n"
         "REGRAS OBRIGATÓRIAS:\n"
-        "1. Sugira TODOS os medicamentos justificados pelo parecer clínico para garantir um suporte terapêutico completo e seguro. NÃO omita itens essenciais (ex: protetores gástricos, analgésicos) ao gerar a prescrição.\n"
+        "1. Sugira os medicamentos justificados pelo parecer clínico para um suporte terapêutico completo e seguro, sem omitir itens essenciais (ex: protetores gástricos, analgésicos), SALVO nas exceções de segurança (2.3 e regra 7), que PREVALECEM sobre esta regra. Se nenhum medicamento for justificado, devolva a lista vazia.\n"
         "2. ESPÉCIE E TOXICOLOGIA VETERINÁRIA: Doses, segurança e antídotos dependem OBRIGATORIAMENTE da ESPÉCIE. "
         "É expressamente proibido sugerir tratamentos humanos tóxicos para animais (ex.: paracetamol/permetrina/azul de metileno para felinos; ibuprofeno/diclofenaco para cães). Para intoxicação por Paracetamol, o antídoto padrão é a Acetilcisteína.\n"
         "2.1 TOXICOLOGIA DE LAGOMORFOS E ROEDORES: É TERMINANTEMENTE PROIBIDO prescrever penicilinas (ex: Amoxicilina), lincosamidas ou cefalosporinas por via ORAL para coelhos, porquinhos-da-índia e chinchilas. Estas substâncias causam enterotoxemia e morte nestas espécies. Se uma destas drogas tiver sido prescrita acidentalmente ou administrada pelo tutor, OBRIGATORIAMENTE gere um alerta sobre a necessidade de estabilização do choque e disbiose cecal.\n"
         "2.2 ANIMAIS DE PRODUÇÃO E AQUICULTURA: Para espécies de produção (corte/consumo humano), é OBRIGATORIAMENTE NECESSÁRIO informar no campo de "
         "alertas ou recomendações o período de carência (retirada) regulamentado pelos órgãos competentes para o fármaco prescrito, garantindo a segurança alimentar.\n"
+        "2.3 DOENÇA DE NOTIFICAÇÃO OFICIAL: Se o caso sugerir doença de notificação obrigatória ou de controle oficial (ex.: raiva, febre aftosa, brucelose, mormo, influenza aviária, Newcastle, peste suína), NÃO prescreva nenhum medicamento: devolva \"medicamentos\": [] e, em \"alertas\", apenas a orientação de isolar o animal e notificar o serviço veterinário oficial.\n"
         "3. NÃO invente dose. Para espécie exótica/silvestre sem dose bem estabelecida na "
         "literatura, deixe dose_mg_kg como null e escreva em posologia_texto "
         "\"definir dose com o veterinário\".\n"
@@ -584,7 +668,24 @@ def sugerir_receita(
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 
-    receita = _montar_receita(resp.dados, d.get("peso"), d["grupo"])
+    receita = _montar_receita(
+        resp.dados, d.get("peso"), d["grupo"],
+        sensivel_oral=_roedor_ou_lagomorfo(d.get("especie"), d.get("sub_especie"), d.get("raca"),
+                                           d.get("nome_cientifico")),
+        texto_caso=_texto_do_caso(d),
+    )
+
+    # Segunda barragem, agora sobre a SAÍDA do LLM: se ele mesmo apontou doença oficial que a
+    # detecção do parecer não pegou, a receita é descartada e vale o alerta fixo.
+    texto_saida = " ".join(
+        [str(i.get(k) or "") for i in receita["itens"] for k in ("medicamento", "observacoes", "recomendacoes")]
+        + [a for a in (resp.dados.get("alertas") or []) if isinstance(a, str)]
+    ).strip()
+    doenca_saida = detectar_doenca_oficial(texto_saida, d.get("especie")) if texto_saida else None
+    if doenca_saida:
+        logger.warning("sugerir-receita: barragem aplicada na SAÍDA do LLM (%s)", doenca_saida["nome"])
+        return _resposta_barragem_receita(doenca_saida, d.get("peso"))
+
     if d.get("peso") is None:
         receita["alertas"].insert(0, "Peso não informado: as doses não foram calculadas.")
     receita.update({
