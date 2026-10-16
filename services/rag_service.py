@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import re
+import unicodedata
 import time
 from dataclasses import dataclass
 from typing import BinaryIO
@@ -54,6 +55,9 @@ TOP_K = 4                        # trechos recuperados por consulta
 CHUNK_MAX_CHARS = 1000
 CHUNK_OVERLAP_SENTENCES = 1
 EMBED_BATCH_COMMIT = 20          # commit a cada N chunks
+EMBED_REQ_POR_MINUTO = int(os.getenv("EMBED_REQ_POR_MINUTO", "90"))  # cota gratuita do Gemini: 100/min
+INGESTAO_TENTATIVAS = 6          # na ingestão vale esperar mais pela cota
+ESPERA_MAXIMA_429 = 65           # segundos (a cota é por minuto)
 MAX_PDF_BYTES = 50 * 1024 * 1024
 MAX_TITULO_CHARS = 255
 
@@ -63,7 +67,7 @@ RAG_TIMEOUT_CONSULTA = int(os.getenv("RAG_TIMEOUT_CONSULTA", "10"))
 
 def _ler_distancia_maxima() -> float | None:
     """Distância L2 máxima aceita (vetores normalizados: 0 = idêntico, 1,41 = sem relação).
-    Vazio = sem corte. Calibre olhando as distâncias registradas em log por referencias_para_prompt."""
+    Vazio = sem corte."""
     bruto = os.getenv("RAG_DISTANCIA_MAXIMA", "").strip().replace(",", ".")
     try:
         return float(bruto) if bruto else None
@@ -74,6 +78,13 @@ def _ler_distancia_maxima() -> float | None:
 RAG_DISTANCIA_MAXIMA = _ler_distancia_maxima()
 
 _MARCAS_TRANSITORIAS = ("429", "resource_exhausted", "503", "unavailable", "timed out", "timeout")
+_RETRY_SUGERIDO = re.compile(r"retry(?:delay)?\D{0,12}?(\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
+
+
+def _espera_sugerida(erro: str) -> float | None:
+    """Extrai de um 429 o 'Please retry in 16.6s' / 'retryDelay: 16s' informado pela API."""
+    m = _RETRY_SUGERIDO.search(erro)
+    return float(m.group(1)) if m else None
 
 
 # Exceções ---------------------------------------------------------------------
@@ -139,8 +150,11 @@ def gerar_embedding(
             transitorio = any(m in str(exc).lower() for m in _MARCAS_TRANSITORIAS)
             if transitorio and tentativa < tentativas:
                 espera = 2 ** tentativa
+                sugerida = _espera_sugerida(str(exc))
+                if sugerida is not None:
+                    espera = min(max(espera, sugerida + 1), ESPERA_MAXIMA_429)
                 logger.warning(
-                    "Erro transitório no embedding (tentativa %d/%d); nova tentativa em %ds: %s",
+                    "Erro transitório no embedding (tentativa %d/%d); nova tentativa em %.0fs: %s",
                     tentativa, tentativas, espera, exc,
                 )
                 time.sleep(espera)
@@ -452,7 +466,7 @@ def fatiar_por_farmaco(texto: str, max_chars: int = CHUNK_MAX_CHARS) -> list[str
                 fim -= 1
             seguinte = proximo_real(j)
             if fim > i and seguinte < n and _comeca_descricao(tokens[seguinte]):
-                inicios.append((i, " ".join(tokens[i:fim]).strip("()"), fim, grupo_atual))
+                inicios.append((i, " ".join(tokens[i:fim]), fim, grupo_atual))
             i = j
         else:
             i += 1
@@ -494,6 +508,12 @@ def fatiar_por_farmaco(texto: str, max_chars: int = CHUNK_MAX_CHARS) -> list[str
 ESTRATEGIAS_FATIAMENTO = ("frases", "farmaco")
 
 
+def _normalizar_estrategia(valor: str | None) -> str:
+    """Aceita 'Fármaco', ' farmaco ', '"farmaco"' etc. -> 'farmaco'."""
+    sem_acento = unicodedata.normalize("NFKD", valor or "").encode("ascii", "ignore").decode()
+    return sem_acento.strip().strip("\"'").strip().lower()
+
+
 @dataclass(frozen=True)
 class ResultadoIngestao:
     titulo: str
@@ -524,6 +544,7 @@ def ingerir_pdf(
 
     estrategia: 'frases' (livros/textos corridos) ou 'farmaco' (bulário: um trecho por medicamento).
     """
+    estrategia = _normalizar_estrategia(estrategia)
     if estrategia not in ESTRATEGIAS_FATIAMENTO:
         raise IngestaoError(f"Estratégia inválida. Use uma de: {', '.join(ESTRATEGIAS_FATIAMENTO)}.")
     titulo = (titulo or "").strip()
@@ -549,13 +570,21 @@ def ingerir_pdf(
         raise IngestaoError("Nenhum trecho gerado a partir do PDF.")
 
     gravados = 0
+    intervalo = 60.0 / max(1, EMBED_REQ_POR_MINUTO)  # espaça as chamadas para respeitar a cota
+    proxima_chamada = time.monotonic()
     try:
         for i, trecho in enumerate(chunks, start=1):
+            folga = proxima_chamada - time.monotonic()
+            if folga > 0:
+                time.sleep(folga)
+            proxima_chamada = max(time.monotonic(), proxima_chamada) + intervalo
             db.add(
                 DocumentoVeterinario(
                     titulo=titulo,
                     conteudo=trecho,
-                    embedding=gerar_embedding(trecho, api_key, "RETRIEVAL_DOCUMENT"),
+                    embedding=gerar_embedding(
+                        trecho, api_key, "RETRIEVAL_DOCUMENT", tentativas=INGESTAO_TENTATIVAS
+                    ),
                 )
             )
             if i % EMBED_BATCH_COMMIT == 0:
