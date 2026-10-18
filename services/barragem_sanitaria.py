@@ -3,7 +3,7 @@ import re
 import unicodedata
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
-from backend.models.defesa_sanitaria import DoencaNotificacao # Importando seu novo modelo
+from models.defesa_sanitaria import DoencaNotificacao
 
 logger = logging.getLogger(__name__)
 
