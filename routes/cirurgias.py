@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from database.database import get_db
+from database import get_db
 from models.cirurgia import ProcedimentoCirurgico, FichaAnestesica, MonitoramentoAnestesico
 from models.consulta import Consulta
 from models.usuario import Usuario

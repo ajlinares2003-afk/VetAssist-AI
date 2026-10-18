@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from database.database import get_db
+from database import get_db
 from services.ia_service import CAMPOS_CONFIG_IA, testar_slot
 from services.referencia_auto import limpar_falhas_pesquisa
 from services.security import exigir_perfil

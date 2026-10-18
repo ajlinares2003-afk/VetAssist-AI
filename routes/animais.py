@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text
 from schemas.animais import AnimalCreate, AnimalResponse
-from database.database import get_db, SessionLocal
+from database import get_db, SessionLocal
 from models.animais import Animal
 from models.tutor import Tutor
 from services.nome_cientifico import buscar_nome_cientifico

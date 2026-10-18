@@ -4,7 +4,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import date
 
-from database.database import get_db
+from database import get_db
 from models.financeiro import TransacaoFinanceira
 
 router = APIRouter(prefix="/financeiro", tags=["Financeiro & Caixa"])

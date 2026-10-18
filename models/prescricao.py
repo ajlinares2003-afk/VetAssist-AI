@@ -1,7 +1,7 @@
 from sqlalchemy import Column, BigInteger, Text, TIMESTAMP, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from database.database import Base
+from database import Base
 
 
 class Prescricao(Base):

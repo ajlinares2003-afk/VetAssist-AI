@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from database.database import get_db
+from database import get_db
 from models.animais import Animal
 from services.barragem_sanitaria import detectar_doenca_oficial, doenca_do_parecer
 from services.ia_service import IAIndisponivelError, gerar_json

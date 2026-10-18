@@ -1,7 +1,7 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
-from database.database import get_db
+from database import get_db
 from models.prescricao import Prescricao, ItemPrescricao
 from models.consulta import Consulta
 from schemas.prescricao import (

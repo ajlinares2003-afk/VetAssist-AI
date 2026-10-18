@@ -1,6 +1,6 @@
 from sqlalchemy import Column, BigInteger, String, DateTime, ForeignKey, Text, Float
 from sqlalchemy.sql import func
-from database.database import Base
+from database import Base
 
 class Internacao(Base):
     __tablename__ = "internacao"

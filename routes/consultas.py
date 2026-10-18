@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database.database import get_db, SessionLocal
+from database import get_db, SessionLocal
 from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario  
