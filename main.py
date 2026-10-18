@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
-from database.database import engine, Base
+from database import engine, Base
 
 # IMPORTAÇÃO DE TODOS OS MODELOS (mantida para o mapeamento do ORM; as tabelas
 # são criadas manualmente no Supabase, pois o create_all está desativado)
