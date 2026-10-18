@@ -298,7 +298,10 @@ def sugestoes_copiloto_multimodal(
             f"2.4 COMBATE AO 'OVERTESTING': Não sugira exames excessivos de urgência para pacientes estáveis.\n"
             f"2.5 {regra_sanitaria}\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação incorreta ou tratamentos empíricos.\n"
+            # Em consultas.py, dentro da função _prompt_base():
+            # Em consultas.py, dentro da função _prompt_base():
             f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
+            f"2.8 BIOSSEGURANÇA E ZOONOSES NEUROTRÓPICAS: Caso a suspeita inclua Raiva dos Herbívoros ou zoonoses virais graves, inclua obrigatoriamente um ALERTA DE BIOSSEGURANÇA. Adverta que a punção de LCR (Líquido Cefalorraquidiano) em animais vivos expõe a equipe a risco biológico elevado, devendo-se priorizar exames não invasivos (sangue/swab), isolamento e notificação oficial, reservando procedimentos no SNC para equipes imunizadas e com EPI completo de alta barreira.\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
             f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
