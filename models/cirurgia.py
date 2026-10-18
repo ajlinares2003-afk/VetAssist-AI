@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Table
 from sqlalchemy.orm import relationship
-from database.database import Base
+from database import Base
 
 equipe_cirurgica_associacao = Table(
     'equipe_cirurgica',
