@@ -5,7 +5,7 @@ from sqlalchemy import TIMESTAMP
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
-from database.database import Base
+from database import Base
 
 class Tutor(Base):
     __tablename__ = "tutor"
