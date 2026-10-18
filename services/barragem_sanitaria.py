@@ -164,8 +164,8 @@ def _mesclar(doencas: List[dict]) -> dict:
         "exames_lista": exames_lista,
         "aviso": " ".join(avisos),
         "tratamento": " ".join(_unicos(d.get("tratamento") for d in doencas)) or None,
-        "conduta": _unicos(c for d in doencas for c in d.get("conduta", [])),   # a v3 perdia a conduta (EPI!)
-        "notificacao_confirmada": all(d.get("notificacao_confirmada") for d in doencas),  # a mais rígida vence
+        "conduta": _unicos(c for d in doencas for c in d.get("conduta", [])),
+        "notificacao_confirmada": all(d.get("notificacao_confirmada") for d in doencas),
         "sem_carencia": all(d.get("sem_carencia") for d in doencas),
         "orgao": " e ".join(_unicos(d.get("orgao") for d in doencas)) or None,
         "fora_dos_grupos": set().union(*(d.get("fora_dos_grupos") or set() for d in doencas)) or None,
@@ -263,8 +263,27 @@ def doencas_incompativeis(texto_resposta: str, especie: str, db: Optional[Sessio
 
 
 def parecer_da_doenca(doenca: dict, por_sinais: bool = False, especie: Optional[str] = None) -> str:
+    nome_doenca = normalizar(doenca.get("nome", ""))
     origem = ("Suspeita clínica levantada a partir dos sinais clínicos informados; a confirmação depende dos exames oficiais."
               if por_sinais else "Trata-se de suspeita levantada; a confirmação depende exclusivamente dos testes oficiais.")
+    
+    # EXCEÇÃO REGULATÓRIA: Leishmaniose Visceral Canina (Zoonose Urbana / Pequenos Animais)
+    if "leishmaniose" in nome_doenca:
+        linhas = [
+            f"🛡️ **{MARCADOR_ALERTA}: suspeita de {doenca['nome']}**\n",
+            f"• Doença de notificação compulsória compartilhada (Saúde Pública / MAPA). {origem}",
+        ]
+        if doenca.get("exames"):
+            linhas.append(f"• {doenca['exames']}")
+        if doenca.get("tratamento"):
+            linhas.append(f"• {doenca['tratamento']}")
+        for item in doenca.get("conduta") or []:
+            linhas.append(f"• {item}")
+        if doenca.get("aviso"):
+            linhas.append(f"• ⚠️ {doenca['aviso']}")
+        return "\n".join(linhas)
+
+    # Fluxo padrão restritivo para as demais doenças de defesa sanitária pecuária
     orgao = doenca.get("orgao") or ORGAO_PADRAO
     if doenca.get("notificacao_confirmada"):
         notificacao = f"• A IN MAPA 50/2013 exige a notificação imediata do caso CONFIRMADO ({orgao}). {origem}"
