@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from database.database import get_db
+from database import get_db
 from models.consulta import Consulta
 from models.animais import Animal
 from models.usuario import Usuario  # noqa: F401

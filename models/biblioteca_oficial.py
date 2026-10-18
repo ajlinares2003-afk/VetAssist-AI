@@ -1,6 +1,6 @@
 from sqlalchemy import Column, BigInteger, Text, Numeric, Integer, TIMESTAMP
 from sqlalchemy.sql import func
-from database.database import Base
+from database import Base
 
 class BibliotecaParametrosOficiais(Base):
     __tablename__ = "biblioteca_parametros_oficiais"

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from schemas.tutor import TutorCreate, TutorResponse
-from database.database import get_db
+from database import get_db
 from models.tutor import Tutor
 from services.security import (
     obter_usuario_logado,

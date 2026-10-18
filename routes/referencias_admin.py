@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database.database import get_db
+from database import get_db
 from services.security import exigir_perfil
 
 logger = logging.getLogger("vetassist.referencias")

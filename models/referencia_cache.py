@@ -1,6 +1,6 @@
 from sqlalchemy import Column, BigInteger, Text, TIMESTAMP
 from sqlalchemy.sql import func
-from database.database import Base
+from database import Base
 
 class ReferenciaCache(Base):
     __tablename__ = "referencias_clinicas_cache"

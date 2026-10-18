@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from database.database import get_db
+from database import get_db
 from models.usuario import Usuario, PerfilUsuarioEnum
 from schemas.usuario import UsuarioCreate
 from services.security import (

@@ -7,7 +7,7 @@ from sqlalchemy import Date
 from sqlalchemy import ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from database.database import Base
+from database import Base
 
 class Animal(Base):
     __tablename__ = "animal"

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from database.database import get_db
+from database import get_db
 from models.exame import Exame
 from models.consulta import Consulta
 from schemas.exame import ExameCreate
