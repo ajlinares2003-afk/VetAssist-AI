@@ -236,18 +236,14 @@ def sugestoes_copiloto_multimodal(
         # A conduta oficial (notificar, só testes oficiais, sem tratamento) é decidida em Python.
         # Aqui a IA só NOMEIA a doença; regras de conduta no prompt fazem a IA aplicá-las a doenças
         # que não são oficiais (e a citar doenças de outra espécie).
-        lista_oficiais = doencas_da_especie(especie_real)
-        if lista_oficiais:
-            regra_sanitaria = (
-                "DEFESA SANITÁRIA: se, e SOMENTE se, o quadro for compatível com doença de notificação "
-                f"obrigatória que ocorre nesta espécie ({'; '.join(lista_oficiais)}), cite-a na SUSPEITA pelo nome "
-                "em português. A conduta oficial é aplicada automaticamente pelo sistema: NÃO escreva "
-                "eutanásia, notificação nem 'sem tratamento' para nenhuma outra doença, e NUNCA cite "
-                "doença que não ocorre na espécie do paciente."
-            )
-        else:
-            regra_sanitaria = ("DEFESA SANITÁRIA: não cite doenças de notificação oficial de outras espécies. "
-                               "Não escreva eutanásia nem 'sem tratamento' como conduta padrão.")
+        # Doenças, sinais e condutas ficam na tabela defesa_sanitaria (não no prompt). O prompt só pede à IA
+        # que NOMEIE a doença; a barragem (Python + banco) aplica a conduta oficial depois.
+        regra_sanitaria = (
+            "DEFESA SANITÁRIA: se o quadro for compatível com doença de notificação obrigatória, cite-a na "
+            "SUSPEITA pelo nome oficial em português, só se ela ocorrer na espécie do paciente. A conduta "
+            "oficial é aplicada automaticamente pelo sistema: não escreva eutanásia, notificação nem "
+            "'sem tratamento' para nenhuma outra doença."
+        )
 
         # RAG: trechos da literatura veterinária (PostgreSQL + pgvector). À prova de falhas: se a base
         # estiver vazia, a chave do Gemini faltar ou a busca falhar, o copiloto segue sem referências.
@@ -298,10 +294,7 @@ def sugestoes_copiloto_multimodal(
             f"2.4 COMBATE AO 'OVERTESTING': Não sugira exames excessivos de urgência para pacientes estáveis.\n"
             f"2.5 {regra_sanitaria}\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação incorreta ou tratamentos empíricos.\n"
-            # Em consultas.py, dentro da função _prompt_base():
-            # Em consultas.py, dentro da função _prompt_base():
             f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
-            f"2.8 BIOSSEGURANÇA E ZOONOSES NEUROTRÓPICAS: Caso a suspeita inclua Raiva dos Herbívoros ou zoonoses virais graves, inclua obrigatoriamente um ALERTA DE BIOSSEGURANÇA. Adverta que a punção de LCR (Líquido Cefalorraquidiano) em animais vivos expõe a equipe a risco biológico elevado, devendo-se priorizar exames não invasivos (sangue/swab), isolamento e notificação oficial, reservando procedimentos no SNC para equipes imunizadas e com EPI completo de alta barreira.\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
             f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
@@ -394,14 +387,15 @@ def sugestoes_copiloto_multimodal(
         # Aplica a guilhotina higienizada do módulo barragem_sanitaria
         # Se o parsing não achou a suspeita, avalia o texto bruto (falha para o lado seguro)
         suspeita_para_barragem = suspeita_bruta or texto_resposta
-        doenca_oficial = detectar_doenca_oficial(suspeita_para_barragem, especie_real)
-        parecer_oficial = aplicar_barragem(suspeita_para_barragem, especie_real, texto_resposta)
+        doenca_oficial = detectar_doenca_oficial(suspeita_para_barragem, especie_real, db=db)
+        parecer_oficial = aplicar_barragem(suspeita_para_barragem, especie_real, texto_resposta, db=db,
+                                           doenca=doenca_oficial)
         if parecer_oficial:
             sugestoes_extraidas = parecer_oficial
         else:
             # A IA não nomeou doença oficial: confere pelos SINAIS (ex.: antraz descrito como "septicemia")
             texto_clinico = " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico))
-            doenca_oficial = doenca_por_sinais(texto_clinico, especie_real)
+            doenca_oficial = doenca_por_sinais(texto_clinico, especie_real, db=db)
             if doenca_oficial:
                 logger.warning("barragem por sinais: %s (IA sugeriu %r)", doenca_oficial["nome"], suspeita_extraida)
                 sugestoes_extraidas = parecer_da_doenca(doenca_oficial, por_sinais=True)
@@ -409,7 +403,7 @@ def sugestoes_copiloto_multimodal(
                                      f"(a IA sugeriu: {suspeita_extraida})")[:300]
             else:
                 # Sem barragem: se a IA citou doença exclusiva de OUTRA espécie, avisa em vez de deixar passar
-                erradas = doencas_incompativeis(texto_resposta, especie_real)
+                erradas = doencas_incompativeis(texto_resposta, especie_real, db=db)
                 if erradas:
                     sugestoes_extraidas += ("\n\n⚠️ **Revisar:** o parecer cita " + "; ".join(erradas) +
                                             f", incompatível com a espécie do paciente ({especie_real}). "
