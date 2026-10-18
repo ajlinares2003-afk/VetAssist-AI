@@ -168,6 +168,7 @@ def _mesclar(doencas: List[dict]) -> dict:
         "notificacao_confirmada": all(d.get("notificacao_confirmada") for d in doencas),  # a mais rígida vence
         "sem_carencia": all(d.get("sem_carencia") for d in doencas),
         "orgao": " e ".join(_unicos(d.get("orgao") for d in doencas)) or None,
+        "fora_dos_grupos": set().union(*(d.get("fora_dos_grupos") or set() for d in doencas)) or None,
     }
 
 
@@ -186,13 +187,25 @@ def extrair_secoes(texto: str) -> Tuple[str, str]:
 
 
 def detectar_doencas_oficiais(suspeita: str, especie: str, db: Optional[Session] = None) -> List[dict]:
+    """Doença 'exclusiva' só vale dentro dos seus grupos. As demais disparam sempre que citadas; se a espécie
+    estiver fora dos grupos cadastrados, o resultado leva 'fora_dos_grupos' (aviso no parecer + log)."""
     if db is None:
         logger.warning("barragem_sanitaria: sessão do banco (db) não fornecida; barragem DESLIGADA nesta chamada.")
         return []
     s = normalizar(suspeita)
     desconhecida = _especie_desconhecida(especie)
-    return [d for d in _carregar(db)
-            if d["rx"] and d["rx"].search(s) and (desconhecida or _especie_pertence(especie, d["grupos"]))]
+    achadas = []
+    for d in _carregar(db):
+        if not (d["rx"] and d["rx"].search(s)):
+            continue
+        if desconhecida or _especie_pertence(especie, d["grupos"]):
+            achadas.append(d)
+        elif not d["exclusiva"]:
+            logger.warning("barragem: LACUNA na tabela - '%s' citada para espécie %r, fora de grupos=%s "
+                           "(ampliar 'grupos' se for correto). Trecho: %r",
+                           d["nome"], especie, sorted(d["grupos"]), (suspeita or "")[:120])
+            achadas.append({**d, "fora_dos_grupos": set(d["grupos"])})
+    return achadas
 
 
 def detectar_doenca_oficial(suspeita: str, especie: str, db: Optional[Session] = None) -> Optional[dict]:
@@ -269,6 +282,9 @@ def parecer_da_doenca(doenca: dict, por_sinais: bool = False, especie: Optional[
     linhas += [f"• {item}" for item in doenca.get("conduta") or []]
     if doenca.get("aviso"):
         linhas.append(f"• ⚠️ {doenca['aviso']}")
+    if doenca.get("fora_dos_grupos"):
+        linhas.append(f"• ℹ️ Doença cadastrada principalmente para: {', '.join(sorted(doenca['fora_dos_grupos']))}. "
+                      "Confirme se se aplica a esta espécie.")
     return "\n".join(linhas)
 
 
