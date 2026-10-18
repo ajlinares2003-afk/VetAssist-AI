@@ -1,7 +1,7 @@
 import enum
 from sqlalchemy import Column, BigInteger, String, Boolean, TIMESTAMP
 from sqlalchemy.sql import func
-from database.database import Base
+from database import Base
 
 class PerfilUsuarioEnum(str, enum.Enum):
     ADMIN = "ADMIN"
