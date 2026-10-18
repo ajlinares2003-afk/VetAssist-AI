@@ -1,7 +1,7 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from database.database import get_db
+from database import get_db
 from models.animais import Animal
 from models.tutor import Tutor
 from models.consulta import Consulta

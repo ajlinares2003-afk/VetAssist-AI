@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from datetime import datetime
-from database.database import Base
+from database import Base
 
 class ProntuarioSalvo(Base):
     __tablename__ = "prontuarios_salvos"
