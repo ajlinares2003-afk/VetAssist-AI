@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Boolean
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from backend.database import Base # Ajuste o caminho se sua Base ficar em outro lugar
+from database import Base # Ajuste o caminho se sua Base ficar em outro lugar
 
 class DoencaNotificacao(Base):
     """
