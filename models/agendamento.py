@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, BigInteger, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from database.database import Base
+from database import Base
 from datetime import datetime
 
 class Agendamento(Base):

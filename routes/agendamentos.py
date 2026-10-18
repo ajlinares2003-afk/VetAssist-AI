@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from database.database import get_db
+from database import get_db
 from models.agendamento import Agendamento
 from models.consulta import Consulta
 from models.animais import Animal
