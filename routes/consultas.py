@@ -398,7 +398,7 @@ def sugestoes_copiloto_multimodal(
             doenca_oficial = doenca_por_sinais(texto_clinico, especie_real, db=db)
             if doenca_oficial:
                 logger.warning("barragem por sinais: %s (IA sugeriu %r)", doenca_oficial["nome"], suspeita_extraida)
-                sugestoes_extraidas = parecer_da_doenca(doenca_oficial, por_sinais=True)
+                sugestoes_extraidas = parecer_da_doenca(doenca_oficial, por_sinais=True, especie=especie_real)
                 suspeita_extraida = (f"{doenca_oficial['nome']} - suspeita pelos sinais clínicos "
                                      f"(a IA sugeriu: {suspeita_extraida})")[:300]
             else:

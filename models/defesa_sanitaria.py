@@ -25,3 +25,4 @@ class DoencaNotificacao(Base):
     sem_carencia = Column(Boolean, default=False)
     exclusiva = Column(Boolean, nullable=False, default=False)  # NOVA (rodar o .sql)
     sinais = Column(_ARRAY_TEXT)                                # NOVA (rodar o .sql)
+    orgao = Column(String)                                      # NOVA (rodar o .sql): quem recebe a notificação                               # NOVA (rodar o .sql)

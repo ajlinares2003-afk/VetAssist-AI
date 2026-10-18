@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 MARCADOR_ALERTA = "Alerta de Defesa Sanitária Oficial"
 TTL_CACHE = 300          # segundos; a tabela tem dezenas de linhas e muda raramente
+ORGAO_PADRAO = "serviço oficial (MAPA)"
+# Espécies para as quais a carência de carne/leite faz sentido (cães, gatos, silvestres etc. ficam de fora)
+_GRUPOS_PRODUCAO = {"bovideos", "ruminantes", "suinos", "aves", "equideos", "coelhos", "lagomorfos",
+                    "abelhas", "peixes", "crustaceos", "moluscos"}
 MIN_SINAIS = 1           # quantos sinais distintos de uma doença são necessários para suspeitar por sinais
 
 # Taxonomia: como o CADASTRO do animal ("Equino", "Canino", "Coelho / Lagomorfo"...) se liga aos
@@ -69,6 +73,11 @@ def _grupos_da_especie(especie: str) -> Set[str]:
     return grupos
 
 
+def _animal_de_producao(especie: Optional[str]) -> bool:
+    """Espécie desconhecida => True (lado seguro: mantém o lembrete de carência)."""
+    return _especie_desconhecida(especie) or bool(_grupos_da_especie(especie or "") & _GRUPOS_PRODUCAO)
+
+
 def _especie_pertence(especie: str, grupos) -> bool:
     """Grupos vazios = a doença vale para qualquer espécie."""
     if not grupos:
@@ -112,6 +121,7 @@ def _carregar(db: Session) -> List[dict]:
             "tratamento": d.tratamento or None, "conduta": list(d.conduta or []),
             "notificacao_confirmada": bool(d.notificacao_confirmada), "sem_carencia": bool(d.sem_carencia),
             "exclusiva": bool(getattr(d, "exclusiva", False)),
+            "orgao": (getattr(d, "orgao", None) or "").strip() or None,
             "sinais": [normalizar(x) for x in (getattr(d, "sinais", None) or []) if x],
         })
     with _cache_lock:
@@ -157,6 +167,7 @@ def _mesclar(doencas: List[dict]) -> dict:
         "conduta": _unicos(c for d in doencas for c in d.get("conduta", [])),   # a v3 perdia a conduta (EPI!)
         "notificacao_confirmada": all(d.get("notificacao_confirmada") for d in doencas),  # a mais rígida vence
         "sem_carencia": all(d.get("sem_carencia") for d in doencas),
+        "orgao": " e ".join(_unicos(d.get("orgao") for d in doencas)) or None,
     }
 
 
@@ -238,21 +249,22 @@ def doencas_incompativeis(texto_resposta: str, especie: str, db: Optional[Sessio
             and not _especie_pertence(especie, d["grupos"])]
 
 
-def parecer_da_doenca(doenca: dict, por_sinais: bool = False) -> str:
+def parecer_da_doenca(doenca: dict, por_sinais: bool = False, especie: Optional[str] = None) -> str:
     origem = ("Suspeita clínica levantada a partir dos sinais clínicos informados; a confirmação depende dos exames oficiais."
               if por_sinais else "Trata-se de suspeita levantada; a confirmação depende exclusivamente dos testes oficiais.")
+    orgao = doenca.get("orgao") or ORGAO_PADRAO
     if doenca.get("notificacao_confirmada"):
-        notificacao = f"• A IN MAPA 50/2013 exige a notificação imediata do caso CONFIRMADO. {origem}"
+        notificacao = f"• A IN MAPA 50/2013 exige a notificação imediata do caso CONFIRMADO ({orgao}). {origem}"
         isolamento = "• Isole os animais suspeitos e restrinja o trânsito até a orientação oficial."
     else:
         notificacao = f"• Doença de notificação imediata OBRIGATÓRIA (IN MAPA 50/2013). {origem}"
-        isolamento = "• Notifique IMEDIATAMENTE o serviço oficial (MAPA), isole os animais e restrinja o trânsito."
-    tratamento = doenca.get("tratamento") or "Não prescreva tratamento farmacológico. A destinação de casos positivos é definida pelo MAPA."
+        isolamento = f"• Notifique IMEDIATAMENTE ({orgao}), isole os animais e restrinja o trânsito."
+    tratamento = doenca.get("tratamento") or "Não prescreva tratamento farmacológico. A destinação de casos positivos é definida pelo serviço oficial."
     linhas = [f"🛡️ **{MARCADOR_ALERTA}: suspeita de {doenca['nome']}**\n", notificacao, isolamento]
     if doenca.get("exames"):
         linhas.append(f"• {doenca['exames']}")
     linhas += [f"• {tratamento}", "• Não solicite exames complementares fora do fluxo oficial."]
-    if not doenca.get("sem_carencia"):
+    if not doenca.get("sem_carencia") and _animal_de_producao(especie):
         linhas.append("• Em animais de produção, observe a carência para carne/leite.")
     linhas += [f"• {item}" for item in doenca.get("conduta") or []]
     if doenca.get("aviso"):
@@ -266,4 +278,4 @@ def aplicar_barragem(suspeita: str, especie: str, texto_completo: str = "", db: 
     doenca = doenca or detectar_doenca_oficial(suspeita, especie, db=db)
     logger.info("barragem: suspeita=%r especie=%r -> %s", (suspeita or "")[:80], especie,
                 doenca["nome"] if doenca else "não aplicada")
-    return parecer_da_doenca(doenca) if doenca else None
+    return parecer_da_doenca(doenca, especie=especie) if doenca else None
