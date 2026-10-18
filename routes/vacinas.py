@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException       
 from sqlalchemy.orm import Session
-from database.database import get_db
+from database import get_db
 from models.vacina import Vacina
 from models.animais import Animal
 from schemas.vacina import VacinaCreate

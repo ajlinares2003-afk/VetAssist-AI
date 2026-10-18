@@ -5,7 +5,7 @@ from sqlalchemy import Date
 from sqlalchemy import Text
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
-from database.database import Base
+from database import Base
 
 class Vacina(Base):
     __tablename__ = "vacina"
