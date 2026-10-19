@@ -1,6 +1,6 @@
 """
-Barragem sanitária oficial (v4 - 100% Banco de Dados).
-Lê a tabela 'defesa_sanitaria' (PostgreSQL/Supabase). Nada de doença fica fixo no código nem no prompt.
+Barragem sanitária oficial (v4.1 - 100% Banco de Dados com suporte a Zoonoses Urbanas).
+Lê a tabela 'defesa_sanitaria' (PostgreSQL/Supabase).
 """
 import logging
 import re
@@ -16,15 +16,12 @@ from models.defesa_sanitaria import DoencaNotificacao
 logger = logging.getLogger(__name__)
 
 MARCADOR_ALERTA = "Alerta de Defesa Sanitária Oficial"
-TTL_CACHE = 300          # segundos; a tabela tem dezenas de linhas e muda raramente
+TTL_CACHE = 300
 ORGAO_PADRAO = "serviço oficial (MAPA)"
-# Espécies para as quais a carência de carne/leite faz sentido (cães, gatos, silvestres etc. ficam de fora)
 _GRUPOS_PRODUCAO = {"bovideos", "ruminantes", "suinos", "aves", "equideos", "coelhos", "lagomorfos",
                     "abelhas", "peixes", "crustaceos", "moluscos"}
-MIN_SINAIS = 1           # quantos sinais distintos de uma doença são necessários para suspeitar por sinais
+MIN_SINAIS = 1
 
-# Taxonomia: como o CADASTRO do animal ("Equino", "Canino", "Coelho / Lagomorfo"...) se liga aos
-# GRUPOS da tabela ("equideos", "caninos", "lagomorfos"...). Sem isso, "Equino" nunca casaria com "equideos".
 _GRUPOS_POR_TERMO: Dict[str, Set[str]] = {
     "equino": {"equideos"}, "equinos": {"equideos"}, "cavalo": {"equideos"}, "egua": {"equideos"},
     "asinino": {"equideos"}, "jumento": {"equideos"}, "muar": {"equideos"}, "mula": {"equideos"},
@@ -53,7 +50,6 @@ _cache: Dict[str, object] = {"t": 0.0, "dados": []}
 
 
 def normalizar(texto: Optional[str]) -> str:
-    """Retorna minúsculas sem acentos."""
     texto = unicodedata.normalize("NFD", (texto or "").lower())
     return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
@@ -69,30 +65,26 @@ def _grupos_da_especie(especie: str) -> Set[str]:
         grupos |= _GRUPOS_POR_TERMO.get(w, set())
         if w.endswith("s"):
             grupos |= _GRUPOS_POR_TERMO.get(w[:-1], set())
-        grupos.add(w)  # permite o cadastro já vir com o nome do grupo
+        grupos.add(w)
     return grupos
 
 
 def _animal_de_producao(especie: Optional[str]) -> bool:
-    """Espécie desconhecida => True (lado seguro: mantém o lembrete de carência)."""
     return _especie_desconhecida(especie) or bool(_grupos_da_especie(especie or "") & _GRUPOS_PRODUCAO)
 
 
 def _especie_pertence(especie: str, grupos) -> bool:
-    """Grupos vazios = a doença vale para qualquer espécie."""
     if not grupos:
         return True
     return bool(_grupos_da_especie(especie) & {normalizar(g) for g in grupos})
 
 
 def limpar_cache() -> None:
-    """Chame após editar a tabela se quiser efeito imediato (senão vale em até TTL_CACHE segundos)."""
     with _cache_lock:
         _cache["t"] = 0.0
 
 
 def _carregar(db: Session) -> List[dict]:
-    """Lê a tabela inteira (poucas linhas), compila cada regex isoladamente e guarda em cache."""
     agora = time.monotonic()
     with _cache_lock:
         if _cache["dados"] and agora - float(_cache["t"]) < TTL_CACHE:
@@ -102,11 +94,11 @@ def _carregar(db: Session) -> List[dict]:
     except Exception:
         logger.error("barragem: falha ao ler defesa_sanitaria", exc_info=True)
         try:
-            db.rollback()  # senão a sessão fica 'envenenada' e quebra o resto da requisição
+            db.rollback()
         except Exception:
             pass
         with _cache_lock:
-            return _cache["dados"]  # type: ignore[return-value]  # último cache bom (ou vazio)
+            return _cache["dados"]  # type: ignore[return-value]
 
     dados: List[dict] = []
     for d in linhas:
@@ -121,6 +113,7 @@ def _carregar(db: Session) -> List[dict]:
             "tratamento": d.tratamento or None, "conduta": list(d.conduta or []),
             "notificacao_confirmada": bool(d.notificacao_confirmada), "sem_carencia": bool(d.sem_carencia),
             "exclusiva": bool(getattr(d, "exclusiva", False)),
+            "zoonose_urbana": bool(getattr(d, "zoonose_urbana", False)),
             "orgao": (getattr(d, "orgao", None) or "").strip() or None,
             "sinais": [normalizar(x) for x in (getattr(d, "sinais", None) or []) if x],
         })
@@ -130,7 +123,6 @@ def _carregar(db: Session) -> List[dict]:
 
 
 def _sem_ruido(dados: List[dict]) -> List[dict]:
-    """Remove doença cujo nome está contido no de outra também achada (ex.: 'Salmoneloses Aviárias' duplicada)."""
     nomes = [normalizar(d["nome"]) for d in dados]
     return [d for i, d in enumerate(dados)
             if not any(j != i and nomes[j] != nomes[i] and nomes[j].startswith(nomes[i]) for j in range(len(dados)))]
@@ -167,13 +159,13 @@ def _mesclar(doencas: List[dict]) -> dict:
         "conduta": _unicos(c for d in doencas for c in d.get("conduta", [])),
         "notificacao_confirmada": all(d.get("notificacao_confirmada") for d in doencas),
         "sem_carencia": all(d.get("sem_carencia") for d in doencas),
+        "zoonose_urbana": any(d.get("zoonose_urbana") for d in doencas),
         "orgao": " e ".join(_unicos(d.get("orgao") for d in doencas)) or None,
         "fora_dos_grupos": set().union(*(d.get("fora_dos_grupos") or set() for d in doencas)) or None,
     }
 
 
 def extrair_secoes(texto: str) -> Tuple[str, str]:
-    """Extrai (suspeita, sugestoes) tolerando 'Suspeita:', 'SUGESTÕES:', negrito e tags <think>."""
     texto = re.sub(r"<think>.*?</think>", "", texto or "", flags=re.S | re.I)
     m = re.search(
         r"SUSPEITA(?:\s+DIAGN[ÓO]STICA)?\s*\**\s*:\s*\**(.*?)(?:SUGEST[ÕO]ES\s*\**\s*:\s*\**(.*))?\Z",
@@ -187,8 +179,6 @@ def extrair_secoes(texto: str) -> Tuple[str, str]:
 
 
 def detectar_doencas_oficiais(suspeita: str, especie: str, db: Optional[Session] = None) -> List[dict]:
-    """Doença 'exclusiva' só vale dentro dos seus grupos. As demais disparam sempre que citadas; se a espécie
-    estiver fora dos grupos cadastrados, o resultado leva 'fora_dos_grupos' (aviso no parecer + log)."""
     if db is None:
         logger.warning("barragem_sanitaria: sessão do banco (db) não fornecida; barragem DESLIGADA nesta chamada.")
         return []
@@ -201,9 +191,8 @@ def detectar_doencas_oficiais(suspeita: str, especie: str, db: Optional[Session]
         if desconhecida or _especie_pertence(especie, d["grupos"]):
             achadas.append(d)
         elif not d["exclusiva"]:
-            logger.warning("barragem: LACUNA na tabela - '%s' citada para espécie %r, fora de grupos=%s "
-                           "(ampliar 'grupos' se for correto). Trecho: %r",
-                           d["nome"], especie, sorted(d["grupos"]), (suspeita or "")[:120])
+            logger.warning("barragem: LACUNA na tabela - '%s' citada para espécie %r, fora de grupos=%s",
+                           d["nome"], especie, sorted(d["grupos"]))
             achadas.append({**d, "fora_dos_grupos": set(d["grupos"])})
     return achadas
 
@@ -231,14 +220,12 @@ def exames_oficiais(doenca: Optional[dict]) -> List[dict]:
 
 
 def doencas_da_especie(especie: str, db: Optional[Session] = None) -> List[str]:
-    """Nomes das doenças da espécie (útil para telas/relatórios; NÃO precisa ir ao prompt)."""
     if _especie_desconhecida(especie) or db is None:
         return []
     return [d["nome"] for d in _carregar(db) if d["grupos"] and _especie_pertence(especie, d["grupos"])]
 
 
 def doenca_por_sinais(texto_clinico: str, especie: str, db: Optional[Session] = None) -> Optional[dict]:
-    """Suspeita pelos SINAIS cadastrados na coluna 'sinais' (ex.: head pressing -> Raiva)."""
     if not texto_clinico or _especie_desconhecida(especie) or db is None:
         return None
     s = normalizar(texto_clinico)
@@ -252,7 +239,6 @@ def doenca_por_sinais(texto_clinico: str, especie: str, db: Optional[Session] = 
 
 
 def doencas_incompativeis(texto_resposta: str, especie: str, db: Optional[Session] = None) -> List[str]:
-    """Doenças marcadas 'exclusiva' que a IA citou para uma espécie fora dos grupos delas."""
     if not texto_resposta or _especie_desconhecida(especie) or db is None:
         return []
     s = normalizar(texto_resposta)
@@ -263,12 +249,11 @@ def doencas_incompativeis(texto_resposta: str, especie: str, db: Optional[Sessio
 
 
 def parecer_da_doenca(doenca: dict, por_sinais: bool = False, especie: Optional[str] = None) -> str:
-    nome_doenca = normalizar(doenca.get("nome", ""))
     origem = ("Suspeita clínica levantada a partir dos sinais clínicos informados; a confirmação depende dos exames oficiais."
               if por_sinais else "Trata-se de suspeita levantada; a confirmação depende exclusivamente dos testes oficiais.")
     
-    # EXCEÇÃO REGULATÓRIA: Leishmaniose Visceral Canina (Zoonose Urbana / Pequenos Animais)
-    if "leishmaniose" in nome_doenca:
+    # FLUXO DINÂMICO BASEADO NO BANCO (Zoonose Urbana / Pequenos Animais)
+    if doenca.get("zoonose_urbana"):
         linhas = [
             f"🛡️ **{MARCADOR_ALERTA}: suspeita de {doenca['nome']}**\n",
             f"• Doença de notificação compulsória compartilhada (Saúde Pública / MAPA). {origem}",
@@ -309,7 +294,6 @@ def parecer_da_doenca(doenca: dict, por_sinais: bool = False, especie: Optional[
 
 def aplicar_barragem(suspeita: str, especie: str, texto_completo: str = "", db: Optional[Session] = None,
                      doenca: Optional[dict] = None) -> Optional[str]:
-    """Passe 'doenca' já detectada para não consultar/casar duas vezes."""
     doenca = doenca or detectar_doenca_oficial(suspeita, especie, db=db)
     logger.info("barragem: suspeita=%r especie=%r -> %s", (suspeita or "")[:80], especie,
                 doenca["nome"] if doenca else "não aplicada")
