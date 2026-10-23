@@ -238,6 +238,7 @@ FAIXAS_DOSE_REFERENCIA = {
 }
 # Dose DIÁRIA total (mg/kg/dia) para cães, só para alertar. Carprofeno: 4,4 mg/kg/dia (2,2 mg/kg a cada 12 h
 # ou 4,4 mg/kg a cada 24 h). Confira sempre o formulário/bula.
+CONCENTRACOES_USUAIS = {"buprenorfina": (0.3,)}
 FAIXAS_DOSE_DIARIA_REFERENCIA = {"carprofeno": (4.0, 4.8)}
 PESO_MAXIMO_KG = 1500.0
 
@@ -399,7 +400,9 @@ def _calcular_dosagem(dose_mg_kg, peso, conc_valor, conc_unidade, alertas, nome)
             )
         else:
             dado = round(n * 4) / 4 * conc
-            texto += f" ≈ {_fracao_comprimido(n)} de {unidade} de {_fmt(conc)} mg"
+            frac = _fracao_comprimido(n)
+            prep = f"{unidade}s" if round(n * 4) > 4 else f"de {unidade}"
+            texto += f" ≈ {frac} {prep} de {_fmt(conc)} mg"
             if abs(dado - total_mg) / total_mg > 0.20:
                 alertas.append(
                     f"{nome}: o fracionamento ({_fmt(dado)} mg) difere mais de 20% da dose "
@@ -427,7 +430,7 @@ def _concentracao_da_apresentacao(apresentacao: str):
         return valor, UNIDADES_CONCENTRACAO[f"mg/{sufixo}"]
     if re.search(r"\bcaps(ula|ulas)?\b", t):
         return valor, "mg/cápsula"
-    if re.search(r"\b(comprimido|comprimidos|comp)\b", t):
+    if re.search(r"\b(comprimido|comprimidos|comp|tablet|tablete|tabletes|tabs?|cpr|cp)\b", t):
         return valor, "mg/comprimido"
     if re.search(r"\b(solucao|suspensao|injecao|injetavel|gotas|xarope)\b", t):
         return None                         # líquido sem 'mg/mL' explícito: ambíguo, não adivinhar
@@ -625,6 +628,29 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
 
         dias_n = _numero(bruto.get("duracao_dias"))
         conc_n = _numero(conc_valor)
+        # Comprimido/cápsula que exigiria muitas unidades por tomada: provável apresentação inventada.
+        if (dose is not None and peso is not None and conc_n and conc_unidade in ("mg/comprimido", "mg/cápsula")
+                and grupo in ("canino", "felino")):
+            n_un = dose * peso / conc_n
+            if n_un > 4:
+                alertas.append(
+                    f"{nome}: com a apresentação de {_fmt(conc_n)} mg seriam ≈ {_fmt(n_un)} unidades por tomada. "
+                    "Provável apresentação inexistente: confira a concentração comercial real antes de emitir."
+                )
+        # Concentração comercial usual (rede de segurança contra apresentação inventada).
+        usual = next((u for k, u in CONCENTRACOES_USUAIS.items() if k in nome_n), None)
+        if usual and conc_n and conc_unidade == "mg/mL" and not _via_oral(via_bruta) and conc_n not in usual:
+            alertas.append(
+                f"{nome}: a concentração injetável de {_fmt(conc_n)} mg/mL não é a usual no mercado "
+                f"({', '.join(_fmt(u) for u in usual)} mg/mL). Confira o produto e recalcule o volume."
+            )
+        # Meloxicam em cães: 0,2 mg/kg só no 1º dia; manutenção 0,1 mg/kg/dia.
+        if ("meloxicam" in nome_n and grupo == "canino" and dose is not None and dose > 0.1
+                and dias_n and dias_n > 1):
+            alertas.append(
+                f"{nome}: 0,2 mg/kg é a dose do 1º dia; nos demais dias a manutenção usual em cães é 0,1 mg/kg. "
+                "Como a receita repete a mesma dose por vários dias, ajuste dose ou duração."
+            )
         if (dose is not None and peso is not None and conc_n and conc_unidade == "mg/mL"
                 and grupo in ("canino", "felino")):
             volume = dose * peso / conc_n
@@ -810,6 +836,7 @@ def sugerir_receita(
         "9.1 observacao: descreva só a finalidade do medicamento (ex.: \"Analgesia\"). É proibido classificar antimicrobiano como \"de primeira linha\", \"de escolha\" ou semelhante.\n"
         "10. recomendacoes: orientações práticas de administração para ESTE paciente. Máximo de 250 caracteres, em português.\n"
         "11. PROIBIDO INVENTAR CONCENTRAÇÕES E DOSES (MATEMÁTICA PREGUIÇOSA): É terminantemente proibido criar apresentações fictícias (ex: \"1 mg/comprimido\" para Maropitant) apenas para contornar a matemática. Use EXATAMENTE os miligramas reais de prateleira da indústria (ex: 16 mg, 20 mg). O sistema Python fará o cálculo do fracionamento. Se incompatível com o peso, prescreva como Fórmula Manipulada, EXCETO medicamento de controle especial: nele use a apresentação comercial real ou deixe a dose para o veterinário. Se for uma ESPÉCIE EXÓTICA e a dose da medicação escolhida (ex: Enrofloxacino, Metoclopramida, Meloxicam) precisar ser confirmada, escreva na via 'A definir' e deixe a dose_mg_kg como null. Não adivinhe a quantidade em ml.\n"
+        "11.1 Escreva a apresentação em português (\"comprimido\", nunca \"tablet\"). Buprenorfina injetável existe a 0,3 mg/mL.\n"
         "12. É EXPRESSAMENTE PROIBIDO INVENTAR CONCENTRAÇÕES DE PRATELEIRA: Use as concentrações reais da indústria brasileira aprovadas pelos órgãos competentes. Se a IA decidir transformar um medicamento que só existe em comprimido (como Maropitant ou Famotidina) numa suspensão oral ou xarope, deve OBRIGATORIAMENTE escrever 'Fórmula Manipulada' no nome da apresentação.\n"
         "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\". EXCEÇÃO: fármaco sem eficácia por via oral na espécie (ex.: buprenorfina em cães) deve ser indicado como injetável (SC/IM/IV) para aplicação na clínica, com disponibilidade \"CLINICA\". Aplicação na clínica NÃO serve para uso domiciliar contínuo: limite-a à fase aguda (poucos dias) e use via oral no restante. Em cães e gatos acima de 15 kg prefira comprimidos; líquidos só para animais pequenos ou doses que não caibam em comprimido, com volume plausível por tomada (oral até cerca de 10 mL; injetável até cerca de 5 mL por local).\n"
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias). Indique UM antimicrobiano por vez: antibiótico de segunda linha citado no parecer \"se houver piora\" NÃO entra na receita inicial.\n"
