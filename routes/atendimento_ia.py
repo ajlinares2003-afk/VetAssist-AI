@@ -195,7 +195,10 @@ def _quantidade_total(dose, peso, conc_valor, conc_unidade, freq_horas, dias) ->
         return f"1 (um) frasco — volume do tratamento completo ≈ {_fmt(total_ml)} mL"
     if conc_unidade in ("mg/comprimido", "mg/cápsula"):
         unidade = "comprimido" if conc_unidade == "mg/comprimido" else "cápsula"
-        por_tomada = round(por_tomada_mg / conc * 4) / 4
+        if conc_unidade == "mg/cápsula":   # cápsula não se fraciona: unidades inteiras
+            por_tomada = max(1, int(por_tomada_mg / conc + 0.5))
+        else:
+            por_tomada = round(por_tomada_mg / conc * 4) / 4
         if por_tomada <= 0:
             return None
         n = math.ceil(por_tomada * tomadas)
@@ -363,6 +366,16 @@ def _calcular_dosagem(dose_mg_kg, peso, conc_valor, conc_unidade, alertas, nome)
     elif conc and conc_unidade in ("mg/comprimido", "mg/cápsula"):
         unidade = "comprimido" if conc_unidade == "mg/comprimido" else "cápsula"
         n = total_mg / conc
+        if conc_unidade == "mg/cápsula":   # cápsula não se fraciona: unidades inteiras
+            n_cap = max(1, int(n + 0.5))
+            dado = n_cap * conc
+            texto += f" ≈ {n_cap} cápsula{'s' if n_cap > 1 else ''} de {_fmt(conc)} mg"
+            if abs(dado - total_mg) / total_mg > 0.20:
+                alertas.append(
+                    f"{nome}: a cápsula não se fraciona; {n_cap} cápsula(s) = {_fmt(dado)} mg, diferente da dose "
+                    f"calculada ({_fmt(total_mg)} mg) em mais de 20%. Avalie outra apresentação ou manipulação."
+                )
+            return texto + ")"
         if round(n * 4) == 0:
             texto += f" < 1/4 de {unidade} de {_fmt(conc)} mg"
             alertas.append(
@@ -378,6 +391,32 @@ def _calcular_dosagem(dose_mg_kg, peso, conc_valor, conc_unidade, alertas, nome)
                     f"calculada ({_fmt(total_mg)} mg). Avalie outra apresentação ou manipulação."
                 )
     return texto + ")"
+
+
+def _concentracao_da_apresentacao(apresentacao: str):
+    """Quando a IA não preenche concentracao_valor/unidade, tenta ler da apresentação
+    ('Cápsula 20 mg', 'comprimido 1,5 mg', 'solução 0,3 mg/mL'). Devolve (valor, unidade) ou None."""
+    # O número é lido do texto original: _norm troca a vírgula decimal por espaço ('1,5' viraria '15').
+    t = _norm(apresentacao)
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*mg(?:\s*/\s*(ml|g|comprimido|capsula|cápsula))?",
+                  str(apresentacao or "").lower())
+    if not m:
+        return None
+    valor = m.group(1).replace(",", ".")
+    sufixo = _norm(m.group(2)) if m.group(2) else None
+    if sufixo == "g":                       # pomadas/géis (mg/g) não entram no cálculo de dose
+        return None
+    if sufixo == "ml":
+        return valor, "mg/mL"
+    if sufixo in ("comprimido", "capsula"):
+        return valor, UNIDADES_CONCENTRACAO[f"mg/{sufixo}"]
+    if re.search(r"\bcaps(ula|ulas)?\b", t):
+        return valor, "mg/cápsula"
+    if re.search(r"\b(comprimido|comprimidos|comp)\b", t):
+        return valor, "mg/comprimido"
+    if re.search(r"\b(solucao|suspensao|injecao|injetavel|gotas|xarope)\b", t):
+        return None                         # líquido sem 'mg/mL' explícito: ambíguo, não adivinhar
+    return None
 
 
 def _roedor_ou_lagomorfo(*descricoes) -> bool:
@@ -530,6 +569,11 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         titulo = f"{nome} {apresentacao}".strip()
 
         conc_unidade = UNIDADES_CONCENTRACAO.get(_norm(bruto.get("concentracao_unidade")))
+        conc_valor = bruto.get("concentracao_valor")
+        if not (_numero(conc_valor) and conc_unidade):
+            achada = _concentracao_da_apresentacao(apresentacao)
+            if achada:
+                conc_valor, conc_unidade = achada
         dose = _numero(bruto.get("dose_mg_kg"))
         posologia = str(bruto.get("posologia_texto") or "").strip()[:300]
 
@@ -543,7 +587,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 f"({_fmt(faixa[0])} a {_fmt(faixa[1])} mg/kg). Confira no formulário antes de emitir."
             )
         if dose is not None:
-            dosagem = _calcular_dosagem(dose, peso, bruto.get("concentracao_valor"),
+            dosagem = _calcular_dosagem(dose, peso, conc_valor,
                                         conc_unidade, alertas, nome)
         elif posologia:
             dosagem = posologia
@@ -556,7 +600,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             tipo = "A_CONFIRMAR"
 
         dias_n = _numero(bruto.get("duracao_dias"))
-        conc_n = _numero(bruto.get("concentracao_valor"))
+        conc_n = _numero(conc_valor)
         if (dose is not None and peso is not None and conc_n and conc_unidade == "mg/mL"
                 and grupo in ("canino", "felino")):
             volume = dose * peso / conc_n
@@ -600,7 +644,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     "conforme o protocolo de aplicação."
                 )
             else:
-                quantidade = _quantidade_total(dose, peso, bruto.get("concentracao_valor"), conc_unidade,
+                quantidade = _quantidade_total(dose, peso, conc_valor, conc_unidade,
                                                bruto.get("frequencia_horas"), bruto.get("duracao_dias"))
             if dias_n and dias_n > MAX_DIAS_CONTROLADO:
                 alertas.append(
