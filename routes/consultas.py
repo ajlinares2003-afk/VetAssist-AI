@@ -298,6 +298,7 @@ def sugestoes_copiloto_multimodal(
             f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
             f"2.8 ANALGESIA E GASTROPROTEÇÃO: ao indicar opioide, informe a via e o local de administração adequados à espécie; em cães, buprenorfina por via oral deglutida tem baixa biodisponibilidade, então indique aplicação parenteral (SC/IM/IV) na clínica. Não indique protetor gástrico sem AINE, corticoide ou risco gastrointestinal descrito.\n"
             f"2.9 REPRODUÇÃO: em cão reprodutor ou fêmea com falha de concepção, aborto, epididimite/orquite ou piospermia, inclua a triagem de Brucella canis (sorologia, com confirmação por cultura ou PCR conforme o caso) entre os exames e oriente o manejo seguro de secreções e sêmen (zoonose).\n"
+            f"2.10 FLUIDOTERAPIA: só sugira fluidoterapia quando os dados descreverem desidratação, vômito, diarreia, anorexia, choque ou instabilidade, e cite esse motivo na própria frase. Em paciente estável, normohidratado e que bebe água, não a inclua. Não use taxa de anestesia ou procedimento (ex.: 5 mL/kg/h) como manutenção de paciente acordado.\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
             f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
@@ -352,6 +353,9 @@ def sugestoes_copiloto_multimodal(
                     "11.1 ANEXOS: você NÃO viu o conteúdo dos arquivos anexados. NÃO mencione, descreva, suponha nem solicite "
                     "nenhum exame com base nos anexos (nem tipo de exame, nem região anatômica); apenas diga, em uma frase, "
                     "que o veterinário deve avaliar os arquivos anexados.\n")
+            if not com_anexos and not nomes_arquivos_originais:
+                # Sem nenhum arquivo, a regra "o veterinário deve avaliar os anexos" fazia a IA citar anexos inexistentes.
+                regra_anexos = "11.1 ANEXOS: não há arquivos anexados; NÃO mencione anexos nem peça avaliação de arquivos.\n"
             return _prompt_base(linha_anexos, regra_anexos)
 
         prompt_sem_anexos = montar_prompt(False)
