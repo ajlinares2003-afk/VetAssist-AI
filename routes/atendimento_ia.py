@@ -287,7 +287,10 @@ def _grupo_animal(*descricoes) -> str:
 
 
 def _fmt(numero: float, casas: int = 2) -> str:
-    """Número no padrão brasileiro, sem zeros sobrando (2,5 / 0,4 / 12)."""
+    """Número no padrão brasileiro, sem zeros sobrando (2,5 / 0,4 / 12).
+    Abaixo de 1 usa 3 casas: com 2, uma dose de 0,015 mg/kg era exibida como '0,01' (e o cálculo usava 0,015)."""
+    if casas == 2 and abs(numero) < 1:
+        casas = 3
     texto = f"{numero:.{casas}f}".rstrip("0").rstrip(".")
     return texto.replace(".", ",")
 
