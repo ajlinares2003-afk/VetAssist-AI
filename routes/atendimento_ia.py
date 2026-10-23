@@ -73,6 +73,17 @@ POSSIVELMENTE_CONTROLADOS = (
     "amitriptilina", "clomipramina", "fluoxetina", "sertralina", "paroxetina", "carbamazepina",
 )
 
+# Fármacos sem eficácia por via ORAL na espécie: o item oral é removido e o veterinário decide.
+ORAL_INEFICAZ_POR_GRUPO = {
+    "canino": {
+        "buprenorfina": "por via oral deglutida a buprenorfina tem baixa biodisponibilidade em cães",
+    },
+}
+
+# Quadros reprodutivos em cães que exigem triagem de Brucella canis (zoonose).
+MARCADORES_REPRODUCAO = ("epididim", "orquite", "piospermia", "infertilidade", "falha de concepcao",
+                         "falhas de concepcao", "aborto", "abortamento")
+
 # Guarda-corpo determinístico: o que o prompt proíbe, o código também impõe.
 AINES = (
     "meloxicam", "carprofeno", "firocoxibe", "cetoprofeno", "flunixina", "flunixin", "piroxicam",
@@ -472,6 +483,13 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             )
             continue
         via_bruta = str(bruto.get("via") or "")
+        motivo_oral = next((m for p_, m in ORAL_INEFICAZ_POR_GRUPO.get(grupo, {}).items() if p_ in nome_n), None)
+        if motivo_oral and _via_oral(via_bruta):
+            alertas.append(
+                f"{nome}: item oral removido por segurança ({motivo_oral}). Indique aplicação parenteral "
+                "(SC/IM/IV) na clínica ou outro analgésico; o veterinário pode incluir manualmente, se julgar adequado."
+            )
+            continue
         if sensivel_oral and _via_oral(via_bruta) \
                 and any(p in nome_n for p in ANTIBIOTICOS_RISCO_ORAL_ROEDORES):
             alertas.append(
@@ -534,8 +552,14 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             alertas.append(
                 f"{nome}: medicamento de controle especial"
                 f"{f' (lista {lista_controle})' if lista_controle else ''} (Portaria SVS/MS 344/98). "
-                "Confira a lista vigente e a quantidade antes de emitir."
+                "Confira a lista vigente, o tipo de receituário exigido (A1-A3: Notificação de Receita A; "
+                "B1-B2: Notificação de Receita B; C1: receita de controle especial) e a quantidade antes de emitir."
             )
+            if "manipulad" in _norm(apresentacao):
+                alertas.append(
+                    f"{nome}: apresentação manipulada de medicamento controlado. Confirme com a farmácia de "
+                    "manipulação e use apenas o receituário correto."
+                )
             quantidade = _quantidade_total(dose, peso, bruto.get("concentracao_valor"), conc_unidade,
                                            bruto.get("frequencia_horas"), bruto.get("duracao_dias"))
 
@@ -572,11 +596,11 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
     return {"itens": itens, "alertas": alertas[:15]}
 
 
-def _doenca_oficial_do_caso(d: dict) -> Optional[dict]:
+def _doenca_oficial_do_caso(d: dict, db: Session) -> Optional[dict]:
     """Barragem sanitária: a doença oficial do caso (ou None). Usada pelas rotas que NÃO
     podem consultar o LLM quando há doença de notificação/controle oficial."""
-    return doenca_do_parecer(d.get("parecer_copiloto"), d.get("especie")) or \
-        detectar_doenca_oficial(d.get("suspeita_diagnostica") or "", d.get("especie"))
+    return doenca_do_parecer(d.get("parecer_copiloto"), d.get("especie"), db=db) or \
+        detectar_doenca_oficial(d.get("suspeita_diagnostica") or "", d.get("especie"), db=db)
 
 
 def _alertas_receita_oficial(doenca: dict) -> List[str]:
@@ -585,7 +609,7 @@ def _alertas_receita_oficial(doenca: dict) -> List[str]:
         doenca.get("tratamento") or "Não há tratamento medicamentoso autorizado para esta condição: não prescrever fármacos "
         "(antimicrobianos, AINEs, corticosteroides ou medicamentos humanos).",
         "Isolar imediatamente os animais suspeitos e restringir o trânsito até a orientação oficial.",
-        "Notificar imediatamente o serviço veterinário oficial (MAPA / órgão estadual de defesa sanitária).",
+        f"Notificar imediatamente: {doenca.get('orgao') or 'serviço veterinário oficial (MAPA / órgão estadual de defesa sanitária)'}.",
         "A destinação dos animais (ex.: sacrifício sanitário) é definida e conduzida exclusivamente "
         "pelo serviço oficial após a confirmação laboratorial.",
     ]
@@ -617,7 +641,7 @@ def sugerir_receita(
     _exigir_parecer(d)
 
     # Barragem sanitária: doença oficial NÃO passa pelo LLM. Receita vazia + alerta fixo.
-    doenca = _doenca_oficial_do_caso(d)
+    doenca = _doenca_oficial_do_caso(d, db)
     if doenca:
         logger.info("sugerir-receita: barragem aplicada (%s), LLM não consultado", doenca["nome"])
         return _resposta_barragem_receita(doenca, d.get("peso"))
@@ -627,13 +651,13 @@ def sugerir_receita(
         "receita. Com base SOMENTE no caso abaixo, sugira o tratamento medicamentoso necessário.\n\n"
         f"CASO:\n{_texto_do_caso(d)}\n\n"
         "REGRAS OBRIGATÓRIAS:\n"
-        "1. Sugira os medicamentos justificados pelo parecer clínico para um suporte terapêutico completo e seguro, sem omitir itens essenciais (ex: protetores gástricos, analgésicos), SALVO nas exceções de segurança (2.3 e regra 7), que PREVALECEM sobre esta regra. Se nenhum medicamento for justificado, devolva a lista vazia.\n"
+        "1. Sugira os medicamentos justificados pelo parecer clínico para um suporte terapêutico completo e seguro, sem omitir itens essenciais (ex: analgésicos), SALVO nas exceções de segurança (2.3 e regra 7), que PREVALECEM sobre esta regra. Se nenhum medicamento for justificado, devolva a lista vazia. Protetor gástrico só se o parecer descrever AINE, corticoide, vômito, gastrite ou risco gastrointestinal.\n"
         "2. ESPÉCIE E TOXICOLOGIA VETERINÁRIA: Doses, segurança e antídotos dependem OBRIGATORIAMENTE da ESPÉCIE. "
         "É expressamente proibido sugerir tratamentos humanos tóxicos para animais (ex.: paracetamol/permetrina/azul de metileno para felinos; ibuprofeno/diclofenaco para cães). Para intoxicação por Paracetamol, o antídoto padrão é a Acetilcisteína.\n"
         "2.1 TOXICOLOGIA DE LAGOMORFOS E ROEDORES: É TERMINANTEMENTE PROIBIDO prescrever penicilinas (ex: Amoxicilina), lincosamidas ou cefalosporinas por via ORAL para coelhos, porquinhos-da-índia e chinchilas. Estas substâncias causam enterotoxemia e morte nestas espécies. Se uma destas drogas tiver sido prescrita acidentalmente ou administrada pelo tutor, OBRIGATORIAMENTE gere um alerta sobre a necessidade de estabilização do choque e disbiose cecal.\n"
         "2.2 ANIMAIS DE PRODUÇÃO E AQUICULTURA: Para espécies de produção (corte/consumo humano), é OBRIGATORIAMENTE NECESSÁRIO informar no campo de "
         "alertas ou recomendações o período de carência (retirada) regulamentado pelos órgãos competentes para o fármaco prescrito, garantindo a segurança alimentar.\n"
-        "2.3 DOENÇA DE NOTIFICAÇÃO OFICIAL: Se o caso sugerir doença de notificação obrigatória ou de controle oficial (ex.: raiva, febre aftosa, brucelose, mormo, influenza aviária, Newcastle, peste suína), NÃO prescreva nenhum medicamento: devolva \"medicamentos\": [] e, em \"alertas\", apenas a orientação de isolar o animal e notificar o serviço veterinário oficial.\n"
+        "2.3 DOENÇA DE NOTIFICAÇÃO OFICIAL: Se o caso sugerir doença de notificação obrigatória ou de controle oficial (ex.: raiva, febre aftosa, mormo, influenza aviária, Newcastle, peste suína; em cães e gatos, só doenças de notificação oficial para essas espécies, como a raiva), NÃO prescreva nenhum medicamento: devolva \"medicamentos\": [] e, em \"alertas\", apenas a orientação de isolar o animal e notificar o serviço veterinário oficial.\n"
         "3. NÃO invente dose. Para espécie exótica/silvestre sem dose bem estabelecida na "
         "literatura, deixe dose_mg_kg como null e escreva em posologia_texto "
         "\"definir dose com o veterinário\".\n"
@@ -650,9 +674,9 @@ def sugerir_receita(
         "SVS/MS 344/98 da ANVISA (listas A1 a C5) OU nas normativas de controle especial do MAPA "
         "(ex: IN 35/2017 para anestésicos). Nesse caso informe a lista em lista_controle (ex: 'C1', 'MAPA'). Caso contrário, false e null.\n"
         "10. recomendacoes: orientações práticas de administração para ESTE paciente. Máximo de 250 caracteres, em português.\n"
-        "11. PROIBIDO INVENTAR CONCENTRAÇÕES E DOSES (MATEMÁTICA PREGUIÇOSA): É terminantemente proibido criar apresentações fictícias (ex: \"1 mg/comprimido\" para Maropitant) apenas para contornar a matemática. Use EXATAMENTE os miligramas reais de prateleira da indústria (ex: 16 mg, 20 mg). O sistema Python fará o cálculo do fracionamento. Se incompatível com o peso, prescreva obrigatoriamente como Fórmula Manipulada. Se for uma ESPÉCIE EXÓTICA e a dose da medicação escolhida (ex: Enrofloxacino, Metoclopramida, Meloxicam) precisar ser confirmada, escreva na via 'A definir' e deixe a dose_mg_kg como null. Não adivinhe a quantidade em ml.\n"
+        "11. PROIBIDO INVENTAR CONCENTRAÇÕES E DOSES (MATEMÁTICA PREGUIÇOSA): É terminantemente proibido criar apresentações fictícias (ex: \"1 mg/comprimido\" para Maropitant) apenas para contornar a matemática. Use EXATAMENTE os miligramas reais de prateleira da indústria (ex: 16 mg, 20 mg). O sistema Python fará o cálculo do fracionamento. Se incompatível com o peso, prescreva como Fórmula Manipulada, EXCETO medicamento de controle especial: nele use a apresentação comercial real ou deixe a dose para o veterinário. Se for uma ESPÉCIE EXÓTICA e a dose da medicação escolhida (ex: Enrofloxacino, Metoclopramida, Meloxicam) precisar ser confirmada, escreva na via 'A definir' e deixe a dose_mg_kg como null. Não adivinhe a quantidade em ml.\n"
         "12. É EXPRESSAMENTE PROIBIDO INVENTAR CONCENTRAÇÕES DE PRATELEIRA: Use as concentrações reais da indústria brasileira aprovadas pelos órgãos competentes. Se a IA decidir transformar um medicamento que só existe em comprimido (como Maropitant ou Famotidina) numa suspensão oral ou xarope, deve OBRIGATORIAMENTE escrever 'Fórmula Manipulada' no nome da apresentação.\n"
-        "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\".\n"
+        "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\". EXCEÇÃO: fármaco sem eficácia por via oral na espécie (ex.: buprenorfina em cães) deve ser indicado como injetável (SC/IM/IV) para aplicação na clínica, com disponibilidade \"CLINICA\".\n"
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias).\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
         "16. Não escreva nada fora do JSON.\n\n"
@@ -681,7 +705,7 @@ def sugerir_receita(
         [str(i.get(k) or "") for i in receita["itens"] for k in ("medicamento", "observacoes", "recomendacoes")]
         + [a for a in (resp.dados.get("alertas") or []) if isinstance(a, str)]
     ).strip()
-    doenca_saida = detectar_doenca_oficial(texto_saida, d.get("especie")) if texto_saida else None
+    doenca_saida = detectar_doenca_oficial(texto_saida, d.get("especie"), db=db) if texto_saida else None
     if doenca_saida:
         logger.warning("sugerir-receita: barragem aplicada na SAÍDA do LLM (%s)", doenca_saida["nome"])
         return _resposta_barragem_receita(doenca_saida, d.get("peso"))
@@ -718,7 +742,7 @@ def analisar_medicamentos(
 
     # Barragem sanitária: em doença oficial não há análise de receita pelo LLM. Quem adicionou o
     # medicamento à mão recebe o alerta fixo; o controle especial segue só a lista fixa (sem LLM).
-    doenca = _doenca_oficial_do_caso(d)
+    doenca = _doenca_oficial_do_caso(d, db)
     if doenca:
         logger.info("analisar-medicamentos: barragem aplicada (%s), LLM não consultado", doenca["nome"])
         alerta = (f"Prescrição não recomendada: suspeita de {doenca['nome']}, doença de notificação "
@@ -833,6 +857,26 @@ def salvar_receita(
 CATEGORIAS_EXAME = {"laboratorial": "LABORATORIAL", "imagem": "IMAGEM", "outro": "OUTRO"}
 
 
+def _garantir_triagem_brucella(exames: list, d: dict) -> list:
+    """Cão com quadro reprodutivo (epididimite, orquite, piospermia, aborto, falha de concepção): garante
+    a sorologia para Brucella canis (zoonose), mesmo que a IA a tenha esquecido."""
+    if d.get("grupo") != "canino":
+        return exames
+    caso = _norm(_texto_do_caso(d))
+    if not any(m in caso for m in MARCADORES_REPRODUCAO):
+        return exames
+    if any("brucel" in _norm(e["nome"]) for e in exames):
+        return exames
+    exames.append({
+        "nome": "Sorologia para Brucella canis",
+        "categoria": "LABORATORIAL",
+        "prioridade": "URGENTE",
+        "justificativa": "Triagem de brucelose canina em quadro reprodutivo (zoonose); confirmar por cultura ou PCR conforme o caso.",
+    })
+    exames.sort(key=lambda e: 0 if e["prioridade"] == "URGENTE" else 1)
+    return exames
+
+
 def _validar_estrutura_exames(dados: dict) -> dict:
     if not isinstance(dados.get("exames"), list):
         raise ValueError("JSON sem a lista 'exames'.")
@@ -873,7 +917,7 @@ def sugerir_exames(
 
     # Barragem sanitária: doença de notificação/controle oficial NÃO passa pelo LLM.
     # Só valem os exames oficiais (e nenhum preventivo/complementar fora do fluxo oficial).
-    doenca = _doenca_oficial_do_caso(d)
+    doenca = _doenca_oficial_do_caso(d, db)
     if doenca:
         logger.info("sugerir-exames: barragem aplicada (%s), LLM não consultado", doenca["nome"])
         oficiais = _montar_exames({"exames": [
@@ -927,7 +971,7 @@ def sugerir_exames(
         _erro_ia(exc)
 
     return {
-        "exames": _montar_exames(resp.dados),
+        "exames": _garantir_triagem_brucella(_montar_exames(resp.dados), d),
         "provedor": resp.provedor,
         "modelo": resp.modelo,
         "aviso": "Sugestão gerada por IA. O veterinário decide quais exames solicitar.",

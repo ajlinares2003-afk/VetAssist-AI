@@ -295,6 +295,8 @@ def sugestoes_copiloto_multimodal(
             f"2.5 {regra_sanitaria}\n"
             f"2.6 MANEJO VACINAL (MAPA): É proibido sugerir vacinação incorreta ou tratamentos empíricos.\n"
             f"2.7 PROIBIÇÃO DE FÁRMACOS HUMANOS EM GRANDES ANIMAIS: É TERMINANTEMENTE PROIBIDO prescrever medicamentos de uso humano (como Isoniazida, Rifampicina, Etambutol ou outros fármacos humanos restritos) para equinos, bovinos ou animais de grande porte.\n"
+            f"2.8 ANALGESIA E GASTROPROTEÇÃO: ao indicar opioide, informe a via e o local de administração adequados à espécie; em cães, buprenorfina por via oral deglutida tem baixa biodisponibilidade, então indique aplicação parenteral (SC/IM/IV) na clínica. Não indique protetor gástrico sem AINE, corticoide ou risco gastrointestinal descrito.\n"
+            f"2.9 REPRODUÇÃO: em cão reprodutor ou fêmea com falha de concepção, aborto, epididimite/orquite ou piospermia, inclua a triagem de Brucella canis (sorologia, com confirmação por cultura ou PCR conforme o caso) entre os exames e oriente o manejo seguro de secreções e sêmen (zoonose).\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
             f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
