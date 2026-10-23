@@ -48,7 +48,8 @@ MAX_BYTES_ANEXOS_IA = 14 * 1024 * 1024
 _TERMOS_CIRURGIA = ("cirurgia", "cirúrgic", "hemilaminectomia", "corpectomia", "osteossíntese",
                     "laparotomia", "celiotomia")
 _NEGACOES = ("sem ", "não ", "nao ", "evitar", "evite", "descart", "nenhuma", "ausência", "sem necessidade",
-             "dispensa", "afasta")
+             "dispensa", "afasta", "avaliar necessidade", "avaliar a necessidade", "se houver", "caso haja",
+             "se necess")
 
 
 def ha_indicacao_cirurgica(texto: str) -> bool:

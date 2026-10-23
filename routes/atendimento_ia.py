@@ -80,6 +80,20 @@ ORAL_INEFICAZ_POR_GRUPO = {
     },
 }
 
+# Plausibilidade de apresentação/volume (só alerta; quem decide é o veterinário). Cães e gatos.
+LIMITE_VOLUME_ORAL_ML = 15.0
+LIMITE_VOLUME_INJETAVEL_ML = 5.0
+MAX_DIAS_CLINICA = 3        # aplicação na clínica por mais dias que isso pede confirmação
+MAX_DIAS_CONTROLADO = 7     # controlado por mais dias que isso pede confirmação
+
+ANTIMICROBIANOS = (
+    "amoxicilina", "ampicilina", "penicilina", "clavulan", "cefalexina", "cefadroxila", "cefovecina",
+    "cefpodoxima", "ceftiofur", "enrofloxacino", "marbofloxacino", "ciprofloxacino", "pradofloxacino",
+    "orbifloxacino", "doxiciclina", "tetraciclina", "oxitetraciclina", "metronidazol", "clindamicina",
+    "lincomicina", "azitromicina", "claritromicina", "gentamicina", "amicacina", "sulfadiazina",
+    "trimetoprima", "florfenicol", "rifampicina", "tilosina", "eritromicina",
+)
+
 # Quadros reprodutivos em cães que exigem triagem de Brucella canis (zoonose).
 MARCADORES_REPRODUCAO = ("epididim", "orquite", "piospermia", "infertilidade", "falha de concepcao",
                          "falhas de concepcao", "aborto", "abortamento")
@@ -541,6 +555,23 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         if tipo not in TIPO_USO_ROTULO:
             tipo = "A_CONFIRMAR"
 
+        dias_n = _numero(bruto.get("duracao_dias"))
+        conc_n = _numero(bruto.get("concentracao_valor"))
+        if (dose is not None and peso is not None and conc_n and conc_unidade == "mg/mL"
+                and grupo in ("canino", "felino")):
+            volume = dose * peso / conc_n
+            limite = LIMITE_VOLUME_ORAL_ML if _via_oral(via_bruta) else LIMITE_VOLUME_INJETAVEL_ML
+            if volume > limite:
+                alertas.append(
+                    f"{nome}: volume de ≈ {_fmt(volume)} mL por tomada parece alto para esta espécie. Confira a "
+                    "concentração do produto ou escolha outra apresentação (ex.: comprimido ou concentração maior)."
+                )
+        if tipo == "CLINICA" and dias_n and dias_n > MAX_DIAS_CLINICA:
+            alertas.append(
+                f"{nome}: aplicação na clínica por {int(round(dias_n))} dias. Confirme se haverá retornos diários "
+                "ou prefira apresentação oral para uso em casa."
+            )
+
         via = str(bruto.get("via") or "").strip().lower()[:40]
         obs = str(bruto.get("observacao") or "").strip()[:400]
         observacoes = " ".join(p for p in (f"Via: {via}." if via else "", obs) if p)
@@ -563,8 +594,19 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     f"{nome}: apresentação manipulada de medicamento controlado. Confirme com a farmácia de "
                     "manipulação e use apenas o receituário correto."
                 )
-            quantidade = _quantidade_total(dose, peso, bruto.get("concentracao_valor"), conc_unidade,
-                                           bruto.get("frequencia_horas"), bruto.get("duracao_dias"))
+            if tipo == "CLINICA":
+                alertas.append(
+                    f"{nome}: item de aplicação na clínica; não há dispensação ao tutor. Defina a quantidade "
+                    "conforme o protocolo de aplicação."
+                )
+            else:
+                quantidade = _quantidade_total(dose, peso, bruto.get("concentracao_valor"), conc_unidade,
+                                               bruto.get("frequencia_horas"), bruto.get("duracao_dias"))
+            if dias_n and dias_n > MAX_DIAS_CONTROLADO:
+                alertas.append(
+                    f"{nome}: medicamento controlado por {int(round(dias_n))} dias. Confirme a necessidade e "
+                    "programe reavaliação."
+                )
 
         itens.append({
             "medicamento": titulo,
@@ -580,6 +622,14 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             "quantidade": quantidade,
         })
         meta.append((nome_n, sistemica))
+
+    antimicrobianos = [it["medicamento"] for it in itens
+                       if any(a in _norm(it["medicamento"]) for a in ANTIMICROBIANOS)]
+    if len(antimicrobianos) > 1:
+        alertas.append(
+            "Mais de um antimicrobiano na receita (" + "; ".join(antimicrobianos) + "). Confirme se a associação "
+            "é intencional; em geral inicia-se com um só e ajusta-se pelo antibiograma."
+        )
 
     # AINE + corticosteroide na mesma receita: risco de úlcera. Remove os dois e deixa a escolha ao veterinário.
     idx_aine = {i for i, (n, s) in enumerate(meta) if s and any(a in n for a in AINES)}
@@ -670,7 +720,7 @@ def sugerir_receita(
         "5. frequencia_horas é o intervalo em horas (24, 12, 8, 6...). duracao_dias é um número.\n"
         "6. disponibilidade: \"HUMANO\" (comum em farmácia/drogaria), \"VETERINARIO\" (vendido em "
         "pet shop, agropecuária ou clínica veterinária) ou \"CLINICA\" (injetável aplicado na clínica).\n"
-        "7. PROPORCIONALIDADE E INTERAÇÕES FATAIS: A prescrição deve ser compatível com a gravidade. Evite opioides fortes em quadros leves. "
+        "7. PROPORCIONALIDADE E INTERAÇÕES FATAIS: A prescrição deve ser compatível com a gravidade. Evite opioides fortes em quadros leves; quando indicados, pelo menor tempo necessário (poucos dias, com reavaliação). "
         "É EXPRESSAMENTE PROIBIDO prescrever AINEs e Corticosteroides simultaneamente (risco severo de úlcera). NUNCA prescreva AINEs para pacientes com suspeita de intoxicação aguda, desidratação severa ou falência renal/hepática.\n"
         "8. MEDICINA BASEADA EM EVIDÊNCIAS: Mantenha o foco estritamente na medicina alopática veterinária. É proibido prescrever ou sugerir chás, simpatias, homeopatia não comprovada ou remédios caseiros humanos.\n"
         "9. controlado: true se o princípio ativo consta nas listas de controle especial da Portaria "
@@ -679,8 +729,8 @@ def sugerir_receita(
         "10. recomendacoes: orientações práticas de administração para ESTE paciente. Máximo de 250 caracteres, em português.\n"
         "11. PROIBIDO INVENTAR CONCENTRAÇÕES E DOSES (MATEMÁTICA PREGUIÇOSA): É terminantemente proibido criar apresentações fictícias (ex: \"1 mg/comprimido\" para Maropitant) apenas para contornar a matemática. Use EXATAMENTE os miligramas reais de prateleira da indústria (ex: 16 mg, 20 mg). O sistema Python fará o cálculo do fracionamento. Se incompatível com o peso, prescreva como Fórmula Manipulada, EXCETO medicamento de controle especial: nele use a apresentação comercial real ou deixe a dose para o veterinário. Se for uma ESPÉCIE EXÓTICA e a dose da medicação escolhida (ex: Enrofloxacino, Metoclopramida, Meloxicam) precisar ser confirmada, escreva na via 'A definir' e deixe a dose_mg_kg como null. Não adivinhe a quantidade em ml.\n"
         "12. É EXPRESSAMENTE PROIBIDO INVENTAR CONCENTRAÇÕES DE PRATELEIRA: Use as concentrações reais da indústria brasileira aprovadas pelos órgãos competentes. Se a IA decidir transformar um medicamento que só existe em comprimido (como Maropitant ou Famotidina) numa suspensão oral ou xarope, deve OBRIGATORIAMENTE escrever 'Fórmula Manipulada' no nome da apresentação.\n"
-        "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\". EXCEÇÃO: fármaco sem eficácia por via oral na espécie (ex.: buprenorfina em cães) deve ser indicado como injetável (SC/IM/IV) para aplicação na clínica, com disponibilidade \"CLINICA\".\n"
-        "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias).\n"
+        "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\". EXCEÇÃO: fármaco sem eficácia por via oral na espécie (ex.: buprenorfina em cães) deve ser indicado como injetável (SC/IM/IV) para aplicação na clínica, com disponibilidade \"CLINICA\". Aplicação na clínica NÃO serve para uso domiciliar contínuo: limite-a à fase aguda (poucos dias) e use via oral no restante. Em cães e gatos acima de 15 kg prefira comprimidos; líquidos só para animais pequenos ou doses que não caibam em comprimido, com volume plausível por tomada (oral até cerca de 10 mL; injetável até cerca de 5 mL por local).\n"
+        "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias). Indique UM antimicrobiano por vez: antibiótico de segunda linha citado no parecer \"se houver piora\" NÃO entra na receita inicial.\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
         "16. Não escreva nada fora do JSON.\n\n"
         "FORMATO (JSON):\n"
