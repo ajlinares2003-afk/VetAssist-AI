@@ -807,6 +807,7 @@ def sugerir_receita(
         "9. controlado: true se o princípio ativo consta nas listas de controle especial da Portaria "
         "SVS/MS 344/98 da ANVISA (listas A1 a C5) OU nas normativas de controle especial do MAPA "
         "(ex: IN 35/2017 para anestésicos). Nesse caso informe a lista em lista_controle (ex: 'C1', 'MAPA'). Caso contrário, false e null.\n"
+        "9.1 observacao: descreva só a finalidade do medicamento (ex.: \"Analgesia\"). É proibido classificar antimicrobiano como \"de primeira linha\", \"de escolha\" ou semelhante.\n"
         "10. recomendacoes: orientações práticas de administração para ESTE paciente. Máximo de 250 caracteres, em português.\n"
         "11. PROIBIDO INVENTAR CONCENTRAÇÕES E DOSES (MATEMÁTICA PREGUIÇOSA): É terminantemente proibido criar apresentações fictícias (ex: \"1 mg/comprimido\" para Maropitant) apenas para contornar a matemática. Use EXATAMENTE os miligramas reais de prateleira da indústria (ex: 16 mg, 20 mg). O sistema Python fará o cálculo do fracionamento. Se incompatível com o peso, prescreva como Fórmula Manipulada, EXCETO medicamento de controle especial: nele use a apresentação comercial real ou deixe a dose para o veterinário. Se for uma ESPÉCIE EXÓTICA e a dose da medicação escolhida (ex: Enrofloxacino, Metoclopramida, Meloxicam) precisar ser confirmada, escreva na via 'A definir' e deixe a dose_mg_kg como null. Não adivinhe a quantidade em ml.\n"
         "12. É EXPRESSAMENTE PROIBIDO INVENTAR CONCENTRAÇÕES DE PRATELEIRA: Use as concentrações reais da indústria brasileira aprovadas pelos órgãos competentes. Se a IA decidir transformar um medicamento que só existe em comprimido (como Maropitant ou Famotidina) numa suspensão oral ou xarope, deve OBRIGATORIAMENTE escrever 'Fórmula Manipulada' no nome da apresentação.\n"
@@ -1000,7 +1001,9 @@ def _garantir_triagem_brucella(exames: list, d: dict) -> list:
     caso = _norm(_texto_do_caso(d))
     if not any(m in caso for m in MARCADORES_REPRODUCAO):
         return exames
-    if any("brucel" in _norm(e["nome"]) for e in exames):
+    # Só dispensa a triagem se já houver SOROLOGIA (ELISA/aglutinação/IDGA); PCR ou cultura isolados não bastam.
+    if any("brucel" in _norm(e["nome"]) and any(t in _norm(e["nome"]) for t in ("sorolog", "elisa", "aglutin", "imunodifus", "idga", "rbt", "rosa bengala", "soroaglut", "rsat", "tat "))
+           for e in exames):
         return exames
     exames.append({
         "nome": "Sorologia para Brucella canis",
@@ -1090,7 +1093,8 @@ def sugerir_exames(
         "próprios da medicina humana (ex.: teste de intolerância à lactose em gato adulto; nessa situação o diagnóstico é clínico). "
         "Adeque os exames à espécie.\n"
         "4. categoria: \"LABORATORIAL\", \"IMAGEM\" ou \"OUTRO\". prioridade: \"URGENTE\" (precisa ser feito já) ou \"ROTINA\".\n"
-        "5. justificativa: uma frase clínica curta ligando o exame ao caso. SILÊNCIO ESTRUTURAL: PROIBIDO meta-comentários. Não escreva 'A IA sugere' ou 'Solicitado para'. Vá direto ao ponto.\n"
+        "4.1 AVALIAÇÃO PRÉ-AINE: se o parecer indicar AINE (meloxicam, carprofeno etc.), inclua a bioquímica sérica (função renal e hepática), salvo se o exame já constar como anexado.\n"
+        "5. justificativa: uma frase clínica curta ligando o exame ao caso, sem conduta (isolamento, tratamento, orientação ao tutor). SILÊNCIO ESTRUTURAL: PROIBIDO meta-comentários. Não escreva 'A IA sugere' ou 'Solicitado para'. Vá direto ao ponto.\n"
         "6. EMBASAMENTO CIENTÍFICO: A escolha dos exames solicitados deve basear-se OBRIGATORIAMENTE nestas fontes oficiais: "
         "'MSD / Merck Veterinary Manual' (clínica geral); 'Cornell eClinPath' (patologia laboratorial); 'Embrapa' "
         "(animais de produção); e 'ExoCalc', 'Avian Exotics' ou 'Animal Diversity Web' (aves, exóticos e silvestres). "
