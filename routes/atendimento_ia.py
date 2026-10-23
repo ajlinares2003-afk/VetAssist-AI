@@ -94,6 +94,11 @@ ANTIMICROBIANOS = (
     "trimetoprima", "florfenicol", "rifampicina", "tilosina", "eritromicina",
 )
 
+# Princípios ativos cuja lista na Portaria SVS/MS 344/98 é conhecida: corrige a IA quando ela erra a lista.
+# Confira sempre a norma vigente (as listas são atualizadas).
+LISTA_CONHECIDA = {"buprenorfina": "A1", "morfina": "A1", "metadona": "A1", "fentanil": "A1",
+                   "petidina": "A1", "meperidina": "A1"}
+
 # Quadros reprodutivos em cães que exigem triagem de Brucella canis (zoonose).
 MARCADORES_REPRODUCAO = ("epididim", "orquite", "piospermia", "infertilidade", "falha de concepcao",
                          "falhas de concepcao", "aborto", "abortamento")
@@ -183,13 +188,20 @@ def _desempacotar_observacoes(texto) -> dict:
     return {"observacoes": texto.strip(), "recomendacoes": recomendacoes.strip(), "quantidade": quantidade.strip()}
 
 
-def _quantidade_total(dose, peso, conc_valor, conc_unidade, freq_horas, dias) -> Optional[str]:
+def _quantidade_total(dose, peso, conc_valor, conc_unidade, freq_horas, dias, clinica: bool = False) -> Optional[str]:
     """Quantidade a dispensar para o tratamento completo (só quando há dados para calcular)."""
     conc, h, d = _numero(conc_valor), _numero(freq_horas), _numero(dias)
     if dose is None or peso is None or conc is None or h is None or d is None:
         return None
     tomadas = max(1, math.ceil(d * 24 / h))
     por_tomada_mg = dose * peso
+    if clinica:   # aplicado na clínica: a "quantidade" é o número de aplicações e o volume, não um frasco
+        if conc_unidade != "mg/mL":
+            return None
+        vol = por_tomada_mg / conc
+        ext = {1: "uma", 2: "duas"}.get(tomadas, _extenso(tomadas))
+        return (f"{tomadas} ({ext}) {'aplicação' if tomadas == 1 else 'aplicações'} de ≈ {_fmt(vol)} mL "
+                f"(total ≈ {_fmt(vol * tomadas)} mL), na clínica")
     if conc_unidade == "mg/mL":
         total_ml = por_tomada_mg / conc * tomadas
         return f"1 (um) frasco — volume do tratamento completo ≈ {_fmt(total_ml)} mL"
@@ -224,6 +236,9 @@ FAIXAS_DOSE_REFERENCIA = {
     "omeprazol": (0.5, 1.0),
     "maropitant": (1.0, 2.0),
 }
+# Dose DIÁRIA total (mg/kg/dia) para cães, só para alertar. Carprofeno: 4,4 mg/kg/dia (2,2 mg/kg a cada 12 h
+# ou 4,4 mg/kg a cada 24 h). Confira sempre o formulário/bula.
+FAIXAS_DOSE_DIARIA_REFERENCIA = {"carprofeno": (4.0, 4.8)}
 PESO_MAXIMO_KG = 1500.0
 
 
@@ -586,6 +601,15 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 f"{nome}: dose de {_fmt(dose)} mg/kg fora da faixa de referência cadastrada "
                 f"({_fmt(faixa[0])} a {_fmt(faixa[1])} mg/kg). Confira no formulário antes de emitir."
             )
+        faixa_dia = next((f for k, f in FAIXAS_DOSE_DIARIA_REFERENCIA.items() if k in nome_n), None)
+        freq_h = _numero(bruto.get("frequencia_horas"))
+        if dose is not None and faixa_dia and freq_h and grupo == "canino":
+            diaria = dose * 24 / freq_h
+            if not faixa_dia[0] <= diaria <= faixa_dia[1]:
+                alertas.append(
+                    f"{nome}: a dose diária resultante é de {_fmt(diaria)} mg/kg/dia, fora da faixa de referência "
+                    f"cadastrada ({_fmt(faixa_dia[0])} a {_fmt(faixa_dia[1])} mg/kg/dia). Confira dose e frequência no formulário."
+                )
         if dose is not None:
             dosagem = _calcular_dosagem(dose, peso, conc_valor,
                                         conc_unidade, alertas, nome)
@@ -622,6 +646,14 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
 
         recomendacoes = corrigir_siglas(str(bruto.get("recomendacoes") or "").strip()[:300])
         lista_controle = _lista_controle_valida(bruto.get("lista_controle"))
+        lista_ref = next((l for k, l in LISTA_CONHECIDA.items() if k in nome_n), None)
+        if lista_ref and lista_controle != lista_ref:
+            if lista_controle:
+                alertas.append(
+                    f"{nome}: a IA indicou a lista {lista_controle}, mas este princípio ativo consta na lista "
+                    f"{lista_ref} da Portaria 344/98. Foi usada a lista {lista_ref}; confirme na norma vigente."
+                )
+            lista_controle = lista_ref
         # A IA classifica; a lista fixa é só uma rede de segurança contra falso negativo.
         controlado = (_verdadeiro(bruto.get("controlado")) or bool(lista_controle)
                       or any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS))
@@ -638,14 +670,14 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     f"{nome}: apresentação manipulada de medicamento controlado. Confirme com a farmácia de "
                     "manipulação e use apenas o receituário correto."
                 )
+            quantidade = _quantidade_total(dose, peso, conc_valor, conc_unidade,
+                                           bruto.get("frequencia_horas"), bruto.get("duracao_dias"),
+                                           clinica=(tipo == "CLINICA"))
             if tipo == "CLINICA":
                 alertas.append(
-                    f"{nome}: item de aplicação na clínica; não há dispensação ao tutor. Defina a quantidade "
-                    "conforme o protocolo de aplicação."
+                    f"{nome}: item de aplicação na clínica; a quantidade indicada corresponde às aplicações "
+                    "previstas, não a um frasco dispensado ao tutor. Confirme."
                 )
-            else:
-                quantidade = _quantidade_total(dose, peso, conc_valor, conc_unidade,
-                                               bruto.get("frequencia_horas"), bruto.get("duracao_dias"))
             if dias_n and dias_n > MAX_DIAS_CONTROLADO:
                 alertas.append(
                     f"{nome}: medicamento controlado por {int(round(dias_n))} dias. Confirme a necessidade e "
@@ -689,6 +721,11 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
 
     for aviso in dados.get("alertas") or []:
         if isinstance(aviso, str) and aviso.strip():
+            n_av = _norm(aviso)
+            # Cães e gatos: sem alerta genérico de notificação (só a barragem trata raiva etc.).
+            if (grupo in ("canino", "felino") and "notific" in n_av and "raiva" not in n_av
+                    and any(k in n_av for k in ("obrigatori", "oficial", "mapa", "imediat"))):
+                continue
             alertas.append(corrigir_siglas(aviso.strip()[:300]))
     return {"itens": itens, "alertas": alertas[:15]}
 
@@ -754,7 +791,7 @@ def sugerir_receita(
         "2.1 TOXICOLOGIA DE LAGOMORFOS E ROEDORES: É TERMINANTEMENTE PROIBIDO prescrever penicilinas (ex: Amoxicilina), lincosamidas ou cefalosporinas por via ORAL para coelhos, porquinhos-da-índia e chinchilas. Estas substâncias causam enterotoxemia e morte nestas espécies. Se uma destas drogas tiver sido prescrita acidentalmente ou administrada pelo tutor, OBRIGATORIAMENTE gere um alerta sobre a necessidade de estabilização do choque e disbiose cecal.\n"
         "2.2 ANIMAIS DE PRODUÇÃO E AQUICULTURA: Para espécies de produção (corte/consumo humano), é OBRIGATORIAMENTE NECESSÁRIO informar no campo de "
         "alertas ou recomendações o período de carência (retirada) regulamentado pelos órgãos competentes para o fármaco prescrito, garantindo a segurança alimentar.\n"
-        "2.3 DOENÇA DE NOTIFICAÇÃO OFICIAL: Se o caso sugerir doença de notificação obrigatória ou de controle oficial (ex.: raiva, febre aftosa, mormo, influenza aviária, Newcastle, peste suína; em cães e gatos, só doenças de notificação oficial para essas espécies, como a raiva), NÃO prescreva nenhum medicamento: devolva \"medicamentos\": [] e, em \"alertas\", apenas a orientação de isolar o animal e notificar o serviço veterinário oficial.\n"
+        "2.3 DOENÇA DE NOTIFICAÇÃO OFICIAL: Se o caso sugerir doença de notificação obrigatória ou de controle oficial (ex.: raiva, febre aftosa, mormo, influenza aviária, Newcastle, peste suína; em cães e gatos, só doenças de notificação oficial para essas espécies, como a raiva), NÃO prescreva nenhum medicamento: devolva \"medicamentos\": [] e, em \"alertas\", apenas a orientação de isolar o animal e notificar o serviço veterinário oficial. Em cães e gatos NÃO escreva alerta de notificação obrigatória, exceto para raiva.\n"
         "3. NÃO invente dose. Para espécie exótica/silvestre sem dose bem estabelecida na "
         "literatura, deixe dose_mg_kg como null e escreva em posologia_texto "
         "\"definir dose com o veterinário\".\n"
@@ -776,7 +813,8 @@ def sugerir_receita(
         "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\". EXCEÇÃO: fármaco sem eficácia por via oral na espécie (ex.: buprenorfina em cães) deve ser indicado como injetável (SC/IM/IV) para aplicação na clínica, com disponibilidade \"CLINICA\". Aplicação na clínica NÃO serve para uso domiciliar contínuo: limite-a à fase aguda (poucos dias) e use via oral no restante. Em cães e gatos acima de 15 kg prefira comprimidos; líquidos só para animais pequenos ou doses que não caibam em comprimido, com volume plausível por tomada (oral até cerca de 10 mL; injetável até cerca de 5 mL por local).\n"
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias). Indique UM antimicrobiano por vez: antibiótico de segunda linha citado no parecer \"se houver piora\" NÃO entra na receita inicial.\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
-        "16. Não escreva nada fora do JSON.\n\n"
+        "16. FIDELIDADE AO PARECER: a receita executa o parecer clínico, não o reescreve. Use SOMENTE fármacos citados no parecer, com a mesma dose (mg/kg) e a mesma frequência. Mantenha a via do parecer; só altere a via quando a regra 7, 13 ou 2.1 exigir (injetável para uso domiciliar vira disponibilidade \"CLINICA\"; fármaco ineficaz por via oral na espécie continua injetável) e, nesse caso, mantenha o MESMO fármaco. Todo analgésico ou anti-inflamatório citado no parecer deve constar na receita; se algum for omitido por segurança (regra 7), registre o motivo em 'alertas'. Se o parecer citar via ou dose incoerente para a espécie, escolha a via correta e descreva o ajuste em 'alertas' em uma frase clínica.\n"
+        "17. Não escreva nada fora do JSON.\n\n"
         "FORMATO (JSON):\n"
         "{\"medicamentos\": [{\"nome\": \"Dipirona sódica\", \"apresentacao\": \"gotas 500 mg/mL\", "
         "\"concentracao_valor\": 500, \"concentracao_unidade\": \"mg/mL\", \"dose_mg_kg\": 25, "
@@ -1044,7 +1082,8 @@ def sugerir_exames(
         f"{preventivos}"
         f"CASO:\n{_texto_do_caso(d)}\n\n"
         "REGRAS OBRIGATÓRIAS:\n"
-        "1. Peça só exames que mudem a conduta. Máximo de 8, do mais importante para o menos.\n"
+        "1. Peça só exames que mudem a conduta. Máximo de 6 (8 se o tutor solicitou check-up preventivo), do mais importante para o menos.\n"
+        "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro (ex.: \"PCR para Leptospira spp.\", e nunca \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
         "(explique na justificativa).\n"
         "3. MEDICINA VETERINÁRIA (NÃO HUMANA): Respeite a fisiologia da espécie. É expressamente proibido pedir exames "
