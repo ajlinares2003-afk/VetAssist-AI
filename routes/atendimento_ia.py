@@ -533,7 +533,7 @@ def _validar_estrutura_receita(dados: dict) -> dict:
 
 
 def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
-                    sensivel_oral: bool = False, texto_caso: str = "") -> dict:
+                    sensivel_oral: bool = False, texto_caso: str = "", suspeita: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
     itens, alertas = [], []
     vistos = set()
@@ -541,6 +541,9 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
     caso_n = _norm(texto_caso)
     caso_contraindica_aine = any(m in caso_n for m in MARCADORES_CONTRAINDICACAO_AINE)
     meta = []  # (nome normalizado, via sistêmica?) em paralelo a `itens`
+    # Brucelose canina suspeita: antimicrobiano antes da colheita (sorologia/PCR/cultura) pode mascarar o
+    # diagnóstico, e o tratamento é decisão do veterinário após a confirmação.
+    aguardar_exames = grupo == "canino" and "brucel" in _norm(suspeita)
 
     for bruto in dados["medicamentos"][:12]:
         if not isinstance(bruto, dict):
@@ -570,6 +573,13 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 f"{nome}: removido por segurança (penicilina, lincosamida e cefalosporina por via oral "
                 "causam enterotoxemia em coelhos, roedores e cobaias). "
                 "O veterinário pode incluir manualmente, se julgar adequado."
+            )
+            continue
+        if aguardar_exames and any(a in nome_n for a in ANTIMICROBIANOS):
+            alertas.append(
+                f"{nome}: antimicrobiano não incluído porque a suspeita é brucelose canina. Antibiótico antes da "
+                "colheita de sangue/sêmen pode comprometer sorologia, PCR e cultura, e o protocolo (fármacos e "
+                "duração) deve ser definido pelo veterinário após a confirmação. Inclua manualmente, se julgar adequado."
             )
             continue
         sistemica = _via_sistemica(via_bruta)
@@ -839,6 +849,7 @@ def sugerir_receita(
         "11.1 Escreva a apresentação em português (\"comprimido\", nunca \"tablet\"). Buprenorfina injetável existe a 0,3 mg/mL.\n"
         "12. É EXPRESSAMENTE PROIBIDO INVENTAR CONCENTRAÇÕES DE PRATELEIRA: Use as concentrações reais da indústria brasileira aprovadas pelos órgãos competentes. Se a IA decidir transformar um medicamento que só existe em comprimido (como Maropitant ou Famotidina) numa suspensão oral ou xarope, deve OBRIGATORIAMENTE escrever 'Fórmula Manipulada' no nome da apresentação.\n"
         "13. PRIORIDADE PARA VIA ORAL: Como o tratamento é domiciliar, priorize SEMPRE apresentações para uso oral (comprimidos, cápsulas, gotas, suspensão). NÃO prescreva formulações injetáveis para uso em casa. Se for injetável, que seja estritamente para disponibilidade \"CLINICA\". EXCEÇÃO: fármaco sem eficácia por via oral na espécie (ex.: buprenorfina em cães) deve ser indicado como injetável (SC/IM/IV) para aplicação na clínica, com disponibilidade \"CLINICA\". Aplicação na clínica NÃO serve para uso domiciliar contínuo: limite-a à fase aguda (poucos dias) e use via oral no restante. Em cães e gatos acima de 15 kg prefira comprimidos; líquidos só para animais pequenos ou doses que não caibam em comprimido, com volume plausível por tomada (oral até cerca de 10 mL; injetável até cerca de 5 mL por local).\n"
+        "13.1 BRUCELOSE CANINA: se a SUSPEITA for brucelose canina, NÃO prescreva antimicrobiano (a colheita de exames vem antes e o protocolo é definido após a confirmação). Prescreva apenas o sintomático indicado no parecer.\n"
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias). Indique UM antimicrobiano por vez: antibiótico de segunda linha citado no parecer \"se houver piora\" NÃO entra na receita inicial.\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
         "16. FIDELIDADE AO PARECER: a receita executa o parecer clínico, não o reescreve. Use SOMENTE fármacos citados no parecer, com a mesma dose (mg/kg) e a mesma frequência. Mantenha a via do parecer; só altere a via quando a regra 7, 13 ou 2.1 exigir (injetável para uso domiciliar vira disponibilidade \"CLINICA\"; fármaco ineficaz por via oral na espécie continua injetável) e, nesse caso, mantenha o MESMO fármaco. Todo analgésico ou anti-inflamatório citado no parecer deve constar na receita; se algum for omitido por segurança (regra 7), registre o motivo em 'alertas'. Se o parecer citar via ou dose incoerente para a espécie, escolha a via correta e descreva o ajuste em 'alertas' em uma frase clínica.\n"
@@ -860,6 +871,7 @@ def sugerir_receita(
         sensivel_oral=_roedor_ou_lagomorfo(d.get("especie"), d.get("sub_especie"), d.get("raca"),
                                            d.get("nome_cientifico")),
         texto_caso=_texto_do_caso(d),
+        suspeita=d.get("suspeita_diagnostica") or "",
     )
 
     # Segunda barragem, agora sobre a SAÍDA do LLM: se ele mesmo apontou doença oficial que a
