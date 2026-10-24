@@ -35,7 +35,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 # --- Ajustado para a estrutura do seu projeto ---------------------------------
-from database import Base, SessionLocal, get_db           # Base declarativa e sessão
+from database.database import Base, SessionLocal, get_db           # Base declarativa e sessão
 from services.ia_service import (
     _obter_cliente_gemini,
     _ler_configuracoes,
@@ -283,9 +283,12 @@ def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TO
             logger.exception("Falha ao desfazer a transação após erro do RAG")
         return ""
 
-    logger.info(
-        "RAG: %d referência(s) recuperada(s) (distâncias: %s)",
+    # warning (e não info) de propósito: o logger raiz do uvicorn só mostra WARNING+, e esta linha é a que
+    # permite calibrar RAG_DISTANCIA_MAXIMA. Depois de calibrar, volte para logger.info.
+    logger.warning(
+        "RAG: %d referência(s) recuperada(s) (distâncias: %s; títulos: %s)",
         len(pares), ", ".join(f"{dist:.3f}" for _, dist in pares) or "-",
+        " | ".join(str(doc.titulo)[:40] for doc, _ in pares) or "-",
     )
     return _formatar_referencias([doc for doc, _ in pares])
 
