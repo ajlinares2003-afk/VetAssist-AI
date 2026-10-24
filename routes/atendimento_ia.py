@@ -532,6 +532,21 @@ def _validar_estrutura_receita(dados: dict) -> dict:
     return dados
 
 
+def _aine_condicionado_a_exame(texto: str) -> bool:
+    """True se o parecer condiciona o AINE ao resultado de exame renal/hepático (ex.: 'após a confirmação das
+    funções renal e hepática íntegras, o carprofeno...', 'avalie a função renal antes de iniciar AINE')."""
+    nomes = ("aine", "anti inflam", "carprofeno", "meloxicam", "firocoxibe", "cetoprofeno", "flunixina", "piroxicam")
+    for frase in re.split(r"[.;\n]", str(texto or "")):
+        f = _norm(frase)
+        if not any(n in f for n in nomes):
+            continue
+        if (re.search(r"\b(apos|antes|ate|se|caso|quando|somente|desde que)\b", f)
+                and re.search(r"(fun\w* (renal|hepat)|bioquimic|creatinin|ureia)", f)
+                and re.search(r"(confirm|permit|integr|normal|adequad|resultado|antes de (iniciar|usar|instituir|prescrever|administrar)|avali)", f)):
+            return True
+    return False
+
+
 def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     sensivel_oral: bool = False, texto_caso: str = "", suspeita: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
@@ -540,6 +555,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
     proibidos = PROIBIDOS_POR_GRUPO.get(grupo, PROIBIDOS_POR_GRUPO["outro"])
     caso_n = _norm(texto_caso)
     caso_contraindica_aine = any(m in caso_n for m in MARCADORES_CONTRAINDICACAO_AINE)
+    aine_condicionado = _aine_condicionado_a_exame(texto_caso)
     meta = []  # (nome normalizado, via sistêmica?) em paralelo a `itens`
     # Brucelose canina suspeita: antimicrobiano antes da colheita (sorologia/PCR/cultura) pode mascarar o
     # diagnóstico, e o tratamento é decisão do veterinário após a confirmação.
@@ -583,6 +599,12 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             )
             continue
         sistemica = _via_sistemica(via_bruta)
+        if sistemica and aine_condicionado and any(p in nome_n for p in AINES):
+            alertas.append(
+                f"{nome}: não incluído porque o parecer condiciona o AINE ao resultado da função renal/hepática, "
+                "que ainda não foi avaliada. Inclua manualmente após os exames, se julgar adequado."
+            )
+            continue
         if sistemica and caso_contraindica_aine and any(p in nome_n for p in AINES):
             alertas.append(
                 f"{nome}: AINE removido por segurança (o caso menciona intoxicação, desidratação grave "
@@ -872,6 +894,7 @@ def sugerir_receita(
         "13.1 BRUCELOSE CANINA: se a SUSPEITA for brucelose canina, NÃO prescreva antimicrobiano (a colheita de exames vem antes e o protocolo é definido após a confirmação). Prescreva apenas o sintomático indicado no parecer.\n"
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: monitorar sinais de hipersensibilidade, proibir a automedicação e orientar retorno imediato à clínica em caso de piora. Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias). Indique UM antimicrobiano por vez: antibiótico de segunda linha citado no parecer \"se houver piora\" NÃO entra na receita inicial.\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
+        "16.1 MEDICAMENTO CONDICIONADO A EXAME: se o parecer condicionar um medicamento ao resultado de exame (ex.: AINE \"após a confirmação das funções renal e hepática\"), NÃO o inclua na receita; registre em 'alertas' que ele depende do resultado.\n"
         "16. FIDELIDADE AO PARECER: a receita executa o parecer clínico, não o reescreve. Use SOMENTE fármacos citados no parecer, com a mesma dose (mg/kg) e a mesma frequência. Mantenha a via do parecer; só altere a via quando a regra 7, 13 ou 2.1 exigir (injetável para uso domiciliar vira disponibilidade \"CLINICA\"; fármaco ineficaz por via oral na espécie continua injetável) e, nesse caso, mantenha o MESMO fármaco. Todo analgésico ou anti-inflamatório citado no parecer deve constar na receita; se algum for omitido por segurança (regra 7), registre o motivo em 'alertas'. Se o parecer citar via ou dose incoerente para a espécie, escolha a via correta e descreva o ajuste em 'alertas' em uma frase clínica.\n"
         "17. Não escreva nada fora do JSON.\n\n"
         "FORMATO (JSON):\n"
