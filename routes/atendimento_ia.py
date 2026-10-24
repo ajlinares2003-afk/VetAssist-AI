@@ -638,6 +638,13 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
 
         dias_n = _numero(bruto.get("duracao_dias"))
         conc_n = _numero(conc_valor)
+        # Líquido oral em cão/gato acima de 15 kg: comprimido costuma ser mais prático e padronizado.
+        if (dose is not None and peso is not None and peso > 15 and conc_n and conc_unidade == "mg/mL"
+                and _via_oral(via_bruta) and grupo in ("canino", "felino")):
+            alertas.append(
+                f"{nome}: líquido oral em animal de {_fmt(peso)} kg (≈ {_fmt(dose * peso / conc_n)} mL por tomada). "
+                "Confirme que o produto existe e considere comprimido, mais prático nesse porte."
+            )
         # Comprimido/cápsula que exigiria muitas unidades por tomada: provável apresentação inventada.
         if (dose is not None and peso is not None and conc_n and conc_unidade in ("mg/comprimido", "mg/cápsula")
                 and grupo in ("canino", "felino")):
@@ -1045,6 +1052,13 @@ def salvar_receita(
 CATEGORIAS_EXAME = {"laboratorial": "LABORATORIAL", "imagem": "IMAGEM", "outro": "OUTRO"}
 
 
+def _sorologia_em_semen(nome: str) -> bool:
+    """RSAT/IDGA/ELISA detectam anticorpos no soro. 'RSAT em sêmen' não é teste válido: descarta."""
+    n = _norm(nome)
+    return (any(t in n for t in ("rsat", "idga", "elisa", "sorolog", "aglutin", "imunodifus"))
+            and any(t in n for t in ("semen", "esperma", "ejaculad")))
+
+
 def _garantir_triagem_brucella(exames: list, d: dict) -> list:
     """Cão com quadro reprodutivo (epididimite, orquite, piospermia, aborto, falha de concepção): garante
     a sorologia para Brucella canis (zoonose), mesmo que a IA a tenha esquecido."""
@@ -1140,6 +1154,7 @@ def sugerir_exames(
         "1. Peça só exames que mudem a conduta. Máximo de 6, do mais importante para o menos; o máximo sobe para 8 se o tutor solicitou check-up preventivo ou se o parecer clínico listar mais de 6 exames.\n"
         "1.2 COERÊNCIA COM O PARECER: inclua todos os exames que o parecer clínico recomenda (dentro do máximo) e não acrescente exame que o parecer não cite, salvo se for essencial para a segurança.\n"
         "1.15 JUSTIFICATIVA TECNICAMENTE CORRETA: a justificativa deve descrever o que o exame realmente mede (ex.: urocultura avalia o trato urinário, não \"infecção sistêmica\"; hemograma avalia resposta inflamatória e anemia, não função de órgão). Não peça o mesmo tipo de exame em vários locais (ex.: cultura de sêmen, de secreção e de urina) sem motivo clínico explícito para cada um.\n"
+        "1.28 SOROLOGIA É NO SANGUE: RSAT, IDGA e ELISA detectam anticorpos no soro; nunca peça esses testes em sêmen. Em sêmen, peça PCR, cultura ou análise/citologia, conforme o parecer. Não repita o mesmo teste em dois materiais.\n"
         "1.25 UM EXAME POR ITEM: cada item da lista é um único exame solicitável. Nunca agrupe vários exames no mesmo item (ex.: \"hemograma e bioquímica\") nem alternativas com \"ou\" (ex.: \"RSAT, IDGA, PCR ou cultura\"). Se o parecer lista mais de um método, crie um item para cada um. Os itens contam para o máximo.\n"
         "1.26 MÉTODOS ALTERNATIVOS: quando o parecer oferecer métodos alternativos para o mesmo fim (\"X ou Y\"), peça só o principal; cite o segundo na justificativa como \"se positivo, confirmar por Y\", sem criar item.\n"
         "1.27 PRIORIDADE: em paciente estável (normohidratado, perfusão adequada, sem dor intensa), marque URGENTE só o exame que define a conduta imediata (ex.: o exame que confirma ou descarta a suspeita principal) e use ROTINA para exames de estadiamento e complementares.\n"
@@ -1168,8 +1183,10 @@ def sugerir_exames(
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 
+    exames_ia = [e for e in _montar_exames(resp.dados)
+                 if not _sorologia_em_semen(e["nome"])]
     return {
-        "exames": _garantir_triagem_brucella(_montar_exames(resp.dados), d),
+        "exames": _garantir_triagem_brucella(exames_ia, d),
         "provedor": resp.provedor,
         "modelo": resp.modelo,
         "aviso": "Sugestão gerada por IA. O veterinário decide quais exames solicitar.",
