@@ -81,7 +81,7 @@ ORAL_INEFICAZ_POR_GRUPO = {
 }
 
 # Plausibilidade de apresentação/volume (só alerta; quem decide é o veterinário). Cães e gatos.
-LIMITE_VOLUME_ORAL_ML = 15.0
+LIMITE_VOLUME_ORAL_ML = 10.0
 LIMITE_VOLUME_INJETAVEL_ML = 5.0
 MAX_DIAS_CLINICA = 3        # aplicação na clínica por mais dias que isso pede confirmação
 MAX_DIAS_CONTROLADO = 7     # controlado por mais dias que isso pede confirmação
