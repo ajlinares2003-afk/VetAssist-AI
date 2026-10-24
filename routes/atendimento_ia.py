@@ -1060,9 +1060,9 @@ def _validar_estrutura_exames(dados: dict) -> dict:
     return dados
 
 
-def _montar_exames(dados: dict) -> list:
+def _montar_exames(dados: dict, limite: int = 8) -> list:
     exames, vistos = [], set()
-    for bruto in dados["exames"][:15]:
+    for bruto in dados["exames"][:limite]:
         if not isinstance(bruto, dict):
             continue
         nome = str(bruto.get("nome") or "").strip()[:150]
@@ -1101,7 +1101,7 @@ def sugerir_exames(
             {"nome": e["nome"], "categoria": "laboratorial", "prioridade": "urgente",
              "justificativa": e["justificativa"]}
             for e in doenca["exames_lista"]
-        ]})
+        ]}, limite=15)
         return {
             "exames": oficiais,
             "provedor": "barragem_sanitaria",
@@ -1127,6 +1127,8 @@ def sugerir_exames(
         "1. Peça só exames que mudem a conduta. Máximo de 6, do mais importante para o menos; o máximo sobe para 8 se o tutor solicitou check-up preventivo ou se o parecer clínico listar mais de 6 exames.\n"
         "1.2 COERÊNCIA COM O PARECER: inclua todos os exames que o parecer clínico recomenda (dentro do máximo) e não acrescente exame que o parecer não cite, salvo se for essencial para a segurança.\n"
         "1.25 UM EXAME POR ITEM: cada item da lista é um único exame solicitável. Nunca agrupe vários exames no mesmo item (ex.: \"hemograma e bioquímica\") nem alternativas com \"ou\" (ex.: \"RSAT, IDGA, PCR ou cultura\"). Se o parecer lista mais de um método, crie um item para cada um. Os itens contam para o máximo.\n"
+        "1.26 MÉTODOS ALTERNATIVOS: quando o parecer oferecer métodos alternativos para o mesmo fim (\"X ou Y\"), peça só o principal; cite o segundo na justificativa como \"se positivo, confirmar por Y\", sem criar item.\n"
+        "1.27 PRIORIDADE: em paciente estável (normohidratado, perfusão adequada, sem dor intensa), marque URGENTE só o exame que define a conduta imediata (ex.: o exame que confirma ou descarta a suspeita principal) e use ROTINA para exames de estadiamento e complementares.\n"
         "1.3 TEMPERATURA: em cães e gatos (faixa 37,5 a 39,2 °C), até 39,7 °C escreva \"elevação leve da temperatura\", e não \"febre\" ou \"quadro febril\"; mantenha o mesmo termo do parecer.\n"
         "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro (ex.: \"PCR para Leptospira spp.\", e nunca \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
