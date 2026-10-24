@@ -49,7 +49,7 @@ _TERMOS_CIRURGIA = ("cirurgia", "cirúrgic", "hemilaminectomia", "corpectomia", 
                     "laparotomia", "celiotomia")
 _NEGACOES = ("sem ", "não ", "nao ", "evitar", "evite", "descart", "nenhuma", "ausência", "sem necessidade",
              "dispensa", "afasta", "avaliar necessidade", "avaliar a necessidade", "se houver", "caso haja",
-             "se necess")
+             "se necess", "discut", "opç", "opc", "possibilidade de")
 
 
 def ha_indicacao_cirurgica(texto: str) -> bool:
@@ -61,7 +61,11 @@ def ha_indicacao_cirurgica(texto: str) -> bool:
             antes = t[max(0, pos - 35):pos]
             for sep in ".;:,\n":  # só vale a negação da MESMA oração
                 antes = antes.rsplit(sep, 1)[-1]
-            if not any(neg in antes for neg in _NEGACOES):
+            frase = t[:pos]
+            for sep in ".;\n":
+                frase = frase.rsplit(sep, 1)[-1]
+            em_discussao = any(d in frase for d in ("discut", "opç", "opc", "possibilidade de"))
+            if not em_discussao and not any(neg in antes for neg in _NEGACOES):
                 return True
             inicio = pos + len(termo)
     return False
@@ -303,7 +307,7 @@ def sugestoes_copiloto_multimodal(
             f"2.12 REFERÊNCIAS: use a literatura fornecida só quando tratar da suspeita deste paciente. Não crie diferencial nem cite doença de outra especialidade só porque consta numa referência, e nunca escreva frases como \"a literatura resgatada pelo sistema\". Cite a fonte pelo nome, quando útil.\n"
             f"2.13 VOCABULÁRIO E TEMPERATURA: não escreva \"infecção bacteriana asséptica\" (asséptica é inflamação sem agente infeccioso). Em cães e gatos (faixa 37,5 a 39,2 °C), até 39,7 °C descreva como \"elevação leve da temperatura\"; não use \"moderada\" abaixo de 40 °C.\n"
             f"2.14 BRUCELOSE CANINA (suspeita ou diferencial): oriente que é zoonose (risco por sêmen, urina, secreções e abortos), o isolamento do animal e das fêmeas do canil, e que o veterinário discuta com o tutor o controle da fonte (incluindo orquiectomia) e a possibilidade de recidiva. Não indique antimicrobiano antes da colheita de sangue/sêmen para sorologia, PCR e cultura; o protocolo (fármacos e duração) é decisão do veterinário após a confirmação.\n"
-            f"2.15 FIDELIDADE AOS DADOS: cite como achado do paciente SOMENTE o que consta nos dados informados (queixa, anamnese, exame físico, parâmetros, anexos). É proibido acrescentar sinais, alterações crônicas, sintomas ou resultados que não foram informados (ex.: atrofia, apatia, dor, febre). O que for apenas possibilidade vai como hipótese, nunca como achado. Não use \"altamente sugestivo\", \"patognomônico\" nem \"confirmado\": escreva \"suspeita principal\" ou \"diagnóstico diferencial a investigar\", pois o diagnóstico só se confirma com exames. Nomeie corretamente os testes (ex.: RSAT é aglutinação rápida em LÂMINA; o Rosa Bengala é em cartão).\n"
+            f"2.15 FIDELIDADE AOS DADOS: cite como achado do paciente SOMENTE o que consta nos dados informados (queixa, anamnese, exame físico, parâmetros, anexos). É proibido acrescentar sinais, alterações crônicas, sintomas ou resultados que não foram informados (ex.: atrofia, apatia, dor, febre). O que for apenas possibilidade vai como hipótese, nunca como achado. Não use \"altamente sugestivo\", \"patognomônico\" nem \"confirmado\": escreva \"suspeita principal\" ou \"diagnóstico diferencial a investigar\", pois o diagnóstico só se confirma com exames. Nomeie corretamente os testes (ex.: RSAT é aglutinação rápida em LÂMINA). Para Brucella canis cite RSAT (de preferência com 2-mercaptoetanol), IDGA, PCR ou cultura; NÃO cite Rosa Bengala nem imunocromatografia para essa espécie de Brucella.\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
             f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
