@@ -199,7 +199,8 @@ def _chamar_provedor(slot: Slot, modelo: str, api_key: str, prompt: str, json_mo
         # Gemini 3.x: NÃO enviar temperature/top_p/top_k (parâmetros descontinuados,
         # a API rejeita ou ignora). Só o formato de saída é configurado.
         config_kwargs = dict(
-            response_mime_type="application/json" if json_mode else None,
+            # GEMINI_JSON_MODE=0 desliga o "modo JSON" nativo (teste de lentidão); o parser extrai o JSON do texto.
+            response_mime_type="application/json" if (json_mode and os.getenv("GEMINI_JSON_MODE", "1") != "0") else None,
         )
         thinking_config = _thinking_config_gemini(modelo)
         if thinking_config:
