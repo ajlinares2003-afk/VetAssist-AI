@@ -670,6 +670,13 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     f"{nome}: volume de ≈ {_fmt(volume)} mL por tomada parece alto para esta espécie. Confira a "
                     "concentração do produto ou escolha outra apresentação (ex.: comprimido ou concentração maior)."
                 )
+        if tipo == "CLINICA" and dias_n and freq_h and freq_h < 24:
+            n_aplic = int(-(-dias_n * 24 // freq_h))
+            if n_aplic > 4:
+                alertas.append(
+                    f"{nome}: {n_aplic} aplicações na clínica equivalem a {n_aplic} retornos do tutor. Considere "
+                    "1 ou 2 doses na fase aguda e analgesia oral no restante."
+                )
         if tipo == "CLINICA" and dias_n and dias_n > MAX_DIAS_CLINICA:
             alertas.append(
                 f"{nome}: aplicação na clínica por {int(round(dias_n))} dias. Confirme se haverá retornos diários "
@@ -1047,7 +1054,7 @@ def _garantir_triagem_brucella(exames: list, d: dict) -> list:
     if not any(m in caso for m in MARCADORES_REPRODUCAO):
         return exames
     # Só dispensa a triagem se já houver SOROLOGIA (ELISA/aglutinação/IDGA); PCR ou cultura isolados não bastam.
-    if any("brucel" in _norm(e["nome"]) and any(t in _norm(e["nome"]) for t in ("sorolog", "elisa", "aglutin", "imunodifus", "idga", "rbt", "rosa bengala", "soroaglut", "rsat", "tat "))
+    if any("brucel" in _norm(f'{e["nome"]} {e.get("justificativa", "")}') and any(t in _norm(e["nome"]) for t in ("sorolog", "elisa", "aglutin", "imunodifus", "idga", "rbt", "rosa bengala", "soroaglut", "rsat", "tat "))
            for e in exames):
         return exames
     exames.append({
@@ -1137,7 +1144,7 @@ def sugerir_exames(
         "1.26 MÉTODOS ALTERNATIVOS: quando o parecer oferecer métodos alternativos para o mesmo fim (\"X ou Y\"), peça só o principal; cite o segundo na justificativa como \"se positivo, confirmar por Y\", sem criar item.\n"
         "1.27 PRIORIDADE: em paciente estável (normohidratado, perfusão adequada, sem dor intensa), marque URGENTE só o exame que define a conduta imediata (ex.: o exame que confirma ou descarta a suspeita principal) e use ROTINA para exames de estadiamento e complementares.\n"
         "1.3 TEMPERATURA: em cães e gatos (faixa 37,5 a 39,2 °C), até 39,7 °C escreva \"elevação leve da temperatura\", e não \"febre\" ou \"quadro febril\"; mantenha o mesmo termo do parecer.\n"
-        "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro (ex.: \"PCR para Leptospira spp.\", e nunca \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
+        "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro no próprio nome (ex.: \"PCR para Leptospira spp.\", \"RSAT para Brucella canis\"; nunca \"RSAT\" sozinho nem \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
         "(explique na justificativa).\n"
         "3. MEDICINA VETERINÁRIA (NÃO HUMANA): Respeite a fisiologia da espécie. É expressamente proibido pedir exames "
