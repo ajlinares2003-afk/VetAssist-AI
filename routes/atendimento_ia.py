@@ -735,6 +735,12 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         })
         meta.append((nome_n, sistemica))
 
+    if (grupo == "canino" and any(m in _norm(suspeita) for m in MARCADORES_REPRODUCAO)
+            and any(any(a in _norm(it["medicamento"]) for a in ANTIMICROBIANOS) for it in itens)):
+        alertas.append(
+            "Quadro reprodutivo em cão: colha sêmen, secreção e sangue (cultura, PCR e sorologia para Brucella canis) "
+            "ANTES da primeira dose do antimicrobiano, para não comprometer o isolamento do agente."
+        )
     antimicrobianos = [it["medicamento"] for it in itens
                        if any(a in _norm(it["medicamento"]) for a in ANTIMICROBIANOS)]
     if len(antimicrobianos) > 1:
@@ -1126,6 +1132,7 @@ def sugerir_exames(
         "REGRAS OBRIGATÓRIAS:\n"
         "1. Peça só exames que mudem a conduta. Máximo de 6, do mais importante para o menos; o máximo sobe para 8 se o tutor solicitou check-up preventivo ou se o parecer clínico listar mais de 6 exames.\n"
         "1.2 COERÊNCIA COM O PARECER: inclua todos os exames que o parecer clínico recomenda (dentro do máximo) e não acrescente exame que o parecer não cite, salvo se for essencial para a segurança.\n"
+        "1.15 JUSTIFICATIVA TECNICAMENTE CORRETA: a justificativa deve descrever o que o exame realmente mede (ex.: urocultura avalia o trato urinário, não \"infecção sistêmica\"; hemograma avalia resposta inflamatória e anemia, não função de órgão). Não peça o mesmo tipo de exame em vários locais (ex.: cultura de sêmen, de secreção e de urina) sem motivo clínico explícito para cada um.\n"
         "1.25 UM EXAME POR ITEM: cada item da lista é um único exame solicitável. Nunca agrupe vários exames no mesmo item (ex.: \"hemograma e bioquímica\") nem alternativas com \"ou\" (ex.: \"RSAT, IDGA, PCR ou cultura\"). Se o parecer lista mais de um método, crie um item para cada um. Os itens contam para o máximo.\n"
         "1.26 MÉTODOS ALTERNATIVOS: quando o parecer oferecer métodos alternativos para o mesmo fim (\"X ou Y\"), peça só o principal; cite o segundo na justificativa como \"se positivo, confirmar por Y\", sem criar item.\n"
         "1.27 PRIORIDADE: em paciente estável (normohidratado, perfusão adequada, sem dor intensa), marque URGENTE só o exame que define a conduta imediata (ex.: o exame que confirma ou descarta a suspeita principal) e use ROTINA para exames de estadiamento e complementares.\n"
