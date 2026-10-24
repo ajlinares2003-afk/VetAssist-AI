@@ -35,7 +35,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 # --- Ajustado para a estrutura do seu projeto ---------------------------------
-from database.database import Base, SessionLocal, get_db           # Base declarativa e sessão
+from database import Base, SessionLocal, get_db           # Base declarativa e sessão
 from services.ia_service import (
     _obter_cliente_gemini,
     _ler_configuracoes,
