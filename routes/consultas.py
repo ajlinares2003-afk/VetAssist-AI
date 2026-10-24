@@ -27,6 +27,43 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+
+def _bloco_faixas_referencia(db, animal_id) -> str:
+    """Faixas de referência dos sinais vitais da biblioteca (as MESMAS que a tela de Atendimento mostra),
+    para o parecer usar a mesma referência. Só leitura; qualquer falha devolve "" e o parecer segue sem elas."""
+    if not animal_id:
+        return ""
+    try:
+        try:
+            from routes.triagem import _montar_referencias, ReferenciasIARequest
+        except ImportError:
+            from routers.triagem import _montar_referencias, ReferenciasIARequest
+        ref = _montar_referencias(db, ReferenciasIARequest(animal_id=int(animal_id)), pesquisar=False)
+    except Exception:  # noqa: BLE001 — referência é apoio; não pode derrubar o Copiloto
+        logger.warning("Faixas de referência indisponíveis para o animal %s", animal_id, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+    if not ref or ref.get("indisponivel"):
+        return ""
+    avisos = []
+    if ref.get("ref_adulta_fallback"):
+        avisos.append("estas faixas são de ADULTO e o paciente não é adulto: NÃO as use como faixa normal dele")
+    if not ref.get("validada"):
+        avisos.append("estas faixas ainda NÃO foram validadas por veterinário: cite-as com cautela")
+    aviso = f"ATENÇÃO: {'; '.join(avisos)}.\n" if avisos else ""
+    return (
+        "FAIXAS DE REFERÊNCIA DOS SINAIS VITAIS (da biblioteca do sistema, as mesmas da tela de atendimento):\n"
+        f"{aviso}"
+        f"- Temperatura: {ref.get('temperatura')}\n"
+        f"- FC: {ref.get('fc')}\n"
+        f"- FR: {ref.get('fr')}\n"
+        f"- TPC: {ref.get('tpc')}\n"
+        f"- Mucosas: {ref.get('mucosas')}\n\n"
+    )
+
 router = APIRouter(
     prefix="/consultas",
     tags=["Consultas"]
@@ -276,6 +313,8 @@ def sugestoes_copiloto_multimodal(
         else:
             bloco_referencias = regra_referencias = ""
 
+        bloco_faixas = _bloco_faixas_referencia(db, animal_id)
+
         def _prompt_base(linha_anexos: str, regra_anexos: str) -> str:
             return (
             f"Atue como um médico veterinário especialista e copiloto clínico de excelência.\n"
@@ -289,6 +328,7 @@ def sugestoes_copiloto_multimodal(
             f"FR (frequência respiratória)={frequencia_respiratoria} ir/min | "
             f"TPC (Tempo de Preenchimento Capilar)={tpc_segundos} s | Mucosas={mucosas} | "
             f"ECC (Escore de Condição Corporal, escala 1 a 9)={ecc or 'não informado'}\n\n"
+            f"{bloco_faixas}"
             f"{bloco_referencias}"
             f"REGRAS OBRIGATÓRIAS:\n"
             f"1. Você DEVE fornecer uma suspeita diagnóstica principal exata, sem inventar nomes cruzados ou patologias de outras espécies.\n"
@@ -305,11 +345,12 @@ def sugestoes_copiloto_multimodal(
             f"2.10 FLUIDOTERAPIA: só sugira fluidoterapia quando os dados descreverem desidratação, vômito, diarreia, anorexia, choque ou instabilidade, e cite esse motivo na própria frase. Em paciente estável, normohidratado e que bebe água, não a inclua. Não use taxa de anestesia ou procedimento (ex.: 5 mL/kg/h) como manutenção de paciente acordado.\n"
             f"2.11 DOSES DE REFERÊNCIA: em cães, doxiciclina é 5 mg/kg a cada 12 h OU 10 mg/kg a cada 24 h (nunca 10 mg/kg a cada 12 h); carprofeno em cães é 4,4 mg/kg a cada 24 h OU 2,2 mg/kg a cada 12 h (nunca 2,2 mg/kg a cada 24 h). Ao indicar AINE, inclua entre os exames a bioquímica sérica (função renal e hepática) como avaliação prévia. Não classifique antimicrobiano como \"de primeira linha\" ou \"de escolha\".\n"
             f"2.12 REFERÊNCIAS: use a literatura fornecida só quando tratar da suspeita deste paciente. Não crie diferencial, não sugira exame nem cite doença de outra especialidade (ex.: testes endócrinos como cortisol/ACTH, hiperadrenocorticismo) só porque consta numa referência; todo item do parecer deve decorrer dos dados e da suspeita do paciente, e nunca escreva frases como \"a literatura resgatada pelo sistema\". Cite a fonte pelo nome, quando útil.\n"
-            f"2.13 VOCABULÁRIO E TEMPERATURA: não escreva \"infecção bacteriana asséptica\" (asséptica é inflamação sem agente infeccioso). Em cães e gatos (faixa 37,5 a 39,2 °C), até 39,7 °C descreva como \"elevação leve da temperatura\"; não use \"moderada\" abaixo de 40 °C.\n"
+            f"2.13 VOCABULÁRIO E TEMPERATURA: não escreva \"infecção bacteriana asséptica\" (asséptica é inflamação sem agente infeccioso). Classifique temperatura, FC e FR SOMENTE pelas faixas fornecidas acima (e cite a faixa usada). Sem faixas fornecidas, não afirme que o valor é normal ou alterado: apenas descreva o valor. Use \"elevação leve\" só para valores até 0,5 °C acima do limite superior da faixa clínica; não use \"moderada\" sem justificar.\n"
             f"2.14 BRUCELOSE CANINA (suspeita ou diferencial): oriente que é zoonose (risco por sêmen, urina, secreções e abortos), o isolamento do animal e das fêmeas do canil, e que o veterinário discuta com o tutor o controle da fonte (incluindo orquiectomia) e a possibilidade de recidiva. Não indique antimicrobiano antes da colheita de sangue/sêmen para sorologia, PCR e cultura; o protocolo (fármacos e duração) é decisão do veterinário após a confirmação.\n"
             f"2.15 FIDELIDADE AOS DADOS: cite como achado do paciente SOMENTE o que consta nos dados informados (queixa, anamnese, exame físico, parâmetros, anexos). É proibido acrescentar sinais, alterações crônicas, sintomas ou resultados que não foram informados (ex.: atrofia, apatia, dor, febre). O que for apenas possibilidade vai como hipótese, nunca como achado. Não use \"altamente sugestivo\", \"patognomônico\" nem \"confirmado\": escreva \"suspeita principal\" ou \"diagnóstico diferencial a investigar\", pois o diagnóstico só se confirma com exames. Nomeie corretamente os testes (ex.: RSAT é aglutinação rápida em LÂMINA). Para Brucella canis cite RSAT (de preferência com 2-mercaptoetanol), IDGA, PCR ou cultura; NÃO cite Rosa Bengala nem imunocromatografia para essa espécie de Brucella.\n"
             f"2.16 SÓ O QUE SE APLICA: não copie regras deste prompt como orientações. Inclua apenas condutas que tenham relação com os dados do paciente (ex.: não fale de profilaxia de feridas limpas se não há ferida). Em caso reprodutivo, a qualidade do sêmen só deve ser reavaliada após cerca de 2 meses (duração da espermatogênese); em poucos dias reavalie apenas sinais clínicos. Em suspeita de Brucella, as fêmeas expostas devem ser testadas e acompanhadas, e não \"tratadas\".\n"
             f"2.17 PRODUTOS TÓPICOS E ANTIBIÓTICOS: ao orientar cuidado local, indique apenas o tipo de cuidado (ex.: limpeza suave com solução salina estéril, antisséptico em diluição adequada), sem citar NUNCA o nome de um produto nem concentração de antisséptico (nem como exemplo); em pele ulcerada não indique antisséptico puro. Não afirme eficácia nem espectro de antibiótico (ex.: \"útil contra E. coli\", \"de espectro amplo\"); diga que a escolha será ajustada por cultura e antibiograma. Não defina duração de antibiótico em dias quando o quadro ainda depende de exames; escreva que a duração será definida pelo veterinário conforme a resposta e os resultados.\n"
+            f"2.18 SINAIS VITAIS: ao comentar FC, FR e temperatura, diga em qual faixa o valor está, sem ambiguidade. Se estiver acima da faixa de repouso mas dentro da faixa clínica (de consultório), escreva \"dentro da faixa clínica, acima da faixa de repouso\". Não atribua a causa (estresse, dor, inflamação) como fato; no máximo cite as causas possíveis.\n"
             f"3. PARTICULARIDADES: Respeite a fisiologia da espécie, sem converter doses para formatos humanos.\n"
             f"4. IDIOMA ESTREITO: Use vocabulário médico-veterinário brasileiro (ex: claudicação, metemoglobinemia). "
             f"A SUSPEITA deve estar SEMPRE em português do Brasil, sem termos nem siglas em inglês "
