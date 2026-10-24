@@ -16,6 +16,7 @@ Lembre de registrar no main.py:  app.include_router(atendimento_ia.router)
 """
 import logging
 import math
+import os
 import re
 import unicodedata
 import uuid
@@ -32,6 +33,10 @@ from services.barragem_sanitaria import detectar_doenca_oficial, doenca_do_parec
 from services.ia_service import IAIndisponivelError, gerar_json
 from services.security import exigir_perfil
 from services.texto_clinico import corrigir_siglas
+
+# Prazo por chamada à IA (receita, exames, análise). O padrão do ia_service é 20 s, curto para
+# prompts longos: o Gemini devolvia 504 DEADLINE_EXCEEDED e a resposta vinha do fallback.
+TIMEOUT_ATENDIMENTO_SEGUNDOS = int(os.getenv("IA_TIMEOUT_ATENDIMENTO", "60"))
 
 logger = logging.getLogger("vetassist.atendimento_ia")
 
@@ -905,7 +910,7 @@ def sugerir_receita(
         "\"alertas\": [\"cuidados gerais, interações ou monitoramento\"]}"
     )
     try:
-        resp = gerar_json(db, prompt, validar=_validar_estrutura_receita)
+        resp = gerar_json(db, prompt, validar=_validar_estrutura_receita, timeout=TIMEOUT_ATENDIMENTO_SEGUNDOS)
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 
@@ -1014,7 +1019,7 @@ def analisar_medicamentos(
         "\"recomendacoes\": \"Dar de estômago vazio. Manter intervalo de pelo menos 2 horas em relação aos outros medicamentos.\"}]}"
     )
     try:
-        resp = gerar_json(db, prompt, validar=_validar_analise)
+        resp = gerar_json(db, prompt, validar=_validar_analise, timeout=TIMEOUT_ATENDIMENTO_SEGUNDOS)
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 
@@ -1176,11 +1181,11 @@ def sugerir_exames(
         "REGRAS OBRIGATÓRIAS:\n"
         "1. Peça só exames que mudem a conduta. Máximo de 6, do mais importante para o menos; o máximo sobe para 8 se o tutor solicitou check-up preventivo ou se o parecer clínico listar mais de 6 exames.\n"
         "1.2 COERÊNCIA COM O PARECER: inclua todos os exames que o parecer clínico recomenda (dentro do máximo) e não acrescente exame que o parecer não cite, salvo se for essencial para a segurança.\n"
-        "1.15 JUSTIFICATIVA TECNICAMENTE CORRETA: a justificativa deve descrever o que o exame realmente mede (ex.: urocultura avalia o trato urinário, não \"infecção sistêmica\"; hemograma avalia resposta inflamatória e anemia, não função de órgão). Não peça o mesmo tipo de exame em vários locais (ex.: cultura de sêmen, de secreção e de urina) sem motivo clínico explícito para cada um.\n"
+        "1.15 JUSTIFICATIVA TECNICAMENTE CORRETA: a justificativa deve descrever o que o exame realmente mede (ex.: urocultura avalia o trato urinário, não \"infecção sistêmica\"; hemograma avalia resposta inflamatória e anemia, não função de órgão). Não peça o mesmo tipo de exame em vários locais (ex.: cultura de sêmen, de secreção e de urina) sem motivo clínico explícito para cada um. Não peça exame já contido em outro item (ex.: glicemia quando a bioquímica já a inclui). Não escreva que o resultado \"confirma\" a doença nem cite valores de corte (variam por laboratório): use \"sugere\" ou \"ajuda a confirmar\".\n"
         "1.28 SOROLOGIA É NO SANGUE: RSAT, IDGA e ELISA detectam anticorpos no soro; nunca peça esses testes em sêmen. Em sêmen, peça PCR, cultura ou análise/citologia, conforme o parecer. Não repita o mesmo teste em dois materiais.\n"
         "1.25 UM EXAME POR ITEM: cada item da lista é um único exame solicitável. Nunca agrupe vários exames no mesmo item (ex.: \"hemograma e bioquímica\") nem alternativas com \"ou\" (ex.: \"RSAT, IDGA, PCR ou cultura\"). Se o parecer lista mais de um método, crie um item para cada um. Os itens contam para o máximo.\n"
-        "1.26 MÉTODOS ALTERNATIVOS: quando o parecer oferecer métodos alternativos para o mesmo fim (\"X ou Y\"), peça só o principal; cite o segundo na justificativa como \"se positivo, confirmar por Y\", sem criar item.\n"
-        "1.27 PRIORIDADE: em paciente estável (normohidratado, perfusão adequada, sem dor intensa), marque URGENTE só o exame que define a conduta imediata (ex.: o exame que confirma ou descarta a suspeita principal) e use ROTINA para exames de estadiamento e complementares.\n"
+        "1.26 MÉTODOS ALTERNATIVOS: quando o parecer oferecer métodos alternativos para o mesmo fim (\"X ou Y\"), peça só o principal, mesmo que o parecer os liste separadamente; cite o segundo na justificativa como \"se positivo, confirmar por Y\", sem criar item.\n"
+        "1.27 PRIORIDADE: em paciente estável (normohidratado, perfusão adequada, sem dor intensa), marque URGENTE só o exame que define a conduta imediata (ex.: o exame que confirma ou descarta a suspeita principal) e use ROTINA para exames de estadiamento e complementares. Em paciente estável, no máximo UM exame fica URGENTE.\n"
         "1.3 TEMPERATURA: use o mesmo termo do parecer para a temperatura (ex.: \"elevação leve da temperatura\") e não escreva \"febre\" ou \"quadro febril\" quando o parecer não usou.\n"
         "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro no próprio nome (ex.: \"PCR para Leptospira spp.\", \"RSAT para Brucella canis\"; nunca \"RSAT\" sozinho nem \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
@@ -1202,7 +1207,7 @@ def sugerir_exames(
     )
     
     try:
-        resp = gerar_json(db, prompt, validar=_validar_estrutura_exames)
+        resp = gerar_json(db, prompt, validar=_validar_estrutura_exames, timeout=TIMEOUT_ATENDIMENTO_SEGUNDOS)
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 

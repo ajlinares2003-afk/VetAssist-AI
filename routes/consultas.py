@@ -48,9 +48,14 @@ def _bloco_faixas_referencia(db, animal_id) -> str:
         return ""
     if not ref or ref.get("indisponivel"):
         return ""
-    avisos = []
     if ref.get("ref_adulta_fallback"):
-        avisos.append("estas faixas são de ADULTO e o paciente não é adulto: NÃO as use como faixa normal dele")
+        # Sem faixa para a idade do paciente: não entregar números à IA (ela os usaria mesmo com o aviso).
+        return (
+            "SINAIS VITAIS: a biblioteca NÃO tem faixa de referência para a faixa etária deste paciente "
+            f"({ref.get('faixa_etaria') or 'não adulto'}). Portanto NÃO classifique FC, FR nem temperatura como "
+            "normais ou alterados; apenas descreva os valores e diga que não há referência para a idade.\n\n"
+        )
+    avisos = []
     if not ref.get("validada"):
         avisos.append("estas faixas ainda NÃO foram validadas por veterinário: cite-as com cautela")
     aviso = f"ATENÇÃO: {'; '.join(avisos)}.\n" if avisos else ""

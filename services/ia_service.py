@@ -364,6 +364,7 @@ def gerar_json(
         if pesquisa_web and slot.tipo == "groq" and not _groq_tem_busca(modelo):
             continue  # este modelo Groq não tem pesquisa na web (ex.: qwen)
 
+        inicio = time.monotonic()
         try:
             fontes: list = []
             if pesquisa_web:
@@ -379,6 +380,7 @@ def gerar_json(
             dados = _extrair_json(bruto)
             if validar:
                 dados = validar(dados)
+            logger.warning("IA respondeu: %s/%s em %.1fs (JSON)", slot.nome, modelo, time.monotonic() - inicio)
             return RespostaIA(dados=dados, provedor=slot.nome, modelo=modelo, fontes=fontes)
         except Exception as exc:  # qualquer falha -> próximo provedor
             registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
@@ -443,6 +445,7 @@ def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None,
             texto = re.sub(r"<think>.*?</think>", "", bruto or "", flags=re.DOTALL | re.IGNORECASE).strip()
             if not texto:
                 raise ValueError("A IA devolveu uma resposta vazia.")
+            logger.warning("IA respondeu: %s/%s em %.1fs (texto)", slot.nome, modelo, time.monotonic() - inicio)
             return RespostaTexto(texto=texto, provedor=slot.nome, modelo=modelo, anexos_analisados=com_anexos)
         except Exception as exc:  # qualquer falha -> próximo provedor
             registro = f"{slot.nome}/{modelo} (após {time.monotonic() - inicio:.0f}s): {_descrever_erro(exc)}"
