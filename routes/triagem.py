@@ -358,6 +358,8 @@ def _montar_referencias(db: Session, dados: ReferenciasIARequest, pesquisar: boo
         "perfil_ref": bib.especie,
         "sexo_ref": getattr(bib, "sexo", None),
         "faixa_ref": getattr(bib, "faixa_etaria", None),
+        # com que precisão o perfil foi achado: "raca", "sub_especie", "especie", "grupo" ou "porte"
+        "correspondencia": getattr(bib, "_nivel_correspondencia", None),
     }
 
 
