@@ -1173,6 +1173,26 @@ def _validar_estrutura_exames(dados: dict) -> dict:
     return dados
 
 
+_EXAMES_CONFIRMATORIOS = ("cultura", "pcr", "histopatol", "biops", "citolog", "antibiograma")
+_SUAVIZAR_CONFIRMA = (
+    (re.compile(r"(?i)\bajudando a confirmar\b"), "auxiliando no diagnóstico de"),
+    (re.compile(r"(?i)\bajuda a confirmar\b"), "auxilia no diagnóstico de"),
+    (re.compile(r"(?i)\bconfirmando\b"), "auxiliando no diagnóstico de"),
+    (re.compile(r"(?i)\bconfirmar\b"), "auxiliar no diagnóstico de"),
+    (re.compile(r"(?i)\bconfirma\b"), "auxilia no diagnóstico de"),
+)
+
+
+def _suavizar_confirma(nome: str, justificativa: str) -> str:
+    """Triagem e testes funcionais não confirmam doença sozinhos: troca 'confirma' por 'auxilia no diagnóstico
+    de', exceto em exames que de fato confirmam (cultura, PCR, histopatológico, citologia)."""
+    if any(t in _norm(nome) for t in _EXAMES_CONFIRMATORIOS):
+        return justificativa
+    for padrao, troca in _SUAVIZAR_CONFIRMA:
+        justificativa = padrao.sub(troca, justificativa)
+    return justificativa
+
+
 def _montar_exames(dados: dict, limite: int = 8) -> list:
     exames, vistos = [], set()
     for bruto in dados["exames"][:limite]:
@@ -1189,7 +1209,7 @@ def _montar_exames(dados: dict, limite: int = 8) -> list:
             "nome": nome,
             "categoria": categoria,
             "prioridade": prioridade,
-            "justificativa": corrigir_siglas(re.sub(r"(?i)corticosterona", "cortisol", str(bruto.get("justificativa") or "").strip()[:300])),
+            "justificativa": corrigir_siglas(_suavizar_confirma(nome, re.sub(r"(?i)corticosterona", "cortisol", str(bruto.get("justificativa") or "").strip()[:300]))),
         })
     # Urgentes primeiro, mantendo a ordem original dentro de cada grupo.
     exames.sort(key=lambda e: 0 if e["prioridade"] == "URGENTE" else 1)
@@ -1246,6 +1266,7 @@ def sugerir_exames(
         "1.27 PRIORIDADE: URGENTE só quando o parecer descreve risco imediato ou instabilidade (desidratação, choque, dor intensa, dispneia, hemorragia, suspeita que muda a conduta nas próximas horas). Em paciente estável, com doença crônica ou investigação de rotina, TODOS os exames são ROTINA, inclusive o exame que confirma a suspeita principal. Nunca marque mais de UM exame como URGENTE.\n"
         "1.29 VERBOS DA JUSTIFICATIVA: exame de triagem ou teste funcional \"auxilia no diagnóstico\" ou \"investiga\"; só use \"confirma\" para exame que de fato confirma (cultura, PCR, histopatológico). Nunca escreva que um teste de supressão, de estimulação, hemograma ou bioquímica \"confirma\" a doença.\n"
         "1.30 CORTISOL: em cães e gatos o hormônio dosado em testes de supressão e de estimulação é o CORTISOL; nunca escreva \"corticosterona\". Teste de supressão por dexametasona e teste de estimulação com ACTH são alternativas para o mesmo fim: inclua apenas um, o que o parecer apresentar primeiro.\n"
+        "1.31 EXAME CONDICIONAL: NÃO inclua exame que o parecer só indica \"se os exames iniciais forem inconclusivos\", \"se necessário\", \"considerar\" ou \"caso persista\". Inclua apenas os exames a serem feitos agora.\n"
         "1.3 TEMPERATURA: use o mesmo termo do parecer para a temperatura (ex.: \"elevação leve da temperatura\") e não escreva \"febre\" ou \"quadro febril\" quando o parecer não usou.\n"
         "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro no próprio nome (ex.: \"PCR para Leptospira spp.\", \"RSAT para Brucella canis\"; nunca \"RSAT\" sozinho nem \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
