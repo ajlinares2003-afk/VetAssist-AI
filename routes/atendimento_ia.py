@@ -552,6 +552,43 @@ def _aine_condicionado_a_exame(texto: str) -> bool:
     return False
 
 
+_CUE_CONFIRMACAO = re.compile(
+    r"((se|caso|quando)\s+(for\s+|ser\s+|estiver\s+|vier\s+a\s+ser\s+)?confirmad"
+    r"|(apos|depois d[aeo]|ate)\s+(a\s+|o\s+)?(confirma|resultado|diagnostico confirmad)"
+    r"|aguardar\s+(a\s+)?confirma|somente\s+(apos|com)\s+(a\s+)?confirma|apenas\s+(apos|com)\s+(a\s+)?confirma"
+    r"|confirmado\s+o\s+diagnostico)"
+)
+
+
+def _condicionado_a_confirmacao(texto: str, nome_n: str) -> bool:
+    """True se o parecer só indica o medicamento DEPOIS de confirmar o diagnóstico (ex.: 'Conduta terapêutica
+    (se confirmado): iniciar trilostano', 'após a confirmação, iniciar X'). A condição vale quando aparece na
+    própria frase ANTES do nome do fármaco, ou no título (linha terminada em ':') da lista onde ele está."""
+    base = (nome_n.split() or [""])[0]
+    base = base[:7] if len(base) >= 7 else base
+    if len(base) < 4:
+        return False
+    linhas = str(texto or "").split("\n")
+    for i, linha in enumerate(linhas):
+        for frase in re.split(r"[.;]", linha):
+            f = _norm(frase)
+            pos = f.find(base)
+            if pos < 0:
+                continue
+            if any(m.end() <= pos for m in _CUE_CONFIRMACAO.finditer(f)):
+                return True
+            # título da lista: sobe até 8 linhas procurando a linha de cabeçalho (termina em ':')
+            for j in range(i - 1, max(i - 9, -1), -1):
+                anterior = linhas[j].strip()
+                if not anterior:
+                    break
+                if anterior.endswith(":"):
+                    if _CUE_CONFIRMACAO.search(_norm(anterior)):
+                        return True
+                    break
+    return False
+
+
 def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     sensivel_oral: bool = False, texto_caso: str = "", suspeita: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
@@ -614,6 +651,12 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             alertas.append(
                 f"{nome}: AINE removido por segurança (o caso menciona intoxicação, desidratação grave "
                 "ou comprometimento renal/hepático). O veterinário pode incluir manualmente, se julgar adequado."
+            )
+            continue
+        if _condicionado_a_confirmacao(texto_caso, nome_n):
+            alertas.append(
+                f"{nome}: não incluído porque o parecer só indica este tratamento após a confirmação diagnóstica, "
+                "que ainda depende de exames. Inclua manualmente após a confirmação, se julgar adequado."
             )
             continue
         if nome_n in vistos:
@@ -899,7 +942,7 @@ def sugerir_receita(
         "13.1 BRUCELOSE CANINA: se a SUSPEITA for brucelose canina, NÃO prescreva antimicrobiano (a colheita de exames vem antes e o protocolo é definido após a confirmação). Prescreva apenas o sintomático indicado no parecer.\n"
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: proibir a automedicação e orientar retorno imediato à clínica em caso de piora; \"monitorar sinais de hipersensibilidade\" só entra se houver medicamento prescrito (sem medicamento, não mencione hipersensibilidade). Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias). Indique UM antimicrobiano por vez: antibiótico de segunda linha citado no parecer \"se houver piora\" NÃO entra na receita inicial.\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
-        "16.1 MEDICAMENTO CONDICIONADO A EXAME: se o parecer condicionar um medicamento ao resultado de exame (ex.: AINE \"após a confirmação das funções renal e hepática\"), NÃO o inclua na receita; registre em 'alertas' que ele depende do resultado.\n"
+        "16.1 MEDICAMENTO CONDICIONADO A EXAME: se o parecer condicionar um medicamento ao resultado de exame (ex.: AINE \"após a confirmação das funções renal e hepática\"), NÃO o inclua na receita; registre em 'alertas' que ele depende do resultado. O mesmo vale quando o parecer só indica o tratamento APÓS a confirmação do diagnóstico (ex.: \"Conduta terapêutica (se confirmado): iniciar X\"): nesse caso a receita fica SEM esse medicamento e o alerta diz que o tratamento será definido após a confirmação.\n"
         "16. FIDELIDADE AO PARECER: a receita executa o parecer clínico, não o reescreve. Use SOMENTE fármacos citados no parecer, com a mesma dose (mg/kg) e a mesma frequência. Mantenha a via do parecer; só altere a via quando a regra 7, 13 ou 2.1 exigir (injetável para uso domiciliar vira disponibilidade \"CLINICA\"; fármaco ineficaz por via oral na espécie continua injetável) e, nesse caso, mantenha o MESMO fármaco. Todo analgésico ou anti-inflamatório citado no parecer deve constar na receita; se algum for omitido por segurança (regra 7), registre o motivo em 'alertas'. Se o parecer citar via ou dose incoerente para a espécie, escolha a via correta e descreva o ajuste em 'alertas' em uma frase clínica.\n"
         "17. Não escreva nada fora do JSON.\n\n"
         "FORMATO (JSON):\n"
@@ -1120,7 +1163,7 @@ def _montar_exames(dados: dict, limite: int = 8) -> list:
     for bruto in dados["exames"][:limite]:
         if not isinstance(bruto, dict):
             continue
-        nome = str(bruto.get("nome") or "").strip()[:150]
+        nome = re.sub(r"(?i)corticosterona", "cortisol", str(bruto.get("nome") or "").strip()[:150])
         chave = _norm(nome)
         if not nome or chave in vistos:
             continue
@@ -1131,7 +1174,7 @@ def _montar_exames(dados: dict, limite: int = 8) -> list:
             "nome": nome,
             "categoria": categoria,
             "prioridade": prioridade,
-            "justificativa": corrigir_siglas(str(bruto.get("justificativa") or "").strip()[:300]),
+            "justificativa": corrigir_siglas(re.sub(r"(?i)corticosterona", "cortisol", str(bruto.get("justificativa") or "").strip()[:300])),
         })
     # Urgentes primeiro, mantendo a ordem original dentro de cada grupo.
     exames.sort(key=lambda e: 0 if e["prioridade"] == "URGENTE" else 1)
@@ -1187,6 +1230,7 @@ def sugerir_exames(
         "1.26 MÉTODOS ALTERNATIVOS: quando o parecer oferecer métodos alternativos para o mesmo fim (\"X ou Y\"), peça só o principal, mesmo que o parecer os liste separadamente; cite o segundo na justificativa como \"se positivo, confirmar por Y\", sem criar item.\n"
         "1.27 PRIORIDADE: URGENTE só quando o parecer descreve risco imediato ou instabilidade (desidratação, choque, dor intensa, dispneia, hemorragia, suspeita que muda a conduta nas próximas horas). Em paciente estável, com doença crônica ou investigação de rotina, TODOS os exames são ROTINA, inclusive o exame que confirma a suspeita principal. Nunca marque mais de UM exame como URGENTE.\n"
         "1.29 VERBOS DA JUSTIFICATIVA: exame de triagem ou teste funcional \"auxilia no diagnóstico\" ou \"investiga\"; só use \"confirma\" para exame que de fato confirma (cultura, PCR, histopatológico). Nunca escreva que um teste de supressão, de estimulação, hemograma ou bioquímica \"confirma\" a doença.\n"
+        "1.30 CORTISOL: em cães e gatos o hormônio dosado em testes de supressão e de estimulação é o CORTISOL; nunca escreva \"corticosterona\". Teste de supressão por dexametasona e teste de estimulação com ACTH são alternativas para o mesmo fim: inclua apenas um, o que o parecer apresentar primeiro.\n"
         "1.3 TEMPERATURA: use o mesmo termo do parecer para a temperatura (ex.: \"elevação leve da temperatura\") e não escreva \"febre\" ou \"quadro febril\" quando o parecer não usou.\n"
         "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro no próprio nome (ex.: \"PCR para Leptospira spp.\", \"RSAT para Brucella canis\"; nunca \"RSAT\" sozinho nem \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
