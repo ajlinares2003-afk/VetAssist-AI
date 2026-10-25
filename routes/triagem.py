@@ -78,7 +78,7 @@ class TriagemCreate(BaseModel):
     temperatura: Optional[float] = None
     frequencia_cardiaca: Optional[int] = None
     frequencia_respiratoria: Optional[int] = None
-    tpc_segundos: Optional[int] = None
+    tpc_segundos: Optional[float] = None
     mucosas: Optional[str] = "Normocoradas"
     desidratacao_percentual: Optional[int] = None
     queixa_principal: str
@@ -96,7 +96,7 @@ class AvaliacaoIARequest(BaseModel):
     temperatura: Optional[float] = None
     frequencia_cardiaca: Optional[int] = None
     frequencia_respiratoria: Optional[int] = None
-    tpc_segundos: Optional[int] = None
+    tpc_segundos: Optional[float] = None
     mucosas: Optional[str] = "Normocoradas"
 
 class ReferenciasIARequest(BaseModel):

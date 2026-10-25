@@ -33,7 +33,7 @@ class Triagem(Base):
     temperatura = Column(Numeric(4, 1), nullable=True)
     frequencia_cardiaca = Column(Integer, nullable=True)
     frequencia_respiratoria = Column(Integer, nullable=True)
-    tpc_segundos = Column(Integer, nullable=True)
+    tpc_segundos = Column(Float, nullable=True)
     desidratacao = Column(Integer, nullable=True)
     mucosas = Column(Text, nullable=True) 
     
