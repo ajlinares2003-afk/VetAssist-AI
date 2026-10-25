@@ -274,7 +274,8 @@ def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TO
             texto, _obter_api_key_gemini(db), "RETRIEVAL_QUERY",
             tentativas=1, timeout=RAG_TIMEOUT_CONSULTA,
         )
-        pares = _filtrar_por_distancia(buscar_referencias_com_distancia(db, vetor, limite))
+        todos = buscar_referencias_com_distancia(db, vetor, limite)
+        pares = _filtrar_por_distancia(todos)
     except Exception as exc:  # noqa: BLE001 — uma falha do RAG não pode derrubar a rota que o usa
         logger.warning("RAG indisponível; seguindo sem referências: %s", exc)
         try:
@@ -285,6 +286,13 @@ def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TO
 
     # warning (e não info) de propósito: o logger raiz do uvicorn só mostra WARNING+, e esta linha é a que
     # permite calibrar RAG_DISTANCIA_MAXIMA. Depois de calibrar, volte para logger.info.
+    descartados = [(doc, dist) for doc, dist in todos if (doc, dist) not in pares]
+    if descartados:
+        logger.warning(
+            "RAG: %d trecho(s) descartado(s) pelo corte de %s (distâncias: %s; títulos: %s)",
+            len(descartados), RAG_DISTANCIA_MAXIMA, ", ".join(f"{d:.3f}" for _, d in descartados),
+            " | ".join(str(doc.titulo)[:40] for doc, _ in descartados),
+        )
     logger.warning(
         "RAG: %d referência(s) recuperada(s) (distâncias: %s; títulos: %s)",
         len(pares), ", ".join(f"{dist:.3f}" for _, dist in pares) or "-",

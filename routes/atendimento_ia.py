@@ -89,6 +89,9 @@ ORAL_INEFICAZ_POR_GRUPO = {
 LIMITE_VOLUME_ORAL_ML = 10.0
 LIMITE_VOLUME_INJETAVEL_ML = 5.0
 MAX_DIAS_CLINICA = 3        # aplicação na clínica por mais dias que isso pede confirmação
+# Opioides injetáveis aplicados na clínica: no máximo 2 aplicações (fase aguda); o resto é analgesia domiciliar.
+OPIOIDES_CLINICA = ("buprenorf", "morfina", "metadona", "fentanil", "butorfanol", "meperidina")
+MAX_APLICACOES_OPIOIDE_CLINICA = 2
 MAX_DIAS_CONTROLADO = 7     # controlado por mais dias que isso pede confirmação
 
 ANTIMICROBIANOS = (
@@ -746,6 +749,18 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 alertas.append(
                     f"{nome}: volume de ≈ {_fmt(volume)} mL por tomada parece alto para esta espécie. Confira a "
                     "concentração do produto ou escolha outra apresentação (ex.: comprimido ou concentração maior)."
+                )
+        if (tipo == "CLINICA" and dias_n and freq_h and freq_h < 24
+                and any(o in nome_n for o in OPIOIDES_CLINICA)):
+            n_inicial = int(-(-dias_n * 24 // freq_h))
+            if n_inicial > MAX_APLICACOES_OPIOIDE_CLINICA:
+                dias_n = MAX_APLICACOES_OPIOIDE_CLINICA * freq_h / 24
+                bruto["duracao_dias"] = dias_n
+                alertas.append(
+                    f"{nome}: limitado a {MAX_APLICACOES_OPIOIDE_CLINICA} aplicações na clínica (fase aguda); a IA "
+                    f"havia sugerido {n_inicial}, o que exigiria {n_inicial} retornos do tutor. A continuação da "
+                    "analgesia (ex.: analgésico oral para casa) fica a critério do veterinário. Ajuste manualmente, "
+                    "se julgar necessário."
                 )
         if tipo == "CLINICA" and dias_n and freq_h and freq_h < 24:
             n_aplic = int(-(-dias_n * 24 // freq_h))
