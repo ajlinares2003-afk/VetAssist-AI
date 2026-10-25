@@ -43,17 +43,23 @@ GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 @dataclass(frozen=True)
 class Slot:
     """Descreve um 'encaixe' de IA na tela de configurações."""
-    nome: str          # identificador usado pelo front: "gemini", "groq_1", "groq_2"
+    nome: str          # identificador usado pelo front: "gemini", "gemini_2", "groq_1", "groq_2"
     tipo: str          # "gemini" ou "groq"
     chave_modelo: str  # chave do modelo em configuracoes_sistema
     chave_api: str     # chave da API em configuracoes_sistema
     envs: tuple        # variáveis de ambiente usadas como reserva para a chave
+    chave_alternativa: str = ""  # se esta chave estiver vazia, reaproveita a de outra vaga (ex.: Gemini reserva)
 
 
-# Ordem de prioridade: Gemini (principal) -> Groq 1 -> Groq 2.
+# Ordem de prioridade: Gemini (principal) -> Gemini reserva -> Groq 1 -> Groq 2.
+# O Gemini reserva usa OUTRO modelo (a cota do Gemini é contada por modelo) e, se não tiver chave própria,
+# reaproveita a do Gemini principal.
 SLOTS_ORDEM = (
     Slot("gemini", "gemini", "gemini_model", "gemini_api_key",
          ("GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY")),
+    Slot("gemini_2", "gemini", "gemini_model_2", "gemini_api_key_2",
+         ("GEMINI_API_KEY_2", "GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY"),
+         chave_alternativa="gemini_api_key"),
     Slot("groq_1", "groq", "groq_model_1", "groq_api_key_1", ("GROQ_API_KEY",)),
     Slot("groq_2", "groq", "groq_model_2", "groq_api_key_2", ("GROQ_API_KEY",)),
 )
@@ -102,6 +108,47 @@ def _descrever_erro(exc: Exception, limite: int = 900) -> str:
     return " | ".join(partes)[:limite]
 
 
+# Pausa curta de uma vaga cuja cota esgotou (429 com espera longa): evita perder 1 a 5 s por chamada
+# insistindo num modelo sem cota. Limitada a 10 min para voltar sozinha depois de ativar o faturamento.
+PAUSA_MAXIMA_SEGUNDOS = 600
+_pausas: dict = {}  # (slot, modelo) -> instante (time.monotonic) em que volta a ser tentado
+
+
+def _espera_sugerida_segundos(exc: Exception) -> float:
+    """Tempo de espera pedido pelo Google num 429 (ex.: '40640s'); 0 se não houver."""
+    if str(getattr(exc, "status", "")) != "RESOURCE_EXHAUSTED":
+        return 0.0
+    detalhes = getattr(exc, "details", None)
+    lista = detalhes["error"].get("details") if isinstance(detalhes, dict) and isinstance(detalhes.get("error"), dict) else []
+    for item in lista if isinstance(lista, list) else []:
+        atraso = item.get("retryDelay") if isinstance(item, dict) else None
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)s\s*$", str(atraso or ""))
+        if m:
+            return float(m.group(1))
+    return 0.0
+
+
+def _vaga_pausada(slot: "Slot", modelo: str) -> bool:
+    ate = _pausas.get((slot.nome, modelo))
+    if ate is None:
+        return False
+    if time.monotonic() >= ate:
+        _pausas.pop((slot.nome, modelo), None)
+        return False
+    return True
+
+
+def limpar_pausas() -> None:
+    """Chamada ao salvar/testar as configurações: volta a tentar todas as vagas já."""
+    _pausas.clear()
+
+
+def _registrar_pausa_se_cota(slot: "Slot", modelo: str, exc: Exception) -> None:
+    espera = _espera_sugerida_segundos(exc)
+    if espera >= 120:  # esperas curtas são oscilação; só pausa quando a cota acabou de verdade
+        _pausas[(slot.nome, modelo)] = time.monotonic() + min(espera, PAUSA_MAXIMA_SEGUNDOS)
+
+
 class IAIndisponivelError(Exception):
     """Nenhuma IA configurada ou todas falharam."""
 
@@ -145,6 +192,10 @@ def _chave_do_slot(slot: Slot, config: dict) -> str:
     valor = config.get(slot.chave_api, "")
     if valor and not valor.startswith("****"):
         return valor
+    if slot.chave_alternativa:
+        outra = config.get(slot.chave_alternativa, "")
+        if outra and not outra.startswith("****"):
+            return outra
     for env in slot.envs:
         reserva = os.getenv(env)
         if reserva and reserva.strip():
@@ -362,6 +413,9 @@ def gerar_json(
         api_key = _chave_do_slot(slot, config)
         if not modelo or not api_key:
             continue  # slot não configurado
+        if _vaga_pausada(slot, modelo):
+            tentativas.append(f"{slot.nome}/{modelo}: pausado (cota esgotada há pouco)")
+            continue
         if pesquisa_web and slot.tipo == "groq" and not _groq_tem_busca(modelo):
             continue  # este modelo Groq não tem pesquisa na web (ex.: qwen)
 
@@ -384,6 +438,7 @@ def gerar_json(
             logger.warning("IA respondeu: %s/%s em %.1fs (JSON)", slot.nome, modelo, time.monotonic() - inicio)
             return RespostaIA(dados=dados, provedor=slot.nome, modelo=modelo, fontes=fontes)
         except Exception as exc:  # qualquer falha -> próximo provedor
+            _registrar_pausa_se_cota(slot, modelo, exc)
             registro = f"{slot.nome}/{modelo}: {_descrever_erro(exc)}"
             logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
             tentativas.append(registro)
@@ -433,6 +488,9 @@ def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None,
         api_key = _chave_do_slot(slot, config)
         if not modelo or not api_key:
             continue  # slot não configurado
+        if _vaga_pausada(slot, modelo):
+            tentativas.append(f"{slot.nome}/{modelo}: pausado (cota esgotada há pouco)")
+            continue
         inicio = time.monotonic()
         try:
             com_anexos = bool(anexos) and slot.tipo == "gemini"
@@ -449,6 +507,7 @@ def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None,
             logger.warning("IA respondeu: %s/%s em %.1fs (texto)", slot.nome, modelo, time.monotonic() - inicio)
             return RespostaTexto(texto=texto, provedor=slot.nome, modelo=modelo, anexos_analisados=com_anexos)
         except Exception as exc:  # qualquer falha -> próximo provedor
+            _registrar_pausa_se_cota(slot, modelo, exc)
             registro = f"{slot.nome}/{modelo} (após {time.monotonic() - inicio:.0f}s): {_descrever_erro(exc)}"
             logger.warning("IA falhou, tentando o próximo provedor. %s", registro)
             tentativas.append(registro)

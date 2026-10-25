@@ -13,7 +13,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from database import get_db
-from services.ia_service import CAMPOS_CONFIG_IA, testar_slot
+from services.ia_service import CAMPOS_CONFIG_IA, limpar_pausas, testar_slot
 from services.referencia_auto import limpar_falhas_pesquisa
 from services.security import exigir_perfil
 
@@ -26,6 +26,8 @@ class ConfigIAUpdate(BaseModel):
     """Só estes campos podem ser gravados (lista fechada)."""
     gemini_model: Optional[str] = None
     gemini_api_key: Optional[str] = None
+    gemini_model_2: Optional[str] = None
+    gemini_api_key_2: Optional[str] = None
     groq_model_1: Optional[str] = None
     groq_api_key_1: Optional[str] = None
     groq_model_2: Optional[str] = None
@@ -33,7 +35,7 @@ class ConfigIAUpdate(BaseModel):
 
 
 class TesteIA(BaseModel):
-    provedor: str  # "gemini", "groq_1" ou "groq_2"
+    provedor: str  # "gemini", "gemini_2", "groq_1" ou "groq_2"
     modelo: Optional[str] = None
 
 
@@ -92,6 +94,7 @@ def atualizar_configuracoes_ia(
         raise HTTPException(status_code=500, detail="Erro ao salvar as configurações de IA.")
 
     limpar_falhas_pesquisa()  # configuração mudou: libera novas tentativas de pesquisa
+    limpar_pausas()           # e volta a tentar vagas pausadas por cota esgotada
     return {"mensagem": "Configurações de IA atualizadas com sucesso!"}
 
 
@@ -104,4 +107,5 @@ def testar_modelo_ia(
     resultado = testar_slot(db, payload.provedor.strip().lower(), payload.modelo)
     if resultado.get("sucesso"):
         limpar_falhas_pesquisa()
+        limpar_pausas()
     return resultado
