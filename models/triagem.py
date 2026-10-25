@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, BigInteger, Text, Numeric, Integer, TIMESTAMP, ForeignKey, Enum
+from sqlalchemy import Column, BigInteger, Text, Numeric, Integer, Float, TIMESTAMP, ForeignKey, Enum
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
@@ -33,7 +33,7 @@ class Triagem(Base):
     temperatura = Column(Numeric(4, 1), nullable=True)
     frequencia_cardiaca = Column(Integer, nullable=True)
     frequencia_respiratoria = Column(Integer, nullable=True)
-    tpc_segundos = Column(Float, nullable=True)
+    tpc_segundos = Column(Float, nullable=True)        # decimal (ex.: 2,5 s); coluna double precision no banco
     desidratacao = Column(Integer, nullable=True)
     mucosas = Column(Text, nullable=True) 
     
