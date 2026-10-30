@@ -880,8 +880,8 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
     if clinicos:
         itens = [it for it in itens if it.get("tipo_uso") != "CLINICA"]
         avisos = [
-            f"Aplicação na clínica (fora da receita): {it['medicamento']}, {it['dosagem']}, {it['frequencia']}, "
-            f"{it['duracao']}. Registre no prontuário; não é entregue ao tutor."
+            f"Aplicação na clínica (fora da receita): {it['medicamento']}, {it['dosagem']}, {it['frequencia']}; "
+            f"{it.get('quantidade') or it['duracao']}. Registre no prontuário; não é entregue ao tutor."
             for it in clinicos
         ]
         alertas = avisos + alertas
