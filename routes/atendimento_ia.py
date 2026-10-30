@@ -1185,6 +1185,32 @@ def _garantir_triagem_brucella(exames: list, d: dict) -> list:
     return exames
 
 
+def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
+    """Cão com suspeita de hiperadrenocorticismo: garante o teste funcional (supressão com dexametasona em
+    baixa dose) dentro do limite de exames, mesmo que a IA o tenha cortado por causa do momento ideal (após
+    estabilização). Se faltar vaga, sai o exame de menor rendimento."""
+    if d.get("grupo") != "canino":
+        return exames
+    if not any(m in _norm(d.get("suspeita_diagnostica") or "") for m in ("hiperadrenocort", "cushing")):
+        return exames
+    if any(t in _norm(e["nome"]) for e in exames for t in ("supress", "estimul", "acth", "cortisol", "ldd")):
+        return exames
+    if len(exames) >= limite:
+        baixo = [i for i, e in enumerate(exames)
+                 if any(t in _norm(e["nome"]) for t in ("proteina/creatinina", "proteina creatinina", "upc", "urocultura"))]
+        rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE"]
+        alvo = baixo[-1] if baixo else (rotina[-1] if rotina else len(exames) - 1)
+        exames.pop(alvo)
+    exames.append({
+        "nome": "Teste de supressão por dexametasona em baixa dose",
+        "categoria": "LABORATORIAL",
+        "prioridade": "ROTINA",
+        "justificativa": "Auxilia no diagnóstico de hiperadrenocorticismo pela dosagem de cortisol; realizar após a "
+                         "estabilização do quadro inflamatório ou doloroso.",
+    })
+    return exames
+
+
 def _validar_estrutura_exames(dados: dict) -> dict:
     if not isinstance(dados.get("exames"), list):
         raise ValueError("JSON sem a lista 'exames'.")
@@ -1317,7 +1343,8 @@ def sugerir_exames(
     exames_ia = [e for e in _montar_exames(resp.dados, limite=8 if d.get("solicitar_exames_preventivos") else 6)
                  if not _sorologia_em_semen(e["nome"])]
     return {
-        "exames": _garantir_triagem_brucella(exames_ia, d),
+        "exames": _garantir_exame_da_suspeita(
+            _garantir_triagem_brucella(exames_ia, d), d, 8 if d.get("solicitar_exames_preventivos") else 6),
         "provedor": resp.provedor,
         "modelo": resp.modelo,
         "aviso": "Sugestão gerada por IA. O veterinário decide quais exames solicitar.",
