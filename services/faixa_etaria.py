@@ -16,10 +16,10 @@ FILHOTE, ADULTO, IDOSO = "filhote", "adulto", "idoso"
 FAIXAS = (FILHOTE, ADULTO, IDOSO)
 ROTULO = {FILHOTE: "Filhote/jovem", ADULTO: "Adulto", IDOSO: "Idoso/geriátrico"}
 
-# (fim do filhote, início do idoso), em anos
+# (fim do filhote, início do idoso), em anos. Cães pequenos: idoso a partir de 8 anos (valor a validar pelo veterinário responsável)
 _GATO = (1.0, 11.0)
 _CAO_POR_PORTE = {
-    "miniatura": (1.0, 10.0), "mini": (1.0, 10.0), "toy": (1.0, 10.0), "pequeno": (1.0, 10.0),
+    "miniatura": (1.0, 8.0), "mini": (1.0, 8.0), "toy": (1.0, 8.0), "pequeno": (1.0, 8.0),
     "medio": (1.0, 9.0), "grande": (1.5, 7.0), "gigante": (2.0, 6.0),
 }
 _CAO_PADRAO = (1.0, 9.0)
