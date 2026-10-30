@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import uuid
 import logging
@@ -68,6 +69,26 @@ def _bloco_faixas_referencia(db, animal_id) -> str:
         f"- TPC: {ref.get('tpc')}\n"
         f"- Mucosas: {ref.get('mucosas')}\n\n"
     )
+
+_SUBS_PARECER = (
+    (re.compile(r"(?i)\baltamente\s+(compat[ií]vel|sugestiv[oa])"),
+     lambda m: m.group(1).capitalize() if m.group(0)[0].isupper() else m.group(1)),
+    (re.compile(r"(?i)\b(investigaç[ãa]o|avaliaç[ãa]o|pesquisa|identificaç[ãa]o)\s+imediat[ao]\b"), r"\1"),
+)
+_DOR_INTENSA = re.compile(r"(?i)(\bdor(?:\s+[\wçãõáéíóúâêô-]+){0,3}?)\s+intensa\b")
+
+
+def _higienizar_parecer(texto: str, dados_caso: str) -> str:
+    """Rede de segurança sobre o texto da IA: tira exageros que o modelo repete mesmo proibidos no prompt
+    ('altamente compatível', 'investigação imediata') e 'dor ... intensa' quando os dados não dizem 'intensa'."""
+    if not texto:
+        return texto
+    for padrao, troca in _SUBS_PARECER:
+        texto = padrao.sub(troca, texto)
+    if "intens" not in (dados_caso or "").lower():
+        texto = _DOR_INTENSA.sub(r"\1", texto)
+    return texto
+
 
 router = APIRouter(
     prefix="/consultas",
@@ -461,6 +482,8 @@ def sugestoes_copiloto_multimodal(
 
         suspeita_extraida = corrigir_siglas(suspeita_extraida)
         sugestoes_extraidas = corrigir_siglas(sugestoes_extraidas)
+        sugestoes_extraidas = _higienizar_parecer(
+            sugestoes_extraidas, " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)))
         
         # Aplica a guilhotina higienizada do módulo barragem_sanitaria
         # Se o parsing não achou a suspeita, avalia o texto bruto (falha para o lado seguro)
