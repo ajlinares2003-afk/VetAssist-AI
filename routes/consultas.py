@@ -75,6 +75,11 @@ _SUBS_PARECER = (
      lambda m: m.group(1).capitalize() if m.group(0)[0].isupper() else m.group(1)),
     (re.compile(r"(?i)\b(investigaç[ãa]o|avaliaç[ãa]o|pesquisa|identificaç[ãa]o)\s+imediat[ao]\b"), r"\1"),
 )
+_VAZAMENTOS_PARECER = (
+    re.compile(r"(?i)\s*\(\s*regras?\s+\d+(?:\.\d+)*(?:\s*(?:e|,)\s*\d+(?:\.\d+)*)*\s*\)"),  # "(regra 2.29)"
+    re.compile(r"\s*\(\s*(?:ver\s+)?\[\d+\]\s*\)"),                                       # "(ver [1])"
+    re.compile(r"\s*\[\d+\]"),                                                              # "[1]"
+)
 _DOR_INTENSA = re.compile(r"(?i)(\bdor(?:\s+[\wçãõáéíóúâêô-]+){0,3}?)\s+intensa\b")
 
 
@@ -85,6 +90,9 @@ def _higienizar_parecer(texto: str, dados_caso: str) -> str:
         return texto
     for padrao, troca in _SUBS_PARECER:
         texto = padrao.sub(troca, texto)
+    for padrao in _VAZAMENTOS_PARECER:
+        texto = padrao.sub("", texto)
+    texto = re.sub(r"\.\*(?=\s|$)", ".", texto)
     if "intens" not in (dados_caso or "").lower():
         texto = _DOR_INTENSA.sub(r"\1", texto)
     return texto

@@ -1185,12 +1185,35 @@ def _garantir_triagem_brucella(exames: list, d: dict) -> list:
     return exames
 
 
+def _garantir_lipase_pancreatica(exames: list, d: dict, limite: int) -> list:
+    """Cão com dor abdominal cranial ou pancreatite citada no caso: garante a cPL, mesmo que o parecer a tenha
+    esquecido. Se faltar vaga, sai o exame de menor rendimento."""
+    caso = _norm(_texto_do_caso(d))
+    if "pancreatit" not in caso and "dor abdominal cranial" not in caso:
+        return exames
+    if any(t in _norm(e["nome"]) for e in exames for t in ("lipase", "cpl", "spec")):
+        return exames
+    if len(exames) >= limite:
+        baixo = [i for i, e in enumerate(exames)
+                 if any(t in _norm(e["nome"]) for t in ("proteina/creatinina", "proteina creatinina", "upc", "urocultura"))]
+        rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE"]
+        exames.pop(baixo[-1] if baixo else (rotina[-1] if rotina else len(exames) - 1))
+    exames.append({
+        "nome": "Lipase pancreática específica canina (cPL)",
+        "categoria": "LABORATORIAL",
+        "prioridade": "ROTINA",
+        "justificativa": "Auxilia no diagnóstico de pancreatite diante da dor abdominal cranial.",
+    })
+    return exames
+
+
 def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     """Cão com suspeita de hiperadrenocorticismo: garante o teste funcional (supressão com dexametasona em
     baixa dose) dentro do limite de exames, mesmo que a IA o tenha cortado por causa do momento ideal (após
     estabilização). Se faltar vaga, sai o exame de menor rendimento."""
     if d.get("grupo") != "canino":
         return exames
+    exames = _garantir_lipase_pancreatica(exames, d, limite)
     if not any(m in _norm(d.get("suspeita_diagnostica") or "") for m in ("hiperadrenocort", "cushing")):
         return exames
     if any(t in _norm(e["nome"]) for e in exames for t in ("supress", "estimul", "acth", "cortisol", "ldd")):
@@ -1253,7 +1276,7 @@ def _montar_exames(dados: dict, limite: int = 8) -> list:
             "nome": nome,
             "categoria": categoria,
             "prioridade": prioridade,
-            "justificativa": corrigir_siglas(_suavizar_confirma(nome, re.sub(r"(?i)corticosterona", "cortisol", re.sub(r"(?i)\bcPLI\b", "cPL", str(bruto.get("justificativa") or "").strip()[:300])))),
+            "justificativa": corrigir_siglas(_suavizar_confirma(nome, re.sub(r"(?i)corticosterona", "cortisol", re.sub(r"(?i)leucoenzimograma", "leucograma", re.sub(r"(?i)\bcPLI\b", "cPL", str(bruto.get("justificativa") or "").strip()[:300]))))),
         })
     # Urgentes primeiro, mantendo a ordem original dentro de cada grupo.
     exames.sort(key=lambda e: 0 if e["prioridade"] == "URGENTE" else 1)
