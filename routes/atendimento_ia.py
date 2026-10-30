@@ -92,6 +92,8 @@ MAX_DIAS_CLINICA = 3        # aplicação na clínica por mais dias que isso ped
 # Opioides injetáveis aplicados na clínica: no máximo 2 aplicações (fase aguda); o resto é analgesia domiciliar.
 OPIOIDES_CLINICA = ("buprenorf", "morfina", "metadona", "fentanil", "butorfanol", "meperidina", "tramadol")
 MAX_APLICACOES_OPIOIDE_CLINICA = 2
+MAX_EXAMES = 7                # exames sugeridos por atendimento (o veterinário remove com o X o que achar excessivo)
+MAX_EXAMES_CHECKUP = 8        # quando o tutor pede check-up preventivo
 _SAIS_E_LIGACOES = {"cloridrato", "sulfato", "citrato", "tartarato", "maleato", "sodica", "sodico", "fosfato", "acetato", "succinato", "mesilato", "besilato", "para", "uso", "oral"}
 MAX_DIAS_CONTROLADO = 7     # controlado por mais dias que isso pede confirmação
 
@@ -1276,7 +1278,7 @@ def _montar_exames(dados: dict, limite: int = 8) -> list:
             "nome": nome,
             "categoria": categoria,
             "prioridade": prioridade,
-            "justificativa": corrigir_siglas(_suavizar_confirma(nome, re.sub(r"(?i)corticosterona", "cortisol", re.sub(r"(?i)leucoenzimograma", "leucograma", re.sub(r"(?i)\bcPLI\b", "cPL", str(bruto.get("justificativa") or "").strip()[:300]))))),
+            "justificativa": corrigir_siglas(_suavizar_confirma(nome, re.sub(r"(?i)corticosterona", "cortisol", re.sub(r"(?i)\s+imediat[ao]s?\b", "", re.sub(r"(?i)leucoenzimograma", "leucograma", re.sub(r"(?i)\bcPLI\b", "cPL", str(bruto.get("justificativa") or "").strip()[:300])))))),
         })
     # Urgentes primeiro, mantendo a ordem original dentro de cada grupo.
     exames.sort(key=lambda e: 0 if e["prioridade"] == "URGENTE" else 1)
@@ -1324,7 +1326,7 @@ def sugerir_exames(
         f"{preventivos}"
         f"CASO:\n{_texto_do_caso(d)}\n\n"
         "REGRAS OBRIGATÓRIAS:\n"
-        "1. Peça só exames que mudem a conduta. Máximo de 6, do mais importante para o menos; o máximo sobe para 8 se o tutor solicitou check-up preventivo ou se o parecer clínico listar mais de 6 exames.\n"
+        "1. Peça só exames que mudem a conduta. Máximo de 7, do mais importante para o menos; o máximo sobe para 8 se o tutor solicitou check-up preventivo.\n"
         "1.2 COERÊNCIA COM O PARECER: inclua todos os exames que o parecer clínico recomenda (dentro do máximo) e não acrescente exame que o parecer não cite, salvo se for essencial para a segurança.\n"
         "1.15 JUSTIFICATIVA TECNICAMENTE CORRETA: a justificativa deve descrever o que o exame realmente mede (ex.: urocultura avalia o trato urinário, não \"infecção sistêmica\"; hemograma avalia resposta inflamatória e anemia, não função de órgão). Não peça o mesmo tipo de exame em vários locais (ex.: cultura de sêmen, de secreção e de urina) sem motivo clínico explícito para cada um. Não peça exame já contido em outro item (ex.: glicemia quando a bioquímica já a inclui). Não escreva que o resultado \"confirma\" a doença nem cite valores de corte (variam por laboratório): use \"sugere\" ou \"ajuda a confirmar\".\n"
         "1.28 SOROLOGIA É NO SANGUE: RSAT, IDGA e ELISA detectam anticorpos no soro; nunca peça esses testes em sêmen. Em sêmen, peça PCR, cultura ou análise/citologia, conforme o parecer. Não repita o mesmo teste em dois materiais.\n"
@@ -1363,11 +1365,11 @@ def sugerir_exames(
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 
-    exames_ia = [e for e in _montar_exames(resp.dados, limite=8 if d.get("solicitar_exames_preventivos") else 6)
+    exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
     return {
         "exames": _garantir_exame_da_suspeita(
-            _garantir_triagem_brucella(exames_ia, d), d, 8 if d.get("solicitar_exames_preventivos") else 6),
+            _garantir_triagem_brucella(exames_ia, d), d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
         "provedor": resp.provedor,
         "modelo": resp.modelo,
         "aviso": "Sugestão gerada por IA. O veterinário decide quais exames solicitar.",
