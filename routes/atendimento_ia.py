@@ -90,8 +90,9 @@ LIMITE_VOLUME_ORAL_ML = 10.0
 LIMITE_VOLUME_INJETAVEL_ML = 5.0
 MAX_DIAS_CLINICA = 3        # aplicação na clínica por mais dias que isso pede confirmação
 # Opioides injetáveis aplicados na clínica: no máximo 2 aplicações (fase aguda); o resto é analgesia domiciliar.
-OPIOIDES_CLINICA = ("buprenorf", "morfina", "metadona", "fentanil", "butorfanol", "meperidina")
+OPIOIDES_CLINICA = ("buprenorf", "morfina", "metadona", "fentanil", "butorfanol", "meperidina", "tramadol")
 MAX_APLICACOES_OPIOIDE_CLINICA = 2
+_SAIS_E_LIGACOES = {"cloridrato", "sulfato", "citrato", "tartarato", "maleato", "sodica", "sodico", "fosfato", "acetato", "succinato", "mesilato", "besilato", "para", "uso", "oral"}
 MAX_DIAS_CONTROLADO = 7     # controlado por mais dias que isso pede confirmação
 
 ANTIMICROBIANOS = (
@@ -662,6 +663,15 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 "que ainda depende de exames. Inclua manualmente após a confirmação, se julgar adequado."
             )
             continue
+        _pal = [w for w in nome_n.split() if w not in _SAIS_E_LIGACOES and len(w) >= 4]
+        _base = (_pal[0] if _pal else "")[:7]
+        if (caso_n and len(_base) >= 4 and (any(o in nome_n for o in OPIOIDES_CLINICA) or _verdadeiro(bruto.get("controlado")))
+                and _base not in caso_n):
+            alertas.append(
+                f"{nome}: não incluído porque o parecer não indica este medicamento (cita apenas a classe ou a "
+                "necessidade de analgesia). Escolha o fármaco e inclua manualmente, se julgar adequado."
+            )
+            continue
         if nome_n in vistos:
             continue
         vistos.add(nome_n)
@@ -808,11 +818,6 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             quantidade = _quantidade_total(dose, peso, conc_valor, conc_unidade,
                                            bruto.get("frequencia_horas"), bruto.get("duracao_dias"),
                                            clinica=(tipo == "CLINICA"))
-            if tipo == "CLINICA":
-                alertas.append(
-                    f"{nome}: item de aplicação na clínica; a quantidade indicada corresponde às aplicações "
-                    "previstas, não a um frasco dispensado ao tutor. Confirme."
-                )
             if dias_n and dias_n > MAX_DIAS_CONTROLADO:
                 alertas.append(
                     f"{nome}: medicamento controlado por {int(round(dias_n))} dias. Confirme a necessidade e "
@@ -868,7 +873,17 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     and any(k in n_av for k in ("obrigatori", "oficial", "mapa", "imediat"))):
                 continue
             alertas.append(corrigir_siglas(aviso.strip()[:300]))
-    return {"itens": itens, "alertas": alertas[:15]}
+    # Aplicação feita na clínica não é prescrição para o tutor: sai da receita e vira registro/aviso.
+    clinicos = [it for it in itens if it.get("tipo_uso") == "CLINICA"]
+    if clinicos:
+        itens = [it for it in itens if it.get("tipo_uso") != "CLINICA"]
+        avisos = [
+            f"Aplicação na clínica (fora da receita): {it['medicamento']}, {it['dosagem']}, {it['frequencia']}, "
+            f"{it['duracao']}. Registre no prontuário; não é entregue ao tutor."
+            for it in clinicos
+        ]
+        alertas = avisos + alertas
+    return {"itens": itens, "alertas": alertas[:15], "aplicacoes_clinica": clinicos}
 
 
 def _doenca_oficial_do_caso(d: dict, db: Session) -> Optional[dict]:
@@ -958,6 +973,7 @@ def sugerir_receita(
         "14. ALERTAS DE SEGURANÇA (MEDICINA DEFENSIVA): Seja cauteloso com a alta. Inclua no array 'alertas' ou nas 'recomendacoes' instruções rigorosas para o tutor: proibir a automedicação e orientar retorno imediato à clínica em caso de piora; \"monitorar sinais de hipersensibilidade\" só entra se houver medicamento prescrito (sem medicamento, não mencione hipersensibilidade). Se indicar antibióticos, respeite a janela terapêutica mínima (nunca 2 ou 3 dias). Indique UM antimicrobiano por vez: antibiótico de segunda linha citado no parecer \"se houver piora\" NÃO entra na receita inicial.\n"
         "14.1 ALERTAS FIÉIS AO PARECER: os alertas não podem ir além do parecer. Não escreva \"imediato\", \"agudo\", \"urgente\" ou \"urgência\" se o parecer não usou o termo (ex.: parecer que \"recomenda internamento\" não vira \"internamento imediato\"; quadro sem anotação de início agudo não vira \"dor aguda\"). Os alertas são lidos pelo veterinário que já está atendendo: não mande \"procurar atendimento veterinário\". Se o parecer recomenda internamento ou adia o tratamento para depois dos exames, o alerta diz apenas isso (ex.: \"Internamento recomendado no parecer; prescrição definida após os exames\").\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
+        "16.2 FÁRMACO NÃO NOMEADO: se o parecer cita apenas a classe (ex.: \"analgesia com opioides\", \"caso seja indicada analgesia\") ou condiciona o uso (\"caso seja indicada\"), NÃO escolha o fármaco por conta própria: devolva sem esse medicamento e registre em 'alertas' que o parecer não nomeia o fármaco.\n"
         "16.1 MEDICAMENTO CONDICIONADO A EXAME: se o parecer condicionar um medicamento ao resultado de exame (ex.: AINE \"após a confirmação das funções renal e hepática\"), NÃO o inclua na receita; registre em 'alertas' que ele depende do resultado. O mesmo vale quando o parecer só indica o tratamento APÓS a confirmação do diagnóstico (ex.: \"Conduta terapêutica (se confirmado): iniciar X\"): nesse caso a receita fica SEM esse medicamento e o alerta diz que o tratamento será definido após a confirmação.\n"
         "16. FIDELIDADE AO PARECER: a receita executa o parecer clínico, não o reescreve. Use SOMENTE fármacos citados no parecer, com a mesma dose (mg/kg) e a mesma frequência. Mantenha a via do parecer; só altere a via quando a regra 7, 13 ou 2.1 exigir (injetável para uso domiciliar vira disponibilidade \"CLINICA\"; fármaco ineficaz por via oral na espécie continua injetável) e, nesse caso, mantenha o MESMO fármaco. Todo analgésico ou anti-inflamatório citado no parecer deve constar na receita; se algum for omitido por segurança (regra 7), registre o motivo em 'alertas'. Se o parecer citar via ou dose incoerente para a espécie, escolha a via correta e descreva o ajuste em 'alertas' em uma frase clínica.\n"
         "17. Não escreva nada fora do JSON.\n\n"
@@ -1268,6 +1284,7 @@ def sugerir_exames(
         "1.29 VERBOS DA JUSTIFICATIVA: exame de triagem ou teste funcional \"auxilia no diagnóstico\" ou \"investiga\"; só use \"confirma\" para exame que de fato confirma (cultura, PCR, histopatológico). Nunca escreva que um teste de supressão, de estimulação, hemograma ou bioquímica \"confirma\" a doença.\n"
         "1.30 CORTISOL: em cães e gatos o hormônio dosado em testes de supressão e de estimulação é o CORTISOL; nunca escreva \"corticosterona\". Teste de supressão por dexametasona e teste de estimulação com ACTH são alternativas para o mesmo fim: inclua apenas um, o que o parecer apresentar primeiro.\n"
         "1.31 EXAME CONDICIONAL: NÃO inclua exame que o parecer só indica \"se os exames iniciais forem inconclusivos\", \"se necessário\", \"considerar\" ou \"caso persista\". Inclua apenas os exames a serem feitos agora.\n"
+        "1.33 PRIORIDADE E TERMOS: o item URGENTE só pode ser exame cujo resultado muda a conduta nas próximas horas segundo o parecer; imagem de rotina não é urgente. Use somente nomes de exames e termos consagrados na justificativa (nunca crie termos como \"leucoenzimograma\"; o hemograma avalia anemia e leucograma).\n"
         "1.32 MOMENTO DO EXAME: se o parecer condiciona o momento do exame (ex.: teste endócrino \"após a estabilização\" do quadro inflamatório ou doloroso), a justificativa deve registrar isso em poucas palavras (ex.: \"realizar após estabilização do quadro\"). Não escreva \"agudo\" ou \"crônico\" se o parecer não usou.\n"
         "1.3 TEMPERATURA: use o mesmo termo do parecer para a temperatura (ex.: \"elevação leve da temperatura\") e não escreva \"febre\" ou \"quadro febril\" quando o parecer não usou.\n"
         "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro no próprio nome (ex.: \"PCR para Leptospira spp.\", \"RSAT para Brucella canis\"; nunca \"RSAT\" sozinho nem \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
