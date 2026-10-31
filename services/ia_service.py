@@ -159,16 +159,17 @@ def _eh_sobrecarga(exc: Exception) -> bool:
     return str(getattr(exc, "status", "")).upper() == "UNAVAILABLE" or getattr(exc, "code", None) == 503
 
 
-def _chamar_com_repeticao_503(slot: "Slot", chamada: Callable[[], str]) -> str:
-    """Executa `chamada`; se o Gemini devolver 503, espera um pouco e tenta UMA vez mais."""
+def _chamar_com_repeticao_503(slot: "Slot", chamada: Callable[[int], str], timeout: int) -> str:
+    """Executa `chamada(timeout)`; se o Gemini devolver 503, espera um pouco e tenta UMA vez mais, com a
+    METADE do prazo (mín. 10 s), para a repetição não dobrar a espera do usuário quando o modelo está lento."""
     try:
-        return chamada()
+        return chamada(timeout)
     except Exception as exc:  # noqa: BLE001
         if slot.tipo == "gemini" and PAUSA_REPETIR_503_SEGUNDOS > 0 and _eh_sobrecarga(exc):
             logger.warning("Gemini sobrecarregado (503) em %s; nova tentativa em %.0fs.",
                            slot.nome, PAUSA_REPETIR_503_SEGUNDOS)
             time.sleep(PAUSA_REPETIR_503_SEGUNDOS)
-            return chamada()
+            return chamada(max(10, int(timeout) // 2))
         raise
 
 
@@ -453,8 +454,8 @@ def gerar_json(
                 if validar_fontes:
                     validar_fontes(fontes)
             else:
-                bruto = _chamar_com_repeticao_503(slot, lambda: _chamar_provedor(
-                    slot, modelo, api_key, prompt, json_mode=True, timeout=timeout or TIMEOUT_SEGUNDOS))
+                bruto = _chamar_com_repeticao_503(slot, lambda t: _chamar_provedor(
+                    slot, modelo, api_key, prompt, json_mode=True, timeout=t), timeout or TIMEOUT_SEGUNDOS)
             dados = _extrair_json(bruto)
             if validar:
                 dados = validar(dados)
@@ -518,12 +519,12 @@ def gerar_texto(db: Session, prompt: str, timeout: Optional[int] = None,
         try:
             com_anexos = bool(anexos) and slot.tipo == "gemini"
             if com_anexos:
-                bruto = _chamar_com_repeticao_503(slot, lambda: _chamar_gemini_com_anexos(
-                    modelo, api_key, prompt, anexos, timeout or TIMEOUT_TEXTO_SEGUNDOS))
+                bruto = _chamar_com_repeticao_503(slot, lambda t: _chamar_gemini_com_anexos(
+                    modelo, api_key, prompt, anexos, t), timeout or TIMEOUT_TEXTO_SEGUNDOS)
             else:
-                bruto = _chamar_com_repeticao_503(slot, lambda: _chamar_provedor(
+                bruto = _chamar_com_repeticao_503(slot, lambda t: _chamar_provedor(
                     slot, modelo, api_key, (prompt_sem_anexos or prompt) if anexos else prompt,
-                    json_mode=False, timeout=timeout or TIMEOUT_TEXTO_SEGUNDOS))
+                    json_mode=False, timeout=t), timeout or TIMEOUT_TEXTO_SEGUNDOS)
             texto = re.sub(r"<think>.*?</think>", "", bruto or "", flags=re.DOTALL | re.IGNORECASE).strip()
             if not texto:
                 raise ValueError("A IA devolveu uma resposta vazia.")

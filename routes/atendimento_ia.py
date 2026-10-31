@@ -595,6 +595,17 @@ def _condicionado_a_confirmacao(texto: str, nome_n: str) -> bool:
     return False
 
 
+def _cortar_texto(texto: str, limite: int) -> str:
+    """Corta no fim da última frase (ou palavra) que cabe no limite, sem deixar palavra pela metade."""
+    if len(texto) <= limite:
+        return texto
+    corte = texto[:limite]
+    fim = max(corte.rfind(". "), corte.rfind("; "))
+    if fim >= limite * 0.5:
+        return corte[:fim + 1]
+    return corte.rsplit(" ", 1)[0].rstrip(",;:") + "…"
+
+
 def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     sensivel_oral: bool = False, texto_caso: str = "", suspeita: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
@@ -874,7 +885,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             if (grupo in ("canino", "felino") and "notific" in n_av and "raiva" not in n_av
                     and any(k in n_av for k in ("obrigatori", "oficial", "mapa", "imediat"))):
                 continue
-            alertas.append(corrigir_siglas(aviso.strip()[:300]))
+            alertas.append(corrigir_siglas(_cortar_texto(aviso.strip(), 300)))
     # Aplicação feita na clínica não é prescrição para o tutor: sai da receita e vira registro/aviso.
     clinicos = [it for it in itens if it.get("tipo_uso") == "CLINICA"]
     if clinicos:
@@ -976,6 +987,7 @@ def sugerir_receita(
         "14.1 ALERTAS FIÉIS AO PARECER: os alertas não podem ir além do parecer. Não escreva \"imediato\", \"agudo\", \"urgente\" ou \"urgência\" se o parecer não usou o termo (ex.: parecer que \"recomenda internamento\" não vira \"internamento imediato\"; quadro sem anotação de início agudo não vira \"dor aguda\"). Os alertas são lidos pelo veterinário que já está atendendo: não mande \"procurar atendimento veterinário\". Se o parecer recomenda internamento ou adia o tratamento para depois dos exames, o alerta diz apenas isso (ex.: \"Internamento recomendado no parecer; prescrição definida após os exames\").\n"
         "14.2 TOM DOS ALERTAS: escreva os alertas de segurança como orientação direta ao tutor, nunca como ordem ao veterinário (errado: \"Proibir a automedicação e orientar retorno\"; certo: \"Não medicar o animal sem orientação veterinária; retornar à clínica se houver piora\"). Não use \"imediato\" nesse alerta.\n"
         "14.3 PACIENTE INSTÁVEL SEM RECEITA: se o parecer descreve emergência ou instabilidade (ex.: dispneia, cianose, choque) e nenhum medicamento vai para a receita, inclua em 'alertas' que o tratamento é feito na clínica e que não há prescrição ambulatorial; a prescrição hospitalar fica a critério do veterinário.\n"
+        "14.4 ALERTAS CURTOS: cada alerta com no máximo 200 caracteres e uma única ideia; divida em mais de um alerta em vez de escrever um texto longo.\n"
         "15. SILÊNCIO ESTRUTURAL (PROIBIDO META-COMENTÁRIOS): É expressamente proibido justificar suas escolhas, narrar suas ações ou conversar com o sistema dentro dos valores do JSON. Não escreva justificativas como 'O fracionamento será realizado pelo sistema', 'A IA decidiu' ou 'Conforme a regra'. Os campos de texto devem conter APENAS orientações clínicas diretas e pragmáticas para o tutor, redigidas no jargão veterinário brasileiro (nunca traduza literalmente do inglês, ex: use 'claudicação' e não 'lamença').\n"
         "16.2 FÁRMACO NÃO NOMEADO: se o parecer cita apenas a classe (ex.: \"analgesia com opioides\", \"caso seja indicada analgesia\") ou condiciona o uso (\"caso seja indicada\"), NÃO escolha o fármaco por conta própria: devolva sem esse medicamento e registre em 'alertas' que o parecer não nomeia o fármaco.\n"
         "16.1 MEDICAMENTO CONDICIONADO A EXAME: se o parecer condicionar um medicamento ao resultado de exame (ex.: AINE \"após a confirmação das funções renal e hepática\"), NÃO o inclua na receita; registre em 'alertas' que ele depende do resultado. O mesmo vale quando o parecer só indica o tratamento APÓS a confirmação do diagnóstico (ex.: \"Conduta terapêutica (se confirmado): iniciar X\"): nesse caso a receita fica SEM esse medicamento e o alerta diz que o tratamento será definido após a confirmação.\n"
