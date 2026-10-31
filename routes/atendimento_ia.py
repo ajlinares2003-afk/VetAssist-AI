@@ -1222,10 +1222,37 @@ def _garantir_lipase_pancreatica(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _garantir_retroviral_felino(exames: list, d: dict, limite: int) -> list:
+    """Gato com efusão (pleural/abdominal) e suspeita de PIF, linfoma ou neoplasia no parecer: garante o teste
+    rápido FIV/FeLV, mesmo que a IA o tenha omitido. Se faltar vaga, sai o último exame de rotina."""
+    if d.get("grupo") != "felino":
+        return exames
+    caso = _norm(_texto_do_caso(d))
+    if not any(t in caso for t in ("efusao", "derrame")):
+        return exames
+    caso = f" {caso} "
+    if not any(t in caso for t in ("peritonite infecciosa", " pif ", "linfoma", "neoplas")):
+        return exames
+    if any(t in _norm(e["nome"]) for e in exames for t in ("fiv", "felv", "retrovir", "leucemia felina")):
+        return exames
+    if len(exames) >= limite:
+        rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE"]
+        exames.pop(rotina[-1] if rotina else len(exames) - 1)
+    exames.append({
+        "nome": "Teste rápido FIV/FeLV",
+        "categoria": "LABORATORIAL",
+        "prioridade": "ROTINA",
+        "justificativa": "Investiga infecção por retrovírus felinos, que influencia o prognóstico e a conduta em gato com efusão e suspeita de PIF ou linfoma.",
+    })
+    return exames
+
+
 def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     """Cão com suspeita de hiperadrenocorticismo: garante o teste funcional (supressão com dexametasona em
     baixa dose) dentro do limite de exames, mesmo que a IA o tenha cortado por causa do momento ideal (após
     estabilização). Se faltar vaga, sai o exame de menor rendimento."""
+    if d.get("grupo") == "felino":
+        return _garantir_retroviral_felino(exames, d, limite)
     if d.get("grupo") != "canino":
         return exames
     exames = _garantir_lipase_pancreatica(exames, d, limite)
