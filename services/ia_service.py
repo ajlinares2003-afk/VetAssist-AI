@@ -216,11 +216,19 @@ def _chave_do_slot(slot: Slot, config: dict) -> str:
     valor = config.get(slot.chave_api, "")
     if valor and not valor.startswith("****"):
         return valor
+    envs = list(slot.envs)
     if slot.chave_alternativa:
+        # A variável de ambiente PRÓPRIA da vaga (1ª da lista, ex.: GEMINI_API_KEY_2) vale mais que reaproveitar
+        # a chave de outra vaga: assim o Gemini reserva usa a segunda chave (outro projeto = outra cota).
+        propria, envs = envs[:1], envs[1:]
+        for env in propria:
+            reserva = os.getenv(env)
+            if reserva and reserva.strip():
+                return reserva.strip()
         outra = config.get(slot.chave_alternativa, "")
         if outra and not outra.startswith("****"):
             return outra
-    for env in slot.envs:
+    for env in envs:
         reserva = os.getenv(env)
         if reserva and reserva.strip():
             return reserva.strip()
