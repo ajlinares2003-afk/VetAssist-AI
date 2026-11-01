@@ -323,7 +323,9 @@ def _montar_referencias(db: Session, dados: ReferenciasIARequest, pesquisar: boo
     if info["motivo"] and not info["fallback_adulto"]:
         fonte += f" | {info['motivo']}"
 
-    peso_aplicavel = faixa != FILHOTE
+    # Filhote só tem peso de referência quando a biblioteca tem a linha PRÓPRIA de filhote; com a linha de adulto
+    # (plano B), o peso de adulto não se aplica.
+    peso_aplicavel = faixa != FILHOTE or (not info["fallback_adulto"] and getattr(bib, "faixa_etaria", None) == FILHOTE)
     peso_txt = (f"💡 Ref. Peso: {bib.peso_min} - {bib.peso_max} kg" if peso_aplicavel else
                 f"💡 Peso adulto de ref.: {bib.peso_min} - {bib.peso_max} kg (não se aplica a filhote)")
 
