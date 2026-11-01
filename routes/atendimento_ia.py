@@ -1024,6 +1024,12 @@ def sugerir_receita(
         logger.warning("sugerir-receita: barragem aplicada na SAÍDA do LLM (%s)", doenca_saida["nome"])
         return _resposta_barragem_receita(doenca_saida, d.get("peso"))
 
+    fixos = _alertas_esporotricose(d)
+    if fixos:
+        # troca os avisos genéricos da IA sobre luvas/isolamento pelos fixos, sem duplicar
+        receita["alertas"] = [a for a in receita["alertas"]
+                              if not re.search(r"(?i)luvas|isol|avalia[çc][ãa]o m[ée]dica humana|itraconazol", a)]
+        receita["alertas"] = (fixos + receita["alertas"])[:15]
     if d.get("peso") is None:
         receita["alertas"].insert(0, "Peso não informado: as doses não foram calculadas.")
     receita.update({
@@ -1276,6 +1282,65 @@ def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _suspeita_esporotricose(d: dict) -> bool:
+    return bool(re.search(r"esporotric|sporothrix", _norm(_texto_do_caso(d))))
+
+
+def _idade_em_anos(idade) -> Optional[float]:
+    m = re.search(r"\d+(?:[.,]\d+)?", str(idade or ""))
+    if not m:
+        return None
+    v = float(m.group(0).replace(",", "."))
+    return v / 12 if re.search(r"(?i)\bmes", str(idade)) else v
+
+
+def _alertas_esporotricose(d: dict) -> list:
+    """Esporotricose suspeita: avisos fixos (zoonose e cautela pediátrica), mesmo que a IA os esqueça."""
+    if not _suspeita_esporotricose(d):
+        return []
+    aviso = ("ALERTA ZOONÓTICO: a esporotricose é transmissível ao ser humano. Isolar o animal de outros animais e de "
+             "crianças, usar luvas ao manuseá-lo e lavar bem as mãos depois.")
+    if re.search(r"arranh|mord|lesao (no|na) (braco|mao|tutor)|ferida (no|na) (braco|mao)", _norm(_texto_do_caso(d))):
+        aviso += (" O tutor, que teve contato com lesão (arranhadura), deve procurar atendimento médico humano "
+                  "(infectologista) imediatamente, informando a suspeita de esporotricose no animal.")
+    alertas = [aviso]
+    anos, peso = _idade_em_anos(d.get("idade")), d.get("peso")
+    if (anos is not None and anos < 1) or (peso and float(peso) <= 2.5):
+        alertas.append("Filhote: o antifúngico de escolha (itraconazol) só deve ser prescrito após a confirmação. As cápsulas "
+                       "comerciais não permitem fracionamento exato nesse peso: solicitar formulação manipulada ajustada ao "
+                       "peso, com monitoramento hepático rigoroso (ALT e FA) durante todo o tratamento, que dura meses.")
+    return alertas
+
+
+def _ajustar_exames_esporotricose(exames: list, d: dict, limite: int) -> list:
+    """Esporotricose suspeita: o exame inicial é a citologia por decalque (imprint); PAAF e biópsia não entram
+    como primeira etapa. A citologia fica na frente (depois de um eventual exame urgente)."""
+    if not _suspeita_esporotricose(d):
+        return exames
+    exames = [e for e in exames if not any(t in _norm(e["nome"]) for t in ("biops", "histopatol", "paaf", "agulha fina"))]
+    citologia = None
+    for e in exames:
+        n = _norm(e["nome"])
+        if "decalque" in n or "imprint" in n or n.startswith("citolog") or n.startswith("citopatolog"):
+            citologia = e
+            break
+    if citologia is None:
+        if len(exames) >= limite:
+            rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE"]
+            exames.pop(rotina[-1] if rotina else len(exames) - 1)
+        citologia = {"categoria": "LABORATORIAL", "prioridade": "ROTINA"}
+    else:
+        exames.remove(citologia)
+    citologia.update({
+        "nome": "Citologia por decalque (imprint) das lesões",
+        "categoria": "LABORATORIAL",
+        "justificativa": "Exame inicial, rápido e de baixo custo: pesquisa de leveduras compatíveis com Sporothrix no material das lesões.",
+    })
+    pos = sum(1 for e in exames if e["prioridade"] == "URGENTE")
+    exames.insert(pos, citologia)
+    return exames
+
+
 def _validar_estrutura_exames(dados: dict) -> dict:
     if not isinstance(dados.get("exames"), list):
         raise ValueError("JSON sem a lista 'exames'.")
@@ -1408,8 +1473,9 @@ def sugerir_exames(
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
     return {
-        "exames": _garantir_exame_da_suspeita(
+        "exames": _ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
             _garantir_triagem_brucella(exames_ia, d), d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
+            d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
         "provedor": resp.provedor,
         "modelo": resp.modelo,
         "aviso": "Sugestão gerada por IA. O veterinário decide quais exames solicitar.",

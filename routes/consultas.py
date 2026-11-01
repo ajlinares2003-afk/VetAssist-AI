@@ -83,7 +83,38 @@ _VAZAMENTOS_PARECER = (
 _DOR_INTENSA = re.compile(r"(?i)(\bdor(?:\s+[\wçãõáéíóúâêô-]+){0,3}?)\s+intensa\b")
 
 
-def _higienizar_parecer(texto: str, dados_caso: str) -> str:
+def _numero_idade_anos(idade) -> Optional[float]:
+    m = re.search(r"\d+(?:[.,]\d+)?", str(idade or ""))
+    if not m:
+        return None
+    v = float(m.group(0).replace(",", "."))
+    return v / 12 if re.search(r"(?i)\bmes", str(idade)) else v
+
+
+def _linhas_esporotricose(dados_caso: str, suspeita: str, idade, peso) -> list:
+    """Esporotricose suspeita: linhas fixas de segurança (zoonose e cautela pediátrica), mesmo que o modelo as omita."""
+    txt = f"{dados_caso} {suspeita}".lower()
+    if not re.search(r"esporotric|sporothrix", txt):
+        return []
+    linhas = ["Alerta zoonótico: a esporotricose é transmissível ao ser humano. Isolar o animal de outros animais e de "
+              "crianças, usar luvas ao manuseá-lo e lavar bem as mãos depois."]
+    if re.search(r"arranh|mord|lesão (no|na) (braço|mão|tutor)|lesao (no|na) (braco|mao|tutor)|ferida (no|na) (braço|mão)|ferida (no|na) (braco|mao)", txt):
+        linhas[0] += (" O tutor, que teve contato com lesão (arranhadura), deve procurar atendimento médico humano "
+                      "(infectologista) imediatamente, informando a suspeita de esporotricose no gato.")
+    anos = _numero_idade_anos(idade)
+    try:
+        kg = float(str(peso).replace(",", ".")) if peso not in (None, "") else None
+    except ValueError:
+        kg = None
+    if (anos is not None and anos < 1) or (kg is not None and kg <= 2.5):
+        linhas.append("Cautela pediátrica: em filhote, o antifúngico de escolha (itraconazol) deve ser prescrito somente após a "
+                      "confirmação. As cápsulas comerciais não permitem fracionamento exato nesse peso, então solicitar "
+                      "formulação manipulada ajustada ao peso, com monitoramento hepático rigoroso (ALT e FA) durante todo o "
+                      "tratamento, que dura meses.")
+    return linhas
+
+
+def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=None, peso=None) -> str:
     """Rede de segurança sobre o texto da IA: tira exageros que o modelo repete mesmo proibidos no prompt
     ('altamente compatível', 'investigação imediata') e 'dor ... intensa' quando os dados não dizem 'intensa'."""
     if not texto:
@@ -95,6 +126,10 @@ def _higienizar_parecer(texto: str, dados_caso: str) -> str:
     texto = re.sub(r"\.\*(?=\s|$)", ".", texto)
     if "intens" not in (dados_caso or "").lower():
         texto = _DOR_INTENSA.sub(r"\1", texto)
+    extras = [l for l in _linhas_esporotricose(dados_caso, suspeita, idade, peso)
+              if l.split(":")[0].lower() not in texto.lower()]
+    if extras:
+        texto = texto.rstrip() + "\n" + "\n".join(f"- {l}" for l in extras)
     return texto
 
 
@@ -398,6 +433,7 @@ def sugestoes_copiloto_multimodal(
             f"2.32 DIFERENCIAIS COERENTES COM A ESPÉCIE: em cães, escreva \"hepatopatia vacuolar\" (lipidose hepática é diagnóstico de gatos). Não cite como diferencial condição que só a imagem mostra (ex.: mucocele de vesícula biliar) sem sinal que a sugira; ela pode aparecer como achado a pesquisar na ultrassonografia.\n"
             f"2.33 FLUIDOTERAPIA COM EFUSÃO OU CARDIOPATIA: com efusão pleural, edema pulmonar, derrame ou suspeita de insuficiência cardíaca (especialmente em gatos), NÃO indique fluidoterapia intravenosa de manutenção nem reposição: há risco de sobrecarga de volume e piora respiratória, mesmo com anorexia ou TPC alterado. Priorize estabilização respiratória e alívio da efusão; hidratação só depois, a critério do veterinário e com monitoramento.\n"
             f"2.34 NÃO INFERIR DOR OU GRAVIDADE: não escreva \"dor grave\" ou \"desconforto grave\" a partir de relato de prostração ou anorexia; cite o que os dados informam.\n"
+            f"2.36 ESPOROTRICOSE (suspeita ou diferencial): é zoonose. Oriente isolar o animal e usar luvas no manuseio. O PRIMEIRO exame é a citologia por decalque (imprint) da lesão, por ser rápida e barata; não proponha punção por agulha fina (PAAF) nem biópsia como primeira etapa. A cultura fúngica entra apenas como segunda etapa, \"se a citologia for inconclusiva\". Se o paciente for filhote, cite que o antifúngico de escolha (itraconazol) exige formulação manipulada ajustada ao peso e monitoramento de ALT e FA.\n"
             f"2.26 DIABETES EM CÃES E GATOS: não classifique o diabetes mellitus como \"tipo 1\" ou \"tipo 2\"; escreva apenas \"diabetes mellitus\". Não sugira teste de tolerância à glicose para diagnosticá-lo: o diagnóstico se baseia em hiperglicemia persistente com glicosúria e nos exames de rotina.\n"
             f"2.17 PRODUTOS TÓPICOS E ANTIBIÓTICOS: ao orientar cuidado local, indique apenas o tipo de cuidado (ex.: limpeza suave com solução salina estéril, antisséptico em diluição adequada), sem citar NUNCA o nome de um produto nem concentração de antisséptico (nem como exemplo); em pele ulcerada não indique antisséptico puro. Não afirme eficácia nem espectro de antibiótico (ex.: \"útil contra E. coli\", \"de espectro amplo\"); diga que a escolha será ajustada por cultura e antibiograma. Não defina duração de antibiótico em dias quando o quadro ainda depende de exames; escreva que a duração será definida pelo veterinário conforme a resposta e os resultados.\n"
             f"2.18 SINAIS VITAIS: ao comentar FC, FR e temperatura, diga em qual faixa o valor está, sem ambiguidade. Se estiver acima da faixa de repouso mas dentro da faixa clínica (de consultório), escreva \"dentro da faixa clínica, acima da faixa de repouso\". Não atribua a causa (estresse, dor, inflamação) como fato; no máximo cite as causas possíveis.\n"
@@ -493,7 +529,10 @@ def sugestoes_copiloto_multimodal(
         suspeita_extraida = corrigir_siglas(suspeita_extraida)
         sugestoes_extraidas = corrigir_siglas(sugestoes_extraidas)
         sugestoes_extraidas = _higienizar_parecer(
-            sugestoes_extraidas, " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)))
+            sugestoes_extraidas, " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)),
+            suspeita=f"{suspeita_extraida} {sugestoes_extraidas}",
+            idade=idade or (getattr(animal_db, "idade", None) if animal_db else None),
+            peso=peso or (getattr(animal_db, "peso", None) if animal_db else None))
         
         # Aplica a guilhotina higienizada do módulo barragem_sanitaria
         # Se o parsing não achou a suspeita, avalia o texto bruto (falha para o lado seguro)
