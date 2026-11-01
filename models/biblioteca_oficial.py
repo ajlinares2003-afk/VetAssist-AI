@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, Text, Numeric, Integer, TIMESTAMP
+from sqlalchemy import Column, BigInteger, Text, Numeric, Integer, TIMESTAMP, String
 from sqlalchemy.sql import func
 from database import Base
 
@@ -11,6 +11,10 @@ class BibliotecaParametrosOficiais(Base):
     especie = Column(Text, nullable=False)
     nome_cientifico = Column(Text, nullable=False)
     sexo = Column(Text, nullable=False, default='indiferente')
+    raca = Column(Text, nullable=True)
+    sub_especie = Column(Text, nullable=True)
+    # filhote | adulto | idoso (a biblioteca guarda uma linha por perfil, sexo e faixa etária)
+    faixa_etaria = Column(String, nullable=False, default='adulto', server_default='adulto')
     
     peso_min = Column(Numeric(8,2), nullable=True)
     peso_max = Column(Numeric(8,2), nullable=True)
