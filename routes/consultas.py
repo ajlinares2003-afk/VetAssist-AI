@@ -111,6 +111,7 @@ def _linhas_esporotricose(dados_caso: str, suspeita: str, idade, peso) -> list:
                       "confirmação. As cápsulas comerciais não permitem fracionamento exato nesse peso, então solicitar "
                       "formulação manipulada ajustada ao peso, com monitoramento hepático rigoroso (ALT e FA) durante todo o "
                       "tratamento, que dura meses.")
+    linhas.append("Aviso de notificação: a esporotricose é de notificação em várias localidades, e a exigência varia conforme o estado e o município. Confirmar a norma local e, se aplicável, preencher a ficha de notificação e comunicar o Centro de Controle de Zoonoses (CCZ) ou a vigilância epidemiológica municipal. O registro também pode facilitar o acesso do tutor ao tratamento e, em alguns municípios, ao antifúngico do animal pela rede pública.")
     return linhas
 
 
@@ -126,8 +127,17 @@ def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=N
     texto = re.sub(r"\.\*(?=\s|$)", ".", texto)
     if "intens" not in (dados_caso or "").lower():
         texto = _DOR_INTENSA.sub(r"\1", texto)
-    extras = [l for l in _linhas_esporotricose(dados_caso, suspeita, idade, peso)
-              if l.split(":")[0].lower() not in texto.lower()]
+    tl = texto.lower()
+    extras = []
+    for l in _linhas_esporotricose(dados_caso, suspeita, idade, peso):
+        rotulo = l.split(":")[0].lower()
+        if rotulo in tl:
+            continue
+        if rotulo == "alerta zoonótico" and "luvas" in tl and "infectolog" in tl:
+            continue
+        if rotulo == "cautela pediátrica" and "itraconazol" in tl and "manipulad" in tl:
+            continue
+        extras.append(l)
     if extras:
         texto = texto.rstrip() + "\n" + "\n".join(f"- {l}" for l in extras)
     return texto
@@ -433,7 +443,7 @@ def sugestoes_copiloto_multimodal(
             f"2.32 DIFERENCIAIS COERENTES COM A ESPÉCIE: em cães, escreva \"hepatopatia vacuolar\" (lipidose hepática é diagnóstico de gatos). Não cite como diferencial condição que só a imagem mostra (ex.: mucocele de vesícula biliar) sem sinal que a sugira; ela pode aparecer como achado a pesquisar na ultrassonografia.\n"
             f"2.33 FLUIDOTERAPIA COM EFUSÃO OU CARDIOPATIA: com efusão pleural, edema pulmonar, derrame ou suspeita de insuficiência cardíaca (especialmente em gatos), NÃO indique fluidoterapia intravenosa de manutenção nem reposição: há risco de sobrecarga de volume e piora respiratória, mesmo com anorexia ou TPC alterado. Priorize estabilização respiratória e alívio da efusão; hidratação só depois, a critério do veterinário e com monitoramento.\n"
             f"2.34 NÃO INFERIR DOR OU GRAVIDADE: não escreva \"dor grave\" ou \"desconforto grave\" a partir de relato de prostração ou anorexia; cite o que os dados informam.\n"
-            f"2.36 ESPOROTRICOSE (suspeita ou diferencial): é zoonose. Oriente isolar o animal e usar luvas no manuseio. O PRIMEIRO exame é a citologia por decalque (imprint) da lesão, por ser rápida e barata; não proponha punção por agulha fina (PAAF) nem biópsia como primeira etapa. A cultura fúngica entra apenas como segunda etapa, \"se a citologia for inconclusiva\". Se o paciente for filhote, cite que o antifúngico de escolha (itraconazol) exige formulação manipulada ajustada ao peso e monitoramento de ALT e FA.\n"
+            f"2.36 ESPOROTRICOSE (suspeita ou diferencial): é zoonose. Oriente isolar o animal e usar luvas no manuseio. O PRIMEIRO exame é a citologia por decalque (imprint) da lesão, por ser rápida e barata; não proponha punção por agulha fina (PAAF) nem biópsia como primeira etapa. A cultura fúngica entra apenas como segunda etapa, \"se a citologia for inconclusiva\". Cite que a esporotricose é de notificação em várias localidades e oriente conferir a norma local e preencher a ficha de notificação (CCZ ou vigilância epidemiológica municipal). Se o paciente for filhote, cite que o antifúngico de escolha (itraconazol) exige formulação manipulada ajustada ao peso e monitoramento de ALT e FA.\n"
             f"2.26 DIABETES EM CÃES E GATOS: não classifique o diabetes mellitus como \"tipo 1\" ou \"tipo 2\"; escreva apenas \"diabetes mellitus\". Não sugira teste de tolerância à glicose para diagnosticá-lo: o diagnóstico se baseia em hiperglicemia persistente com glicosúria e nos exames de rotina.\n"
             f"2.17 PRODUTOS TÓPICOS E ANTIBIÓTICOS: ao orientar cuidado local, indique apenas o tipo de cuidado (ex.: limpeza suave com solução salina estéril, antisséptico em diluição adequada), sem citar NUNCA o nome de um produto nem concentração de antisséptico (nem como exemplo); em pele ulcerada não indique antisséptico puro. Não afirme eficácia nem espectro de antibiótico (ex.: \"útil contra E. coli\", \"de espectro amplo\"); diga que a escolha será ajustada por cultura e antibiograma. Não defina duração de antibiótico em dias quando o quadro ainda depende de exames; escreva que a duração será definida pelo veterinário conforme a resposta e os resultados.\n"
             f"2.18 SINAIS VITAIS: ao comentar FC, FR e temperatura, diga em qual faixa o valor está, sem ambiguidade. Se estiver acima da faixa de repouso mas dentro da faixa clínica (de consultório), escreva \"dentro da faixa clínica, acima da faixa de repouso\". Não atribua a causa (estresse, dor, inflamação) como fato; no máximo cite as causas possíveis.\n"

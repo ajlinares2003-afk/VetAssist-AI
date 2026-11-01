@@ -1028,7 +1028,7 @@ def sugerir_receita(
     if fixos:
         # troca os avisos genéricos da IA sobre luvas/isolamento pelos fixos, sem duplicar
         receita["alertas"] = [a for a in receita["alertas"]
-                              if not re.search(r"(?i)luvas|isol|avalia[çc][ãa]o m[ée]dica humana|itraconazol", a)]
+                              if not re.search(r"(?i)luvas|isol|avalia[çc][ãa]o m[ée]dica humana|itraconazol|notifica", a)]
         receita["alertas"] = (fixos + receita["alertas"])[:15]
     if d.get("peso") is None:
         receita["alertas"].insert(0, "Peso não informado: as doses não foram calculadas.")
@@ -1309,6 +1309,7 @@ def _alertas_esporotricose(d: dict) -> list:
         alertas.append("Filhote: o antifúngico de escolha (itraconazol) só deve ser prescrito após a confirmação. As cápsulas "
                        "comerciais não permitem fracionamento exato nesse peso: solicitar formulação manipulada ajustada ao "
                        "peso, com monitoramento hepático rigoroso (ALT e FA) durante todo o tratamento, que dura meses.")
+    alertas.append("Aviso de notificação: a esporotricose é de notificação em várias localidades, e a exigência varia conforme o estado e o município. Confirmar a norma local e, se aplicável, preencher a ficha de notificação e comunicar o Centro de Controle de Zoonoses (CCZ) ou a vigilância epidemiológica municipal. O registro também pode facilitar o acesso do tutor ao tratamento e, em alguns municípios, ao antifúngico do animal pela rede pública.")
     return alertas
 
 
