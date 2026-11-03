@@ -916,6 +916,18 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             f"Itens removidos: {nomes}. Escolha um deles e inclua manualmente."
         )
 
+    # Antieméticos alternativos ("maropitant OU ondansetrona" no parecer) não viram dois itens: mantém o primeiro.
+    _ANTIEMETICOS = ("maropitant", "ondansetron", "metoclopramida", "metoclopramid")
+    idx_antiem = [i for i, it in enumerate(itens) if any(a in _norm(it["medicamento"]) for a in _ANTIEMETICOS)]
+    if len(idx_antiem) > 1:
+        mantido = itens[idx_antiem[0]]["medicamento"].split(" ")[0]
+        removidos = ", ".join(itens[i]["medicamento"].split(" ")[0] for i in idx_antiem[1:])
+        itens = [it for i, it in enumerate(itens) if i not in set(idx_antiem[1:])]
+        alertas.append(
+            f"Antiemético: a IA sugeriu mais de um ({mantido} e {removidos}), em geral como alternativas. "
+            f"Mantido apenas {mantido}; inclua {removidos} manualmente se julgar adequado."
+        )
+
     for aviso in dados.get("alertas") or []:
         if isinstance(aviso, str) and aviso.strip():
             n_av = _norm(aviso)
@@ -1351,7 +1363,11 @@ def _garantir_coagulograma_hepatico(exames: list, d: dict, limite: int) -> list:
         if not rotina:
             return exames
         exames.pop(rotina[-1])
-    exames.append({
+    # recalcula a posição da punção (a lista pode ter perdido um item) e coloca o coagulograma ANTES dela
+    pos = next(i for i, e in enumerate(exames)
+               if any(t in _norm(e["nome"]) for t in ("paaf", "agulha fina", "biops", "puncao"))
+               and any(t in _norm(e["nome"]) for t in ("hepat", "figado")))
+    exames.insert(pos, {
         "nome": "Coagulograma (TP e TTPA)",
         "categoria": "LABORATORIAL",
         "prioridade": "ROTINA",
