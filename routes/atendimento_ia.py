@@ -1068,6 +1068,11 @@ def sugerir_receita(
         receita["alertas"] = [a for a in receita["alertas"]
                               if not re.search(r"(?i)luvas|isol|avalia[çc][ãa]o m[ée]dica humana|atendimento m[ée]dico|itraconazol|notifica", a)]
         receita["alertas"] = (fixos + receita["alertas"])[:15]
+    if _suspeita_lipidose(d):
+        # a IA costuma escrever que a nutrição "será definida após a confirmação diagnóstica": troca pelo aviso fixo
+        receita["alertas"] = [a for a in receita["alertas"]
+                              if not re.search(r"(?i)(suporte\s+nutricional|sonda|fluidoterapia|ringer)", a)]
+        receita["alertas"] = (_ALERTAS_LIPIDOSE + receita["alertas"])[:15]
     if d.get("peso") is None:
         receita["alertas"].insert(0, "Peso não informado: as doses não foram calculadas.")
     receita.update({
@@ -1320,6 +1325,41 @@ def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _suspeita_lipidose(d: dict) -> bool:
+    return bool(re.search(r"lipidose", _norm(_texto_do_caso(d))))
+
+
+_ALERTAS_LIPIDOSE = [
+    "Lipidose hepática suspeita: o suporte nutricional enteral precoce (sonda esofágica ou nasoesofágica) faz parte do "
+    "tratamento e não deve aguardar a confirmação diagnóstica; iniciar após a reidratação e a estabilização, com "
+    "realimentação gradual (risco de síndrome de realimentação).",
+    "Fluidoterapia na lipidose: preferir NaCl 0,9% ou Plasma-Lyte com suplementação de potássio conforme os eletrólitos; "
+    "evitar Ringer com lactato e soluções com glicose.",
+]
+
+
+def _garantir_coagulograma_hepatico(exames: list, d: dict, limite: int) -> list:
+    """Punção/biópsia hepática na lista sem prova de coagulação: inclui o coagulograma (TP e TTPA), pois a própria
+    justificativa da punção costuma exigi-lo. Se faltar vaga, sai o último exame de rotina que não seja a punção."""
+    nomes = [_norm(e["nome"]) for e in exames]
+    puncao = [i for i, n in enumerate(nomes)
+              if any(t in n for t in ("paaf", "agulha fina", "biops", "puncao")) and any(t in n for t in ("hepat", "figado"))]
+    if not puncao or any(t in n for n in nomes for t in ("coagul", "ttpa", "protrombina", "tempo de sangramento")):
+        return exames
+    if len(exames) >= limite:
+        rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE" and i not in puncao]
+        if not rotina:
+            return exames
+        exames.pop(rotina[-1])
+    exames.append({
+        "nome": "Coagulograma (TP e TTPA)",
+        "categoria": "LABORATORIAL",
+        "prioridade": "ROTINA",
+        "justificativa": "Avalia a coagulação antes da punção ou biópsia hepática; gatos com lipidose e colestase costumam ter coagulopatia responsiva à vitamina K.",
+    })
+    return exames
+
+
 def _suspeita_esporotricose(d: dict) -> bool:
     return bool(re.search(r"esporotric|sporothrix", _norm(_texto_do_caso(d))))
 
@@ -1540,8 +1580,9 @@ def sugerir_exames(
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
     return {
-        "exames": _ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
+        "exames": _garantir_coagulograma_hepatico(_ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
             _garantir_triagem_brucella(exames_ia, d), d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
+            d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
         "provedor": resp.provedor,
         "modelo": resp.modelo,

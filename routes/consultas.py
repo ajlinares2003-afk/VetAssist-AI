@@ -45,6 +45,11 @@ def _classificar_sinal(valor, ref_texto):
         return "dentro da faixa de repouso e da faixa clínica" if c1 <= v <= c2 else "dentro da faixa de repouso"
     if c1 <= v <= c2:
         return "acima da faixa de repouso, mas dentro da faixa clínica" if v > r2 else "abaixo da faixa de repouso, mas dentro da faixa clínica"
+    # Temperatura a até 0,2 °C do limite clínico: é valor limítrofe (dentro do erro de aferição), não hipotermia/febre.
+    if c1 < 50 and ((v < c1 and c1 - v <= 0.2) or (v > c2 and v - c2 <= 0.2)):
+        lado = "abaixo" if v < c1 else "acima"
+        return (f"discretamente {lado} do limite clínico (a {format(abs(v - (c1 if v < c1 else c2)), ".1f").replace(".", ",")} °C), valor limítrofe: "
+                f"descreva como \"discretamente {lado} do limite\", sem chamar de hipotermia ou febre")
     return "ACIMA das faixas de repouso e clínica" if v > max(r2, c2) else "ABAIXO das faixas de repouso e clínica"
 
 
@@ -159,6 +164,21 @@ def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=N
     if re.search(r"esporotric|sporothrix", f"{dados_caso} {suspeita}".lower()):
         # a obrigatoriedade varia por estado/município: não afirmar "obrigatória" de forma geral
         texto = re.sub(r"(?i)notifica[çc][ãa]o\s+obrigat[óo]ria", "notificação conforme a norma local", texto)
+    base_caso = f"{dados_caso} {suspeita}".lower()
+    if not re.search(r"pot[áa]ssio|calemia", (dados_caso or "").lower()):
+        texto = re.sub(r"(?i)\bhipocalemia\s+(?:severa|grave|importante|acentuada)\b",
+                       "possível hipocalemia (a confirmar pela dosagem de eletrólitos)", texto)
+    if re.search(r"lipidose", f"{base_caso} {texto.lower()}"):
+        texto = re.sub(r"(?i)\bringer\s+(?:com\s+)?lactato(?:\s+de\s+s[óo]dio)?",
+                       "NaCl 0,9% (ou Plasma-Lyte) com suplementação de potássio conforme os eletrólitos", texto)
+        linhas = texto.split("\n")
+        adiou = [bool(re.search(r"(?i)(suporte\s+nutricional|sonda)", l) and re.search(r"(?i)ap[óo]s\s+a\s+confirma", l)) for l in linhas]
+        if any(adiou) or not re.search(r"(?i)nutri[çc][ãa]o\s+enteral|suporte\s+nutricional|sonda", texto):
+            linhas = [l for l, a in zip(linhas, adiou) if not a]
+            linhas.append("- Suporte nutricional: iniciar nutrição enteral precoce (sonda esofágica ou nasoesofágica) após a "
+                          "reidratação e a estabilização, sem aguardar a confirmação diagnóstica; realimentar de forma gradual "
+                          "(risco de síndrome de realimentação).")
+            texto = "\n".join(linhas)
     tl = texto.lower()
     extras = []
     for l in _linhas_esporotricose(dados_caso, suspeita, idade, peso):
@@ -485,6 +505,8 @@ def sugestoes_copiloto_multimodal(
             f"2.33 FLUIDOTERAPIA COM EFUSÃO OU CARDIOPATIA: com efusão pleural, edema pulmonar, derrame ou suspeita de insuficiência cardíaca (especialmente em gatos), NÃO indique fluidoterapia intravenosa de manutenção nem reposição: há risco de sobrecarga de volume e piora respiratória, mesmo com anorexia ou TPC alterado. Priorize estabilização respiratória e alívio da efusão; hidratação só depois, a critério do veterinário e com monitoramento.\n"
             f"2.34 NÃO INFERIR DOR OU GRAVIDADE: não escreva \"dor grave\" ou \"desconforto grave\" a partir de relato de prostração ou anorexia; cite o que os dados informam.\n"
             f"2.36 ESPOROTRICOSE (suspeita ou diferencial): é zoonose. Oriente isolar o animal e usar luvas no manuseio. O PRIMEIRO exame é a citologia por decalque (imprint) da lesão, por ser rápida e barata; não proponha punção por agulha fina (PAAF) nem biópsia como primeira etapa. A cultura fúngica entra apenas como segunda etapa, \"se a citologia for inconclusiva\". Cite que a esporotricose é de notificação em várias localidades e oriente conferir a norma local e preencher a ficha de notificação (CCZ ou vigilância epidemiológica municipal). Se o paciente for filhote, cite que o antifúngico de escolha (itraconazol) exige formulação manipulada ajustada ao peso e monitoramento de ALT e FA.\n"
+            f"2.37 NÃO AFIRMAR O QUE SÓ O EXAME CONFIRMA: sem resultado laboratorial nos dados, não escreva \"hipocalemia severa\", \"hipoglicemia\", \"anemia\" etc. como fato; escreva \"possível hipocalemia (a confirmar pela dosagem de eletrólitos)\". Sinal vital classificado pelo sistema como limítrofe não é hipotermia nem febre.\n"
+            f"2.38 LIPIDOSE HEPÁTICA FELINA (suspeita ou diferencial): a nutrição enteral precoce (sonda esofágica ou nasoesofágica, após reidratação e estabilização, com realimentação gradual pelo risco de síndrome de realimentação) é parte do tratamento e NÃO aguarda a confirmação diagnóstica; não escreva que o suporte nutricional será definido \"após a confirmação\". Na fluidoterapia, prefira NaCl 0,9% ou Plasma-Lyte com suplementação de potássio conforme os eletrólitos; evite Ringer com lactato e soluções com glicose.\n"
             f"2.26 DIABETES EM CÃES E GATOS: não classifique o diabetes mellitus como \"tipo 1\" ou \"tipo 2\"; escreva apenas \"diabetes mellitus\". Não sugira teste de tolerância à glicose para diagnosticá-lo: o diagnóstico se baseia em hiperglicemia persistente com glicosúria e nos exames de rotina.\n"
             f"2.17 PRODUTOS TÓPICOS E ANTIBIÓTICOS: ao orientar cuidado local, indique apenas o tipo de cuidado (ex.: limpeza suave com solução salina estéril, antisséptico em diluição adequada), sem citar NUNCA o nome de um produto nem concentração de antisséptico (nem como exemplo); em pele ulcerada não indique antisséptico puro. Não afirme eficácia nem espectro de antibiótico (ex.: \"útil contra E. coli\", \"de espectro amplo\"); diga que a escolha será ajustada por cultura e antibiograma. Não defina duração de antibiótico em dias quando o quadro ainda depende de exames; escreva que a duração será definida pelo veterinário conforme a resposta e os resultados.\n"
             f"2.18 SINAIS VITAIS: ao comentar FC, FR e temperatura, diga em qual faixa o valor está, sem ambiguidade. Se estiver acima da faixa de repouso mas dentro da faixa clínica (de consultório), escreva \"dentro da faixa clínica, acima da faixa de repouso\". Não atribua a causa (estresse, dor, inflamação) como fato; no máximo cite as causas possíveis.\n"
