@@ -745,7 +745,9 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         if dose is not None and dose > limite_dose:
             alertas.append(f"{nome}: dose de {_fmt(dose)} mg/kg fora do plausível, item descartado.")
             continue
+        bolus_glicose = False
         if dose is not None and dose >= 250 and any(k in nome_n for k in DOSE_MAXIMA_ESPECIFICA):
+            bolus_glicose = True
             # bolus de glicose: a concentração decide o volume; 2,5% daria dezenas de mL e 50% puro é hiperosmolar
             conc_mgml = _numero(conc_valor) if conc_unidade == "mg/mL" else None
             if conc_mgml is None:
@@ -761,7 +763,13 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 )
                 continue
             if conc_mgml is not None and conc_mgml > 250:
-                alertas.append(f"{nome}: dextrose acima de 25% é hiperosmolar; diluir a 25% antes do bolus intravenoso.")
+                # dextrose 50% não vai puro na veia periférica: o volume é recalculado para a diluição a 25% (1:1)
+                conc_valor, conc_unidade = 250, "mg/mL"
+                titulo = "Dextrose a 25% (dextrose 50% diluída 1:1 com NaCl 0,9%), bolus intravenoso lento"
+                alertas.append(
+                    f"{nome}: a IA indicou dextrose acima de 25%, que é hiperosmolar. O volume foi recalculado para "
+                    "dextrose a 25% (50% diluída 1:1); não administrar a 50% pura."
+                )
             elif conc_mgml is None:
                 alertas.append(f"{nome}: concentração não informada; para bolus usar dextrose a 25% (50% diluída 1:1).")
         faixa = next((f for k, f in FAIXAS_DOSE_REFERENCIA.items() if k in nome_n), None)
@@ -900,8 +908,9 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         itens.append({
             "medicamento": titulo,
             "dosagem": dosagem,
-            "frequencia": _frequencia_texto(bruto.get("frequencia_horas")),
-            "duracao": _duracao_texto(bruto.get("duracao_dias")),
+            "frequencia": ("Dose única; repetir conforme a glicemia" if bolus_glicose
+                           else _frequencia_texto(bruto.get("frequencia_horas"))),
+            "duracao": "Dose única" if bolus_glicose else _duracao_texto(bruto.get("duracao_dias")),
             "tipo_uso": tipo,
             "tipo_uso_rotulo": TIPO_USO_ROTULO[tipo],
             "observacoes": observacoes,
