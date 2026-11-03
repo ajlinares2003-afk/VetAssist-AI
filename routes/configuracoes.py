@@ -28,6 +28,8 @@ class ConfigIAUpdate(BaseModel):
     gemini_api_key: Optional[str] = None
     gemini_model_2: Optional[str] = None
     gemini_api_key_2: Optional[str] = None
+    gemini_model_3: Optional[str] = None
+    gemini_api_key_3: Optional[str] = None
     groq_model_1: Optional[str] = None
     groq_api_key_1: Optional[str] = None
     groq_model_2: Optional[str] = None
@@ -35,7 +37,7 @@ class ConfigIAUpdate(BaseModel):
 
 
 class TesteIA(BaseModel):
-    provedor: str  # "gemini", "gemini_2", "groq_1" ou "groq_2"
+    provedor: str  # "gemini", "gemini_2", "gemini_3", "groq_1" ou "groq_2"
     modelo: Optional[str] = None
 
 

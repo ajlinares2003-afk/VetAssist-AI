@@ -643,6 +643,11 @@ def sugestoes_copiloto_multimodal(
                                             "Desconsidere essa menção e a conduta ligada a ela.")
 
         parecer_com_anexos = sugestoes_extraidas
+        if str(resposta_ia.provedor).startswith("groq"):
+            # a IA de reserva às vezes omite seções ou erra concentrações: o veterinário precisa saber
+            parecer_com_anexos += ("\n\n⚠️ **Revisar com atenção:** este parecer foi gerado pela IA de reserva (Groq), "
+                                   "por indisponibilidade temporária do Gemini. Confira com cuidado as doses, as "
+                                   "concentrações e a conduta antes de seguir.")
         if nomes_arquivos_originais:
             if resposta_ia.anexos_analisados:
                 nota = (f"analisados pela IA como segunda leitura ({', '.join(nomes_ia)}); NÃO substitui o laudo — "

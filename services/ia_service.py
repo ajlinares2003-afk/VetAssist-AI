@@ -51,7 +51,7 @@ class Slot:
     chave_alternativa: str = ""  # se esta chave estiver vazia, reaproveita a de outra vaga (ex.: Gemini reserva)
 
 
-# Ordem de prioridade: Gemini (principal) -> Gemini reserva -> Groq 1 -> Groq 2.
+# Ordem de prioridade: Gemini (principal) -> Gemini reserva -> Gemini 3 -> Groq 1 -> Groq 2.
 # O Gemini reserva usa OUTRO modelo (a cota do Gemini é contada por modelo) e, se não tiver chave própria,
 # reaproveita a do Gemini principal.
 SLOTS_ORDEM = (
@@ -60,6 +60,10 @@ SLOTS_ORDEM = (
     Slot("gemini_2", "gemini", "gemini_model_2", "gemini_api_key_2",
          ("GEMINI_API_KEY_2", "GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY"),
          chave_alternativa="gemini_api_key"),
+    # Gemini 3: um terceiro modelo (ex.: gemini-3.5-flash-lite), de outra linha, para quando os dois anteriores
+    # estiverem com 503 (alta demanda) ao mesmo tempo. Só é usado se `gemini_model_3` estiver cadastrado.
+    Slot("gemini_3", "gemini", "gemini_model_3", "gemini_api_key_3",
+         ("GEMINI_API_KEY_3", "GEMINI_API_KEY_2", "GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY")),
     Slot("groq_1", "groq", "groq_model_1", "groq_api_key_1", ("GROQ_API_KEY",)),
     Slot("groq_2", "groq", "groq_model_2", "groq_api_key_2", ("GROQ_API_KEY",)),
 )
