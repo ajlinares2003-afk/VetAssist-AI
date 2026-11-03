@@ -169,8 +169,14 @@ def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=N
         texto = re.sub(r"(?i)\bhipocalemia\s+(?:severa|grave|importante|acentuada)\b",
                        "possível hipocalemia (a confirmar pela dosagem de eletrólitos)", texto)
     if re.search(r"lipidose", f"{base_caso} {texto.lower()}"):
-        texto = re.sub(r"(?i)\bringer\s+(?:com\s+)?lactato(?:\s+de\s+s[óo]dio)?",
-                       "NaCl 0,9% (ou Plasma-Lyte) com suplementação de potássio conforme os eletrólitos", texto)
+        # troca só onde o Ringer lactato é INDICADO; frases que o citam para evitá-lo ("evitando soluções com
+        # lactato (como Ringer com lactato)") ficam como estão, senão o sentido se inverte.
+        def _trocar_ringer(seg):
+            if re.search(r"(?i)evit|n[ãa]o\s|sem\s|contraindic|contendo|exceto|lactato\s*\(como", seg):
+                return seg
+            return re.sub(r"(?i)\bringer\s+(?:com\s+)?lactato(?:\s+de\s+s[óo]dio)?",
+                          "NaCl 0,9% (ou Plasma-Lyte) com suplementação de potássio conforme os eletrólitos", seg)
+        texto = "".join(_trocar_ringer(s) for s in re.split(r"(?<=[.;\n])", texto))
         linhas = texto.split("\n")
         adiou = [bool(re.search(r"(?i)(suporte\s+nutricional|sonda)", l) and re.search(r"(?i)ap[óo]s\s+a\s+confirma", l)) for l in linhas]
         if any(adiou) or not re.search(r"(?i)nutri[çc][ãa]o\s+enteral|suporte\s+nutricional|sonda", texto):
