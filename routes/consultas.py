@@ -29,7 +29,26 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
-def _bloco_faixas_referencia(db, animal_id) -> str:
+def _classificar_sinal(valor, ref_texto):
+    """Compara o valor com 'Repouso: a - b | Clínica: c - d' (texto da biblioteca). Devolve a frase pronta, ou None."""
+    try:
+        v = float(str(valor).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    nums = lambda rot: re.search(rot + r"\s*:\s*(\d+(?:[.,]\d+)?)\s*-\s*(\d+(?:[.,]\d+)?)", str(ref_texto or ""))
+    rep, cli = nums("Repouso"), nums("Cl[ií]nica")
+    if not (rep and cli):
+        return None
+    f = lambda m: (float(m.group(1).replace(",", ".")), float(m.group(2).replace(",", ".")))
+    (r1, r2), (c1, c2) = f(rep), f(cli)
+    if r1 <= v <= r2:
+        return "dentro da faixa de repouso e da faixa clínica" if c1 <= v <= c2 else "dentro da faixa de repouso"
+    if c1 <= v <= c2:
+        return "acima da faixa de repouso, mas dentro da faixa clínica" if v > r2 else "abaixo da faixa de repouso, mas dentro da faixa clínica"
+    return "ACIMA das faixas de repouso e clínica" if v > max(r2, c2) else "ABAIXO das faixas de repouso e clínica"
+
+
+def _bloco_faixas_referencia(db, animal_id, valores=None) -> str:
     """Faixas de referência dos sinais vitais da biblioteca (as MESMAS que a tela de Atendimento mostra),
     para o parecer usar a mesma referência. Só leitura; qualquer falha devolve "" e o parecer segue sem elas."""
     if not animal_id:
@@ -60,6 +79,15 @@ def _bloco_faixas_referencia(db, animal_id) -> str:
     if not ref.get("validada"):
         avisos.append("estas faixas ainda NÃO foram validadas por veterinário: cite-as com cautela")
     aviso = f"ATENÇÃO: {'; '.join(avisos)}.\n" if avisos else ""
+    verdicts = []
+    for rotulo, chave, unid in (("Temperatura", "temperatura", "°C"), ("FC", "fc", "bpm"), ("FR", "fr", "ir/min")):
+        frase = _classificar_sinal((valores or {}).get(chave), ref.get(chave))
+        if frase:
+            verdicts.append(f"- {rotulo} {(valores or {}).get(chave)} {unid}: {frase}.\n")
+    classificacao = (
+        "CLASSIFICAÇÃO JÁ CALCULADA PELO SISTEMA (use exatamente estas frases; não refaça a comparação):\n"
+        + "".join(verdicts) if verdicts else ""
+    )
     return (
         "FAIXAS DE REFERÊNCIA DOS SINAIS VITAIS (da biblioteca do sistema, as mesmas da tela de atendimento):\n"
         f"{aviso}"
@@ -67,7 +95,8 @@ def _bloco_faixas_referencia(db, animal_id) -> str:
         f"- FC: {ref.get('fc')}\n"
         f"- FR: {ref.get('fr')}\n"
         f"- TPC: {ref.get('tpc')}\n"
-        f"- Mucosas: {ref.get('mucosas')}\n\n"
+        f"- Mucosas: {ref.get('mucosas')}\n"
+        f"{classificacao}\n"
     )
 
 _SUBS_PARECER = (
@@ -137,6 +166,15 @@ def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=N
         if rotulo in tl:
             continue
         if rotulo == "alerta zoonótico" and "luvas" in tl and "infectolog" in tl:
+            continue
+        if rotulo == "alerta zoonótico" and "luvas" in tl and "isol" in tl:
+            # o modelo já deu a orientação de isolamento e luvas: só acrescenta o que falta (infectologista)
+            l = ("Alerta zoonótico: o tutor, que teve contato com lesão (arranhadura), deve procurar atendimento médico "
+                 "humano (infectologista) imediatamente, informando a suspeita de esporotricose no animal.") \
+                if "arranhadura" in l else None
+            if l is None:
+                continue
+        if rotulo == "aviso de notificação" and "notifica" in tl and ("ficha" in tl or "ccz" in tl):
             continue
         if rotulo == "cautela pediátrica" and "itraconazol" in tl and "manipulad" in tl:
             continue
@@ -395,7 +433,7 @@ def sugestoes_copiloto_multimodal(
         else:
             bloco_referencias = regra_referencias = ""
 
-        bloco_faixas = _bloco_faixas_referencia(db, animal_id)
+        bloco_faixas = _bloco_faixas_referencia(db, animal_id, {"temperatura": temperatura, "fc": frequencia_cardiaca, "fr": frequencia_respiratoria})
 
         def _prompt_base(linha_anexos: str, regra_anexos: str) -> str:
             return (

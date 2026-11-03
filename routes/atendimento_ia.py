@@ -1066,7 +1066,7 @@ def sugerir_receita(
     if fixos:
         # troca os avisos genéricos da IA sobre luvas/isolamento pelos fixos, sem duplicar
         receita["alertas"] = [a for a in receita["alertas"]
-                              if not re.search(r"(?i)luvas|isol|avalia[çc][ãa]o m[ée]dica humana|itraconazol|notifica", a)]
+                              if not re.search(r"(?i)luvas|isol|avalia[çc][ãa]o m[ée]dica humana|atendimento m[ée]dico|itraconazol|notifica", a)]
         receita["alertas"] = (fixos + receita["alertas"])[:15]
     if d.get("peso") is None:
         receita["alertas"].insert(0, "Peso não informado: as doses não foram calculadas.")
@@ -1381,6 +1381,30 @@ def _ajustar_exames_esporotricose(exames: list, d: dict, limite: int) -> list:
     })
     pos = sum(1 for e in exames if e["prioridade"] == "URGENTE")
     exames.insert(pos, citologia)
+
+    # Filhote: hemograma e bioquímica completos como linha de base antes do antifúngico (itraconazol, hepatotóxico).
+    anos, peso = _idade_em_anos(d.get("idade")), d.get("peso")
+    if (anos is not None and anos < 1) or (peso and float(peso) <= 2.5):
+        def _avulso(n: str) -> bool:  # ALT, FA, ureia, creatinina soltos: entram na bioquímica completa
+            n = _norm(n)
+            return (any(t in n for t in ("alanina", "fosfatase", "ureia", "creatinina")) or n in ("alt", "fa", "alt e fa")
+                    ) and "bioquim" not in n
+        exames = [e for e in exames if not _avulso(e["nome"])]
+        tem = lambda chave: any(chave in _norm(e["nome"]) for e in exames)
+        base = []
+        if not tem("hemograma"):
+            base.append({"nome": "Hemograma completo", "categoria": "LABORATORIAL", "prioridade": "ROTINA",
+                         "justificativa": "Linha de base em filhote antes da terapia antifúngica: avalia a série vermelha e a resposta inflamatória."})
+        if not tem("bioquim"):
+            base.append({"nome": "Bioquímica sérica (função hepática e renal)", "categoria": "LABORATORIAL", "prioridade": "ROTINA",
+                         "justificativa": "Linha de base de ALT, FA, ureia e creatinina antes do antifúngico, que pode sobrecarregar o fígado do filhote."})
+        for b in base:
+            if len(exames) >= limite:
+                rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE" and "decalque" not in _norm(e["nome"])]
+                if not rotina:
+                    break
+                exames.pop(rotina[-1])
+            exames.append(b)
     return exames
 
 
