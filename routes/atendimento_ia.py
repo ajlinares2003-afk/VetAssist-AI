@@ -240,6 +240,8 @@ UNIDADES_CONCENTRACAO = {
 }
 
 DOSE_MAXIMA_MG_KG = 100.0   # trava de sanidade contra erro grosseiro da IA
+# Exceções: bolus de glicose na hipoglicemia usa 0,5 a 1 g/kg (500 a 1000 mg/kg), acima da trava geral.
+DOSE_MAXIMA_ESPECIFICA = {"dextrose": 1000.0, "glicose": 1000.0}
 
 # Faixas de dose por tomada (mg/kg) usadas SÓ para alertar, nunca para alterar a dose.
 # Comece pequena e amplie com o formulário da clínica (Plumb's etc.). Confira antes de confiar.
@@ -739,9 +741,29 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         dose = _numero(bruto.get("dose_mg_kg"))
         posologia = str(bruto.get("posologia_texto") or "").strip()[:300]
 
-        if dose is not None and dose > DOSE_MAXIMA_MG_KG:
+        limite_dose = next((v for k, v in DOSE_MAXIMA_ESPECIFICA.items() if k in nome_n), DOSE_MAXIMA_MG_KG)
+        if dose is not None and dose > limite_dose:
             alertas.append(f"{nome}: dose de {_fmt(dose)} mg/kg fora do plausível, item descartado.")
             continue
+        if dose is not None and dose >= 250 and any(k in nome_n for k in DOSE_MAXIMA_ESPECIFICA):
+            # bolus de glicose: a concentração decide o volume; 2,5% daria dezenas de mL e 50% puro é hiperosmolar
+            conc_mgml = _numero(conc_valor) if conc_unidade == "mg/mL" else None
+            if conc_mgml is None:
+                pct = re.search(r"(\d+(?:[.,]\d+)?)\s*%", f"{nome} {apresentacao}")
+                conc_mgml = float(pct.group(1).replace(",", ".")) * 10 if pct else None
+            if conc_mgml is not None and conc_mgml < 100:
+                vol = dose * peso / conc_mgml if peso else None
+                alertas.append(
+                    f"{nome}: a concentração de {_fmt(conc_mgml / 10)}% é inviável para bolus de {_fmt(dose)} mg/kg"
+                    + (f" (≈ {_fmt(vol)} mL)" if vol else "")
+                    + ". Item descartado: o usual é dextrose a 25% (dextrose 50% diluída 1:1), em bolus lento. "
+                      "Inclua manualmente, se julgar adequado."
+                )
+                continue
+            if conc_mgml is not None and conc_mgml > 250:
+                alertas.append(f"{nome}: dextrose acima de 25% é hiperosmolar; diluir a 25% antes do bolus intravenoso.")
+            elif conc_mgml is None:
+                alertas.append(f"{nome}: concentração não informada; para bolus usar dextrose a 25% (50% diluída 1:1).")
         faixa = next((f for k, f in FAIXAS_DOSE_REFERENCIA.items() if k in nome_n), None)
         if dose is not None and faixa and grupo in ("canino", "felino") and not faixa[0] <= dose <= faixa[1]:
             alertas.append(
@@ -1265,8 +1287,8 @@ def _garantir_lipase_pancreatica(exames: list, d: dict, limite: int) -> list:
     """Cão com dor abdominal cranial ou pancreatite citada no caso: garante a cPL, mesmo que o parecer a tenha
     esquecido. Se faltar vaga, sai o exame de menor rendimento."""
     caso = _norm(_texto_do_caso(d))
-    if "pancreatit" not in caso and "dor abdominal cranial" not in caso:
-        return exames
+    if "dor abdominal cranial" not in caso and not ("pancreatit" in caso and "dor abdominal" in caso):
+        return exames   # pancreatite só como diferencial, sem dor abdominal descrita: não força a cPL
     if any(t in _norm(e["nome"]) for e in exames for t in ("lipase", "cpl", "spec")):
         return exames
     if len(exames) >= limite:
