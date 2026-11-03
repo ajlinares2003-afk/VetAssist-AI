@@ -595,6 +595,37 @@ def _condicionado_a_confirmacao(texto: str, nome_n: str) -> bool:
     return False
 
 
+_CUE_CONDICIONAL = re.compile(
+    r"\b(se|caso|quando)\s+(o\s+paciente\s+|houver\s+|haja\s+|ha\s+)?"
+    r"(houver|haja|apresentar|apresente|ocorrer|ocorra|persistir|persista|necessari|necessario|precisar|preciso|indicad)"
+)
+
+
+def _analgesico_condicional_sem_dor(texto_caso: str, nome_n: str) -> bool:
+    """True se o parecer cita o opioide/controlado só de forma condicional ('analgesia (se houver dor moderada a
+    grave): buprenorfina ...') e os dados do paciente (queixa, sintomas, exame físico) não descrevem dor."""
+    pal = [w for w in nome_n.split() if w not in _SAIS_E_LIGACOES and len(w) >= 4]
+    base = (pal[0] if pal else "")[:7]
+    if len(base) < 4:
+        return False
+    texto = str(texto_caso or "")
+    corte = texto.find("- Parecer do Copiloto")
+    dados, parecer = (texto[:corte], texto[corte:]) if corte >= 0 else ("", texto)
+    if re.search(r"dor|algia|dolor|desconforto|analges", _norm(dados)):
+        return False
+    achou = False
+    for linha in parecer.split("\n"):
+        for frase in re.split(r"[.;]", linha):
+            f = _norm(frase)
+            pos = f.find(base)
+            if pos < 0:
+                continue
+            achou = True
+            if not any(m.end() <= pos for m in _CUE_CONDICIONAL.finditer(f)):
+                return False   # pelo menos uma citação sem condição: mantém
+    return achou
+
+
 def _cortar_texto(texto: str, limite: int) -> str:
     """Corta no fim da última frase (ou palavra) que cabe no limite, sem deixar palavra pela metade."""
     if len(texto) <= limite:
@@ -674,6 +705,13 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             alertas.append(
                 f"{nome}: não incluído porque o parecer só indica este tratamento após a confirmação diagnóstica, "
                 "que ainda depende de exames. Inclua manualmente após a confirmação, se julgar adequado."
+            )
+            continue
+        if ((any(o in nome_n for o in OPIOIDES_CLINICA) or _verdadeiro(bruto.get("controlado")))
+                and _analgesico_condicional_sem_dor(texto_caso, nome_n)):
+            alertas.append(
+                f"{nome}: não incluído porque o parecer só o cita se houver dor, e os dados do paciente não descrevem dor. "
+                "Inclua manualmente se avaliar dor no exame, se julgar adequado."
             )
             continue
         _pal = [w for w in nome_n.split() if w not in _SAIS_E_LIGACOES and len(w) >= 4]
@@ -1314,11 +1352,15 @@ def _alertas_esporotricose(d: dict) -> list:
 
 
 def _ajustar_exames_esporotricose(exames: list, d: dict, limite: int) -> list:
-    """Esporotricose suspeita: o exame inicial é a citologia por decalque (imprint); PAAF e biópsia não entram
-    como primeira etapa. A citologia fica na frente (depois de um eventual exame urgente)."""
+    """Esporotricose suspeita: o exame inicial é a citologia por decalque (imprint); PAAF, biópsia, cultura fúngica
+    e PCR não entram como primeira etapa. A citologia fica na frente (depois de um eventual exame urgente)."""
     if not _suspeita_esporotricose(d):
         return exames
-    exames = [e for e in exames if not any(t in _norm(e["nome"]) for t in ("biops", "histopatol", "paaf", "agulha fina"))]
+    def _segunda_etapa(nome: str) -> bool:
+        n = _norm(nome)
+        return (any(t in n for t in ("biops", "histopatol", "paaf", "agulha fina"))
+                or "pcr" in n or ("cultura" in n and ("fung" in n or "sporothrix" in n or "esporotric" in n)))
+    exames = [e for e in exames if not _segunda_etapa(e["nome"])]
     citologia = None
     for e in exames:
         n = _norm(e["nome"])
@@ -1335,7 +1377,7 @@ def _ajustar_exames_esporotricose(exames: list, d: dict, limite: int) -> list:
     citologia.update({
         "nome": "Citologia por decalque (imprint) das lesões",
         "categoria": "LABORATORIAL",
-        "justificativa": "Exame inicial, rápido e de baixo custo: pesquisa de leveduras compatíveis com Sporothrix no material das lesões.",
+        "justificativa": "Exame inicial, rápido e de baixo custo: pesquisa de leveduras compatíveis com Sporothrix no material das lesões; se inconclusiva, solicitar cultura fúngica.",
     })
     pos = sum(1 for e in exames if e["prioridade"] == "URGENTE")
     exames.insert(pos, citologia)

@@ -127,6 +127,9 @@ def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=N
     texto = re.sub(r"\.\*(?=\s|$)", ".", texto)
     if "intens" not in (dados_caso or "").lower():
         texto = _DOR_INTENSA.sub(r"\1", texto)
+    if re.search(r"esporotric|sporothrix", f"{dados_caso} {suspeita}".lower()):
+        # a obrigatoriedade varia por estado/município: não afirmar "obrigatória" de forma geral
+        texto = re.sub(r"(?i)notifica[çc][ãa]o\s+obrigat[óo]ria", "notificação conforme a norma local", texto)
     tl = texto.lower()
     extras = []
     for l in _linhas_esporotricose(dados_caso, suspeita, idade, peso):
