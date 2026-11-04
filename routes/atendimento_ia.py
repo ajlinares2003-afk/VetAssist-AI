@@ -242,6 +242,7 @@ UNIDADES_CONCENTRACAO = {
 DOSE_MAXIMA_MG_KG = 100.0   # trava de sanidade contra erro grosseiro da IA
 # Exceções: bolus de glicose na hipoglicemia usa 0,5 a 1 g/kg (500 a 1000 mg/kg), acima da trava geral.
 DOSE_MAXIMA_ESPECIFICA = {"dextrose": 1000.0, "glicose": 1000.0}
+BOLUS_GLICOSE_MG_KG = (250.0, 500.0)   # protocolo adotado: 0,25 a 0,5 g/kg (1 a 2 mL/kg de dextrose a 25%)
 
 # Faixas de dose por tomada (mg/kg) usadas SÓ para alertar, nunca para alterar a dose.
 # Comece pequena e amplie com o formulário da clínica (Plumb's etc.). Confira antes de confiar.
@@ -639,6 +640,13 @@ def _cortar_texto(texto: str, limite: int) -> str:
     return corte.rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
+def _suspeita_hipoglicemia(texto_caso: str, suspeita: str = "") -> bool:
+    """Hipoglicemia como suspeita do caso, ou parecer que indica bolus de dextrose/glicose."""
+    if re.search(r"hipoglic", _norm(suspeita)):
+        return True
+    return bool(re.search(r"(dextrose|glicose)[^.\n]{0,80}bolus|bolus[^.\n]{0,80}(dextrose|glicose)", _norm(texto_caso)))
+
+
 def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     sensivel_oral: bool = False, texto_caso: str = "", suspeita: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
@@ -653,7 +661,17 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
     # diagnóstico, e o tratamento é decisão do veterinário após a confirmação.
     aguardar_exames = grupo == "canino" and "brucel" in _norm(suspeita)
 
-    for bruto in dados["medicamentos"][:12]:
+    lista_meds = list(dados["medicamentos"])
+    if grupo in ("canino", "felino") and _suspeita_hipoglicemia(texto_caso, suspeita) and not any(
+            isinstance(m, dict) and re.search(r"dextrose|glicose|glucose", _norm(m.get("nome"))) for m in lista_meds):
+        # hipoglicemia suspeita e a IA não incluiu o bolus: entra o item padrão (protocolo 0,25 a 0,5 g/kg a 25%)
+        lista_meds.insert(0, {
+            "nome": "Dextrose", "apresentacao": "solução injetável 25% (dextrose 50% diluída 1:1)",
+            "concentracao_valor": 250, "concentracao_unidade": "mg/mL", "via": "intravenosa",
+            "dose_mg_kg": BOLUS_GLICOSE_MG_KG[0], "frequencia_horas": None, "duracao_dias": 1,
+            "disponibilidade": "CLINICA", "controlado": False,
+        })
+    for bruto in lista_meds[:12]:
         if not isinstance(bruto, dict):
             continue
         nome = str(bruto.get("nome") or "").strip()[:150]
@@ -746,6 +764,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             alertas.append(f"{nome}: dose de {_fmt(dose)} mg/kg fora do plausível, item descartado.")
             continue
         bolus_glicose = False
+        dosagem_bolus = None
         if dose is not None and dose >= 250 and any(k in nome_n for k in DOSE_MAXIMA_ESPECIFICA):
             bolus_glicose = True
             # bolus de glicose: a concentração decide o volume; 2,5% daria dezenas de mL e 50% puro é hiperosmolar
@@ -764,14 +783,29 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 continue
             if conc_mgml is not None and conc_mgml > 250:
                 # dextrose 50% não vai puro na veia periférica: o volume é recalculado para a diluição a 25% (1:1)
-                conc_valor, conc_unidade = 250, "mg/mL"
-                titulo = "Dextrose a 25% (dextrose 50% diluída 1:1 com NaCl 0,9%), bolus intravenoso lento"
                 alertas.append(
                     f"{nome}: a IA indicou dextrose acima de 25%, que é hiperosmolar. O volume foi recalculado para "
                     "dextrose a 25% (50% diluída 1:1); não administrar a 50% pura."
                 )
             elif conc_mgml is None:
                 alertas.append(f"{nome}: concentração não informada; para bolus usar dextrose a 25% (50% diluída 1:1).")
+            conc_final = 250.0 if (conc_mgml is None or conc_mgml > 250) else conc_mgml
+            if conc_final == 250.0:
+                conc_valor, conc_unidade = 250, "mg/mL"
+                titulo = "Dextrose a 25% (dextrose 50% diluída 1:1 com NaCl 0,9%), bolus intravenoso lento"
+            # protocolo do VetAssist: bolus de 0,25 a 0,5 g/kg (1 a 2 mL/kg da solução a 25%), lento, com monitoração
+            # da glicemia (risco de hiperglicemia de rebote)
+            lo_mg, hi_mg = BOLUS_GLICOSE_MG_KG
+            if peso:
+                dosagem_bolus = (f"{_fmt(lo_mg)} a {_fmt(hi_mg)} mg/kg ({_fmt(lo_mg * peso)} a {_fmt(hi_mg * peso)} mg ≈ "
+                                 f"{_fmt(lo_mg * peso / conc_final)} a {_fmt(hi_mg * peso / conc_final)} mL a {_fmt(conc_final / 10)}%)")
+            else:
+                dosagem_bolus = f"{_fmt(lo_mg)} a {_fmt(hi_mg)} mg/kg (calcular com o peso do paciente)"
+            if not lo_mg <= dose <= hi_mg:
+                alertas.append(
+                    f"{nome}: dose do bolus padronizada na faixa de 0,25 a 0,5 g/kg (a IA sugeriu {_fmt(dose)} mg/kg). "
+                    "Administrar lentamente e monitorar a glicemia (risco de hiperglicemia de rebote)."
+                )
         faixa = next((f for k, f in FAIXAS_DOSE_REFERENCIA.items() if k in nome_n), None)
         if dose is not None and faixa and grupo in ("canino", "felino") and not faixa[0] <= dose <= faixa[1]:
             alertas.append(
@@ -795,6 +829,8 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         else:
             dosagem = "Definir a dose com o veterinário"
             alertas.append(f"{nome}: a IA não indicou dose segura. Defina a dose manualmente.")
+        if dosagem_bolus:
+            dosagem = dosagem_bolus
 
         tipo = _norm(bruto.get("disponibilidade")).upper().replace(" ", "_")
         if tipo not in TIPO_USO_ROTULO:
@@ -1339,6 +1375,31 @@ def _garantir_retroviral_felino(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _garantir_parvovirose(exames: list, d: dict, limite: int) -> list:
+    """Cão filhote (menos de 1 ano) com vômito, inapetência, apatia ou diarreia e parvovirose citada no parecer:
+    garante o teste rápido de parvovirose, no topo da lista, mesmo que a IA o tenha omitido."""
+    if d.get("grupo") != "canino":
+        return exames
+    idade = _idade_em_anos(d.get("idade"))
+    if idade is None or idade >= 1:
+        return exames
+    caso = _norm(_texto_do_caso(d))
+    if "parvovir" not in caso or not re.search(r"vomit|inapet|anorexia|apatia|diarre|hiporexia", caso):
+        return exames
+    if any("parvo" in _norm(e["nome"]) for e in exames):
+        return exames
+    if len(exames) >= limite:
+        rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE"]
+        exames.pop(rotina[-1] if rotina else len(exames) - 1)
+    exames.insert(0, {
+        "nome": "Teste rápido de parvovirose canina (antígeno fecal)",
+        "categoria": "LABORATORIAL",
+        "prioridade": "URGENTE",
+        "justificativa": "Investiga parvovirose em filhote com vômito e apatia; o resultado rápido define isolamento e conduta.",
+    })
+    return exames
+
+
 def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     """Cão com suspeita de hiperadrenocorticismo: garante o teste funcional (supressão com dexametasona em
     baixa dose) dentro do limite de exames, mesmo que a IA o tenha cortado por causa do momento ideal (após
@@ -1348,6 +1409,7 @@ def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     if d.get("grupo") != "canino":
         return exames
     exames = _garantir_lipase_pancreatica(exames, d, limite)
+    exames = _garantir_parvovirose(exames, d, limite)
     if not any(m in _norm(d.get("suspeita_diagnostica") or "") for m in ("hiperadrenocort", "cushing")):
         return exames
     if any(t in _norm(e["nome"]) for e in exames for t in ("supress", "estimul", "acth", "cortisol", "ldd")):
