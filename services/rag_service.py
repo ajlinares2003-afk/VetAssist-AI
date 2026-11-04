@@ -230,6 +230,76 @@ def _filtrar_por_distancia(
     return [(doc, dist) for doc, dist in pares if dist <= RAG_DISTANCIA_MAXIMA]
 
 
+# Filtro por termos clínicos --------------------------------------------------------------------
+# A distância vetorial não separa trecho relevante de irrelevante (tudo fica entre 0,80 e 0,82). Por isso, antes de
+# entrar no prompt, o trecho de cada obra só passa se o CASO (espécie, queixa, sintomas, exame físico) contiver termos
+# daquele assunto. Obras sem regra cadastrada passam sem filtro. Desligar: RAG_FILTRO_TERMOS=0.
+RAG_FILTRO_TERMOS = os.getenv("RAG_FILTRO_TERMOS", "1").strip().lower() not in ("0", "false", "nao", "não")
+
+
+def _sem_acento(texto: str) -> str:
+    base = unicodedata.normalize("NFD", str(texto or "").lower())
+    return "".join(c for c in base if unicodedata.category(c) != "Mn")
+
+
+_ESPECIE_DOMESTICA = re.compile(r"\b(canis|canino|caninos|cao|caes|cachorro|felis|felino|felinos|gato|gatos)\b")
+_FELINO = re.compile(r"\b(felis|felino|felinos|gato|gatos)\b")
+
+# titulo (sem acento, minúsculo, trecho) -> regra: 'diretos' (qualquer um basta) + 'grupos' (precisa de >= minimo grupos)
+_REGRAS_TERMOS = (
+    ("hiperadrenocort", {
+        "diretos": r"hiperadrenocort|cushing|supressao com dexametasona",
+        "grupos": (r"polidips|bebe(?:ndo)? muita agua|muita sede|sede excessiva",
+                   r"poliuri|urina(?:ndo)? (?:muito|por toda)|urina em excesso",
+                   r"polifag|come(?:ndo)? (?:muito|desesper)|fome excessiva",
+                   r"alopecia|pelos? caindo|queda de pelo|perda de pelo|pelo ralo|rarefacao",
+                   r"abdome (?:pendular|abaulado)|barriga (?:abaulada|pendular|grande)|abaulad|pendular"),
+        "minimo": 2}),
+    ("peritonit", {
+        "diretos": r"\bpif\b|peritonite infecciosa|coronavirus",
+        "grupos": (r"efusao|derrame|ascite|liquido (?:livre|abdominal|pleural|toracico)",
+                   r"uveite|febre (?:persistente|prolongada)|abdome (?:distendido|abaulado)"),
+        "minimo": 1, "especie": _FELINO}),
+    ("pain management", {
+        "diretos": r"\bdor\b|\bdores\b|dolorid|doloros|analges|desconforto|claudica|algia",
+        "grupos": (), "minimo": 0}),
+    ("esporotric", {
+        "diretos": r"esporotric|sporothrix",
+        "grupos": (r"ulcera|nodul|fistul|crosta|lesao (?:cutanea|ulcerada|na pele)|lesoes (?:cutaneas|ulceradas|na pele)",),
+        "minimo": 1, "especie": _FELINO}),
+)
+
+
+def _trecho_tem_relevancia(titulo: str, caso_norm: str) -> bool:
+    """True se o caso tem termos do assunto da obra `titulo`. Obra sem regra cadastrada: True."""
+    t = _sem_acento(titulo)
+    if "silvestre" in t:  # bulário de animais silvestres: não serve para cão e gato
+        especie = re.search(r"especie:\s*([^.\n]*)", caso_norm)
+        return not (especie and _ESPECIE_DOMESTICA.search(especie.group(1)))
+    for marca, regra in _REGRAS_TERMOS:
+        if marca not in t:
+            continue
+        if re.search(regra["diretos"], caso_norm):
+            return True
+        especie = regra.get("especie")
+        if especie and not especie.search(caso_norm):
+            return False
+        grupos = sum(1 for g in regra["grupos"] if re.search(g, caso_norm))
+        return bool(regra["grupos"]) and grupos >= regra["minimo"]
+    return True
+
+
+def _filtrar_por_termos(pares, consulta: str):
+    """Mantém só os trechos cujo assunto aparece no caso. Devolve (aceitos, descartados)."""
+    if not RAG_FILTRO_TERMOS:
+        return pares, []
+    caso = _sem_acento(consulta)
+    aceitos, descartados = [], []
+    for doc, dist in pares:
+        (aceitos if _trecho_tem_relevancia(str(doc.titulo), caso) else descartados).append((doc, dist))
+    return aceitos, descartados
+
+
 def _formatar_referencias(trechos: list[DocumentoVeterinario]) -> str:
     """Numera os trechos e informa a obra de origem de cada um."""
     return "\n\n".join(
@@ -274,8 +344,15 @@ def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TO
             texto, _obter_api_key_gemini(db), "RETRIEVAL_QUERY",
             tentativas=1, timeout=RAG_TIMEOUT_CONSULTA,
         )
-        todos = buscar_referencias_com_distancia(db, vetor, limite)
+        # busca mais candidatos que o necessário: os barrados pelo filtro de termos abrem vaga para trechos pertinentes
+        todos = buscar_referencias_com_distancia(db, vetor, limite * 3 if RAG_FILTRO_TERMOS else limite)
         pares = _filtrar_por_distancia(todos)
+        descartados = [(doc, dist) for doc, dist in todos if (doc, dist) not in pares]  # fora do corte de distância
+        pares, sem_termos = _filtrar_por_termos(pares, texto)
+        pares = pares[:limite]
+        if sem_termos:
+            logger.warning("RAG: %d trecho(s) barrado(s) por não terem relação com o caso (títulos: %s)",
+                           len(sem_termos), " | ".join(sorted({str(d.titulo)[:40] for d, _ in sem_termos})))
     except Exception as exc:  # noqa: BLE001 — uma falha do RAG não pode derrubar a rota que o usa
         logger.warning("RAG indisponível; seguindo sem referências: %s", exc)
         try:
@@ -286,7 +363,6 @@ def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TO
 
     # warning (e não info) de propósito: o logger raiz do uvicorn só mostra WARNING+, e esta linha é a que
     # permite calibrar RAG_DISTANCIA_MAXIMA. Depois de calibrar, volte para logger.info.
-    descartados = [(doc, dist) for doc, dist in todos if (doc, dist) not in pares]
     if descartados:
         logger.warning(
             "RAG: %d trecho(s) descartado(s) pelo corte de %s (distâncias: %s; títulos: %s)",
