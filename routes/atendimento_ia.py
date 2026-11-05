@@ -944,9 +944,8 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         itens.append({
             "medicamento": titulo,
             "dosagem": dosagem,
-            "frequencia": ("Dose única; repetir conforme a glicemia" if bolus_glicose
-                           else _frequencia_texto(bruto.get("frequencia_horas"))),
-            "duracao": "Dose única" if bolus_glicose else _duracao_texto(bruto.get("duracao_dias")),
+            "frequencia": "Dose única" if bolus_glicose else _frequencia_texto(bruto.get("frequencia_horas")),
+            "duracao": "repetir conforme a glicemia" if bolus_glicose else _duracao_texto(bruto.get("duracao_dias")),
             "tipo_uso": tipo,
             "tipo_uso_rotulo": TIPO_USO_ROTULO[tipo],
             "observacoes": observacoes,

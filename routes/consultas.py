@@ -48,8 +48,8 @@ def _classificar_sinal(valor, ref_texto):
     # Temperatura a até 0,2 °C do limite clínico: é valor limítrofe (dentro do erro de aferição), não hipotermia/febre.
     if c1 < 50 and ((v < c1 and c1 - v <= 0.2) or (v > c2 and v - c2 <= 0.2)):
         lado = "abaixo" if v < c1 else "acima"
-        return (f"discretamente {lado} do limite clínico (a {format(abs(v - (c1 if v < c1 else c2)), ".1f").replace(".", ",")} °C), valor limítrofe: "
-                f"descreva como \"discretamente {lado} do limite\", sem chamar de hipotermia ou febre")
+        return (f"discretamente {lado} do limite clínico (a {format(abs(v - (c1 if v < c1 else c2)), ".1f").replace(".", ",")} °C), "
+                "valor limítrofe")
     return "ACIMA das faixas de repouso e clínica" if v > max(r2, c2) else "ABAIXO das faixas de repouso e clínica"
 
 
@@ -105,11 +105,12 @@ def _bloco_faixas_referencia(db, animal_id, valores=None) -> str:
     )
 
 _SUBS_PARECER = (
-    (re.compile(r"(?i)\baltamente\s+(compat[ií]vel|sugestiv[oa])"),
+    (re.compile(r"(?i)\baltamente\s+(compat[ií]ve(?:l|is)|sugestiv[oa]s?)"),
      lambda m: m.group(1).capitalize() if m.group(0)[0].isupper() else m.group(1)),
     (re.compile(r"(?i)\b(investigaç[ãa]o|avaliaç[ãa]o|pesquisa|identificaç[ãa]o)\s+imediat[ao]\b"), r"\1"),
 )
 _VAZAMENTOS_PARECER = (
+    re.compile(r"(?i),?\s*devendo\s+ser\s+descrit[oa]s?\s+exatamente\s+como[^.\n]*(?=\.|\n|$)"),  # eco da instrução do prompt
     re.compile(r"(?i)\s*\(\s*regras?\s+\d+(?:\.\d+)*(?:\s*(?:e|,)\s*\d+(?:\.\d+)*)*\s*\)"),  # "(regra 2.29)"
     re.compile(r"\s*\(\s*(?:ver\s+)?\[\d+\]\s*\)"),                                       # "(ver [1])"
     re.compile(r"\s*\[\d+\]"),                                                              # "[1]"
