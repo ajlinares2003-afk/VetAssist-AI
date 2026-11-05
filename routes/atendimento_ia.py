@@ -721,7 +721,11 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 "ou comprometimento renal/hepático). O veterinário pode incluir manualmente, se julgar adequado."
             )
             continue
-        if _condicionado_a_confirmacao(texto_caso, nome_n):
+        # bolus de glicose na hipoglicemia suspeita: a "confirmação" é a glicemia capilar à beira do leito (imediata),
+        # não um exame de laboratório pendente; a trava de "tratamento só após confirmação" não se aplica.
+        _glicose_urgente = (bool(re.search(r"dextrose|glicose|glucose", nome_n))
+                            and _suspeita_hipoglicemia(texto_caso, suspeita))
+        if not _glicose_urgente and _condicionado_a_confirmacao(texto_caso, nome_n):
             alertas.append(
                 f"{nome}: não incluído porque o parecer só indica este tratamento após a confirmação diagnóstica, "
                 "que ainda depende de exames. Inclua manualmente após a confirmação, se julgar adequado."
