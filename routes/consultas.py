@@ -673,10 +673,14 @@ def sugestoes_copiloto_multimodal(
             sugestoes_extraidas, _flag_checkup, str(especie_real or ""),
             idade or (getattr(animal_db, "idade", None) if animal_db else None))
         parecer_com_anexos = sugestoes_extraidas
-        if str(resposta_ia.provedor).startswith("groq"):
+        _prov = str(resposta_ia.provedor)
+        _modelo = str(getattr(resposta_ia, "modelo", "") or "").lower()
+        _reserva_fraca = _prov.startswith("groq") or "flash-lite" in _modelo
+        if _reserva_fraca:
             # a IA de reserva às vezes omite seções ou erra concentrações: o veterinário precisa saber
-            parecer_com_anexos += ("\n\n⚠️ **Revisar com atenção:** este parecer foi gerado pela IA de reserva (Groq), "
-                                   "por indisponibilidade temporária do Gemini. Confira com cuidado as doses, as "
+            _nome_reserva = "Groq" if _prov.startswith("groq") else "Gemini Flash-Lite"
+            parecer_com_anexos += ("\n\n⚠️ **Revisar com atenção:** este parecer foi gerado pela IA de reserva (" + _nome_reserva + "), "
+                                   "por indisponibilidade temporária do Gemini principal. Confira com cuidado as doses, as "
                                    "concentrações e a conduta antes de seguir.")
         if nomes_arquivos_originais:
             if resposta_ia.anexos_analisados:
