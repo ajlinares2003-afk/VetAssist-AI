@@ -1403,6 +1403,30 @@ def _garantir_parvovirose(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _garantir_urinalise_checkup(exames: list, d: dict, limite: int) -> list:
+    """Check-up preventivo de cão ou gato adulto/idoso: a urinálise faz parte do painel básico (rastreio de doença
+    renal subclínica, proteinúria, infecção urinária assintomática e diabetes). Exames que dependem da região
+    (hemoparasitas, dirofilariose) ficam a critério do veterinário."""
+    if not d.get("solicitar_exames_preventivos") or d.get("grupo") not in ("canino", "felino"):
+        return exames
+    idade = _idade_em_anos(d.get("idade"))
+    if idade is not None and idade < 1:
+        return exames
+    if any(re.search(r"urinalise|urina tipo|\beas\b|sumario de urina|exame de urina|analise de urina|urina i\b", _norm(e["nome"]))
+           for e in exames):
+        return exames
+    if len(exames) >= limite:
+        rotina = [i for i, e in enumerate(exames) if e["prioridade"] != "URGENTE"]
+        exames.pop(rotina[-1] if rotina else len(exames) - 1)
+    exames.append({
+        "nome": "Urinálise (urina tipo I)",
+        "categoria": "LABORATORIAL",
+        "prioridade": "ROTINA",
+        "justificativa": "Triagem preventiva: rastreia doença renal subclínica, proteinúria, infecção urinária assintomática e diabetes, complementando a bioquímica e o hemograma.",
+    })
+    return exames
+
+
 def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     """Cão com suspeita de hiperadrenocorticismo: garante o teste funcional (supressão com dexametasona em
     baixa dose) dentro do limite de exames, mesmo que a IA o tenha cortado por causa do momento ideal (após
@@ -1692,8 +1716,9 @@ def sugerir_exames(
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
     return {
-        "exames": _garantir_coagulograma_hepatico(_ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
+        "exames": _garantir_urinalise_checkup(_garantir_coagulograma_hepatico(_ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
             _garantir_triagem_brucella(exames_ia, d), d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
+            d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
         "provedor": resp.provedor,
