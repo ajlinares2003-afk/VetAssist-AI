@@ -150,6 +150,31 @@ def _linhas_esporotricose(dados_caso: str, suspeita: str, idade, peso) -> list:
     return linhas
 
 
+def _incluir_urinalise_no_parecer(texto: str, checkup: bool, especie: str, idade) -> str:
+    """Check-up preventivo de cão/gato adulto: a lista de exames sempre inclui urinálise (trava em atendimento_ia.py);
+    aqui o parecer ganha a mesma linha, para o documento ficar coerente."""
+    if not texto or not checkup:
+        return texto
+    esp = (especie or "").lower()
+    if not re.search(r"c[ãa]o|cachorro|canin|gat|felin", esp):
+        return texto
+    anos = _numero_idade_anos(idade)
+    if anos is not None and anos < 1:
+        return texto
+    if re.search(r"(?i)urin[áa]lise|urina\s+tipo|\beas\b|exame\s+de\s+urina|urocultura", texto):
+        return texto
+    linhas = texto.split("\n")
+    ancora = [i for i, l in enumerate(linhas) if re.search(r"(?i)hemograma|bioqu[íi]mic|coproparasit", l)]
+    if not ancora:
+        return texto
+    i = ancora[-1]
+    m = re.match(r"^(\s*(?:[-*•]\s+|\d+[.)]\s+)?)", linhas[i])
+    prefixo = m.group(1) if m else "- "
+    linhas.insert(i + 1, prefixo + "Urinálise (urina tipo I): triagem de doença renal subclínica, proteinúria, "
+                  "infecção urinária assintomática e diabetes, complementando o hemograma e a bioquímica.")
+    return "\n".join(linhas)
+
+
 def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=None, peso=None) -> str:
     """Rede de segurança sobre o texto da IA: tira exageros que o modelo repete mesmo proibidos no prompt
     ('altamente compatível', 'investigação imediata') e 'dor ... intensa' quando os dados não dizem 'intensa'."""
@@ -643,6 +668,10 @@ def sugestoes_copiloto_multimodal(
                                             f", incompatível com a espécie do paciente ({especie_real}). "
                                             "Desconsidere essa menção e a conduta ligada a ela.")
 
+        _flag_checkup = str(solicitar_exames_preventivos or "").strip().lower() in ("true", "1", "on", "sim")
+        sugestoes_extraidas = _incluir_urinalise_no_parecer(
+            sugestoes_extraidas, _flag_checkup, str(especie_real or ""),
+            idade or (getattr(animal_db, "idade", None) if animal_db else None))
         parecer_com_anexos = sugestoes_extraidas
         if str(resposta_ia.provedor).startswith("groq"):
             # a IA de reserva às vezes omite seções ou erra concentrações: o veterinário precisa saber
