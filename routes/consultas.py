@@ -202,6 +202,12 @@ def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=N
     if not re.search(r"pot[áa]ssio|calemia", (dados_caso or "").lower()):
         texto = re.sub(r"(?i)\bhipocalemia\s+(?:severa|grave|importante|acentuada)\b",
                        "possível hipocalemia (a confirmar pela dosagem de eletrólitos)", texto)
+    if not re.search(r"hemat[óo]crito|hemoglobina|\bpcv\b|volume globular|hemograma\s*:", (dados_caso or "").lower()):
+        # mucosa pálida não prova anemia severa: sem hematócrito/hemoglobina, é só uma possibilidade a confirmar
+        texto = re.sub(r"(?i)\banemia\s+(?:severa|grave|importante|acentuada|intensa)\s*\(\s*de\s+etiologia\s+a\s+esclarecer\s*\)",
+                       "Possível anemia (a confirmar pelo hemograma; etiologia a esclarecer)", texto)
+        texto = re.sub(r"(?i)\banemia\s+(?:severa|grave|importante|acentuada|intensa)\b",
+                       "possível anemia (a confirmar pelo hemograma)", texto)
     if re.search(r"lipidose", f"{base_caso} {texto.lower()}"):
         # troca só onde o Ringer lactato é INDICADO; frases que o citam para evitá-lo ("evitando soluções com
         # lactato (como Ringer com lactato)") ficam como estão, senão o sentido se inverte.

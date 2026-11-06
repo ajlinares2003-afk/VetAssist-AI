@@ -1429,14 +1429,16 @@ def _garantir_exames_cardiacos(exames: list, d: dict, limite: int) -> list:
             "prioridade": "ROTINA",
             "justificativa": "Marcador de estresse miocárdico: ajuda a distinguir causa cardíaca de não cardíaca em gato com dispneia, taquipneia ou síncope.",
         })
-    protegidos = re.compile(r"eco|eletrocardio|ecg|radiograf|torac|pressao arterial|probnp")
+    # hemograma e bioquímica (função renal e eletrólitos, essenciais antes de diurético) também ficam protegidos
+    protegidos = re.compile(r"eco|eletrocardio|ecg|radiograf|torac|pressao arterial|probnp|hemograma|bioquimic|eletrolit")
     for novo in faltam:
         if len(exames) >= limite:
             rotina = [i for i, e in enumerate(exames)
                       if e["prioridade"] != "URGENTE" and not protegidos.search(_norm(e["nome"]))]
-            if not rotina:
-                break
-            exames.pop(rotina[-1])
+            if rotina:
+                exames.pop(rotina[-1])
+            elif len(exames) >= limite + 1:
+                break   # sem nada dispensável: aceita 1 exame acima do limite, como no check-up
         exames.append(novo)
     return exames
 
