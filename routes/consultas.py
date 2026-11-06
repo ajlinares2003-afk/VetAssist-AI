@@ -175,6 +175,11 @@ def _incluir_urinalise_no_parecer(texto: str, checkup: bool, especie: str, idade
     return "\n".join(linhas)
 
 
+def _sem_acento_local(t: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", str(t or "").lower()) if not unicodedata.combining(c))
+
+
 def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=None, peso=None) -> str:
     """Rede de segurança sobre o texto da IA: tira exageros que o modelo repete mesmo proibidos no prompt
     ('altamente compatível', 'investigação imediata') e 'dor ... intensa' quando os dados não dizem 'intensa'."""
@@ -236,6 +241,15 @@ def _higienizar_parecer(texto: str, dados_caso: str, suspeita: str = "", idade=N
         extras.append(l)
     if extras:
         texto = texto.rstrip() + "\n" + "\n".join(f"- {l}" for l in extras)
+    # suspeita cardíaca com desconforto respiratório: conduta de emergência condicionada (furosemida só se houver
+    # edema pulmonar confirmado; aplicação na clínica, nunca receita domiciliar)
+    tn = _sem_acento_local(f"{base_caso} {texto}")
+    if (re.search(r"cardiomiopat|cardiopat|insuficiencia cardiaca|edema pulmonar", tn)
+            and re.search(r"dispne|taquipne|esforco respirat|respiracao (mais |ligeiramente )?(forcada|esforcada|ofegante|dificil)|acima (d\w+ )?faixa[s]? cl", tn)
+            and "furosemida" not in tn):
+        texto = texto.rstrip() + ("\n- Conduta de emergência condicionada: se houver edema pulmonar confirmado (radiografia torácica "
+                                  "ou ultrassonografia pulmonar), considerar furosemida injetável aplicada na clínica, conforme a "
+                                  "avaliação do veterinário. Sem confirmação de edema, evitar diurético e fluidoterapia.")
     return texto
 
 

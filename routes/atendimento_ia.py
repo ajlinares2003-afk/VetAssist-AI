@@ -565,7 +565,8 @@ _CUE_CONFIRMACAO = re.compile(
     r"((se|caso|quando)\s+(for\s+|ser\s+|estiver\s+|vier\s+a\s+ser\s+)?confirmad"
     r"|(apos|depois d[aeo]|ate)\s+(a\s+|o\s+)?(confirma|resultado|diagnostico confirmad)"
     r"|aguardar\s+(a\s+)?confirma|somente\s+(apos|com)\s+(a\s+)?confirma|apenas\s+(apos|com)\s+(a\s+)?confirma"
-    r"|confirmado\s+o\s+diagnostico)"
+    r"|confirmado\s+o\s+diagnostico"
+    r"|(se|caso|quando)\s+(houver|haja|ha)\s+[a-z ]{0,40}confirmad)"
 )
 
 
@@ -1403,6 +1404,43 @@ def _garantir_parvovirose(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _garantir_exames_cardiacos(exames: list, d: dict, limite: int) -> list:
+    """Gato com suspeita de cardiopatia (ex.: cardiomiopatia hipertrófica): inclui a pressão arterial sistêmica
+    (hipertensão ou hipotensão podem causar ou agravar o quadro) e o NT-proBNP (biomarcador de estresse miocárdico),
+    mesmo que a IA os omita. T4 total fica a critério do veterinário (útil sobretudo em gato idoso)."""
+    if d.get("grupo") != "felino":
+        return exames
+    base = _norm(f"{d.get('suspeita_diagnostica') or ''} {d.get('parecer_copiloto') or ''}")
+    if not re.search(r"cardiomiopat|cardiopat|insuficiencia cardiaca|edema pulmonar", base):
+        return exames
+    nomes = " | ".join(_norm(e["nome"]) for e in exames)
+    faltam = []
+    if not re.search(r"pressao arterial|\bpas\b|aferic\w* de pressao", nomes):
+        faltam.append({
+            "nome": "Aferição de pressão arterial sistêmica (Doppler)",
+            "categoria": "OUTRO",
+            "prioridade": "ROTINA",
+            "justificativa": "Avalia hipertensão ou hipotensão sistêmica, que podem causar ou agravar a cardiopatia e a síncope, e orienta a conduta.",
+        })
+    if not re.search(r"probnp|biomarcador card", nomes):
+        faltam.append({
+            "nome": "NT-proBNP (biomarcador cardíaco)",
+            "categoria": "LABORATORIAL",
+            "prioridade": "ROTINA",
+            "justificativa": "Marcador de estresse miocárdico: ajuda a distinguir causa cardíaca de não cardíaca em gato com dispneia, taquipneia ou síncope.",
+        })
+    protegidos = re.compile(r"eco|eletrocardio|ecg|radiograf|torac|pressao arterial|probnp")
+    for novo in faltam:
+        if len(exames) >= limite:
+            rotina = [i for i, e in enumerate(exames)
+                      if e["prioridade"] != "URGENTE" and not protegidos.search(_norm(e["nome"]))]
+            if not rotina:
+                break
+            exames.pop(rotina[-1])
+        exames.append(novo)
+    return exames
+
+
 def _garantir_urinalise_checkup(exames: list, d: dict, limite: int) -> list:
     """Check-up preventivo de cão ou gato adulto/idoso: a urinálise faz parte do painel básico (rastreio de doença
     renal subclínica, proteinúria, infecção urinária assintomática e diabetes). Exames que dependem da região
@@ -1716,8 +1754,9 @@ def sugerir_exames(
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
     return {
-        "exames": _garantir_urinalise_checkup(_garantir_coagulograma_hepatico(_ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
+        "exames": _garantir_exames_cardiacos(_garantir_urinalise_checkup(_garantir_coagulograma_hepatico(_ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
             _garantir_triagem_brucella(exames_ia, d), d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
+            d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
