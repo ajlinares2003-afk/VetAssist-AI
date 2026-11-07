@@ -240,13 +240,17 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
                            sem_preco=(p is None or valor == 0),
                            nota=None if (p and valor > 0) else "Defina o valor da consulta na Tabela de Preços."))
 
-    # 2) medicamentos aplicados na clínica (última receita salva do atendimento)
+    # 2) medicamentos aplicados na clínica: vale SÓ o registro de "Aplicações na clínica" do prontuário; se ele não
+    #    existir (atendimentos antigos), a última receita salva. Receitas antigas não somam, para não cobrar o que foi substituído.
     meds = db.execute(text(
         "select ip.medicamento, ip.dosagem, ip.frequencia, ip.duracao, ip.observacoes "
         "from public.item_prescricao ip join public.prescricao p on p.id = ip.prescricao_id "
-        "where p.consulta_id = :c and ip.tipo_uso like 'Uso Cl%' order by p.id desc, ip.id"), {"c": consulta["id"]}).mappings().all()
+        "where p.id = coalesce((select max(id) from public.prescricao where consulta_id = :c and observacoes = :marca), "
+        "                      (select max(id) from public.prescricao where consulta_id = :c)) "
+        "  and ip.tipo_uso like 'Uso Cl%' order by ip.id"),
+        {"c": consulta["id"], "marca": "Aplicações realizadas na clínica (registro do prontuário; não entregue ao tutor)."}).mappings().all()
     vistos = set()
-    for m in meds:   # várias receitas salvas: vale a versão mais recente de cada medicamento
+    for m in meds:
         chave = _norm(m["medicamento"])
         if not chave or chave in vistos:
             continue
