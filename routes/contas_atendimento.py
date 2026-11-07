@@ -104,6 +104,13 @@ def _extrair_aplicacoes(*textos) -> tuple:
         if m and n:
             por = _num_br(m.group(1))
             ml_total = (por * n) if por is not None else None
+        elif not m:   # só o volume por tomada na dosagem ("575 mg por tomada ≈ 1,15 mL"): 1 aplicação se nada indica mais
+            m = re.search(r"[≈~]\s*([\d.,]+)\s*mL", t)
+            if m:
+                por = _num_br(m.group(1))
+                if por is not None:
+                    n = n or 1
+                    ml_total = por * n
     return n, ml_total
 
 
@@ -200,8 +207,11 @@ def _sugestao_retorno(db: Session, consulta: dict) -> dict:
 
 def _nomes_exames(db: Session, consulta_id: int) -> list:
     """Exames do atendimento (solicitados + registrados), sem repetição."""
+    # só o ÚLTIMO pedido de exames (lote): pedidos anteriores foram substituídos quando o veterinário gerou de novo
     nomes = db.execute(text(
         "select nome_exame from public.solicitacao_exame where consulta_id = :c "
+        "  and lote is not distinct from (select lote from public.solicitacao_exame where consulta_id = :c "
+        "                                  order by data_solicitacao desc, id desc limit 1) "
         "union select nome_exame from public.exame where consulta_id = :c"), {"c": consulta_id}).scalars().all()
     vistos, out = set(), []
     for nome in nomes:
@@ -234,10 +244,9 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
     meds = db.execute(text(
         "select ip.medicamento, ip.dosagem, ip.frequencia, ip.duracao, ip.observacoes "
         "from public.item_prescricao ip join public.prescricao p on p.id = ip.prescricao_id "
-        "where p.id = (select max(id) from public.prescricao where consulta_id = :c) "
-        "  and ip.tipo_uso like 'Uso Cl%' order by ip.id"), {"c": consulta["id"]}).mappings().all()
+        "where p.consulta_id = :c and ip.tipo_uso like 'Uso Cl%' order by p.id desc, ip.id"), {"c": consulta["id"]}).mappings().all()
     vistos = set()
-    for m in meds:
+    for m in meds:   # várias receitas salvas: vale a versão mais recente de cada medicamento
         chave = _norm(m["medicamento"])
         if not chave or chave in vistos:
             continue

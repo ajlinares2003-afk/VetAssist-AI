@@ -202,6 +202,8 @@ def _desempacotar_observacoes(texto) -> dict:
 def _quantidade_total(dose, peso, conc_valor, conc_unidade, freq_horas, dias, clinica: bool = False) -> Optional[str]:
     """Quantidade a dispensar para o tratamento completo (só quando há dados para calcular)."""
     conc, h, d = _numero(conc_valor), _numero(freq_horas), _numero(dias)
+    if clinica and h is None:   # aplicação na clínica sem frequência definida ("conforme orientação"): conta 1 aplicação
+        h, d = 24.0, 1.0
     if dose is None or peso is None or conc is None or h is None or d is None:
         return None
     tomadas = max(1, math.ceil(d * 24 / h))
@@ -945,6 +947,11 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     f"{nome}: medicamento controlado por {int(round(dias_n))} dias. Confirme a necessidade e "
                     "programe reavaliação."
                 )
+
+        if tipo == "CLINICA" and quantidade is None:
+            # aplicação na clínica: o nº de aplicações e o volume total alimentam a cobrança na finalização
+            quantidade = _quantidade_total(dose, peso, conc_valor, conc_unidade,
+                                           bruto.get("frequencia_horas"), bruto.get("duracao_dias"), clinica=True)
 
         itens.append({
             "medicamento": titulo,
@@ -1817,6 +1824,74 @@ def salvar_exames(
         logger.exception("Erro ao salvar exames da consulta %s", corpo.consulta_id)
         raise HTTPException(status_code=500, detail="Erro ao salvar a solicitação de exames.")
     return {"mensagem": "Solicitação de exames salva no prontuário.", "lote": lote}
+
+
+ROTULO_USO_CLINICO = TIPO_USO_ROTULO["CLINICA"]
+OBS_APLICACOES_CLINICA = "Aplicações realizadas na clínica (registro do prontuário; não entregue ao tutor)."
+
+
+class AplicacoesClinicaSalvar(BaseModel):
+    consulta_id: int
+    itens: List[ItemReceita] = Field(default_factory=list, max_length=30)
+
+
+@router.post("/aplicacoes-clinica")
+def salvar_aplicacoes_clinica(
+    corpo: AplicacoesClinicaSalvar,
+    usuario_logado=Depends(exigir_perfil(PERFIS_CLINICOS)),
+    db: Session = Depends(get_db),
+):
+    """Grava no prontuário as medicações aplicadas NA CLÍNICA (alimentam a cobrança ao finalizar).
+    Substitui o registro anterior de aplicações do mesmo atendimento (lista vazia = limpa)."""
+    existe = db.execute(text("SELECT status FROM consulta WHERE id = :i"), {"i": corpo.consulta_id}).first()
+    if not existe:
+        raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    _perfil = usuario_logado.get("perfil") if isinstance(usuario_logado, dict) else getattr(usuario_logado, "perfil", "")
+    if existe[0] in ("Aguardando Pagamento", "Finalizado") and str(getattr(_perfil, "value", _perfil) or "").upper() != "ADMIN":
+        raise HTTPException(status_code=409, detail="Atendimento finalizado: o prontuário está travado.")
+    try:
+        antigas = {"c": corpo.consulta_id, "o": OBS_APLICACOES_CLINICA}
+        db.execute(text("DELETE FROM item_prescricao WHERE prescricao_id IN "
+                        "(SELECT id FROM prescricao WHERE consulta_id = :c AND observacoes = :o)"), antigas)
+        db.execute(text("DELETE FROM prescricao WHERE consulta_id = :c AND observacoes = :o"), antigas)
+        validos = [i for i in corpo.itens if i.medicamento.strip()]
+        prescricao_id = None
+        if validos:
+            prescricao_id = db.execute(
+                text("INSERT INTO prescricao (consulta_id, observacoes) VALUES (:c, :o) RETURNING id"),
+                {"c": corpo.consulta_id, "o": OBS_APLICACOES_CLINICA}).scalar_one()
+            for item in validos:
+                db.execute(
+                    text("INSERT INTO item_prescricao (prescricao_id, medicamento, dosagem, frequencia, duracao, tipo_uso, observacoes) "
+                         "VALUES (:p, :m, :d, :f, :u, :t, :o)"),
+                    {"p": prescricao_id, "m": item.medicamento.strip(), "d": item.dosagem, "f": item.frequencia,
+                     "u": item.duracao, "t": ROTULO_USO_CLINICO,
+                     "o": _empacotar_observacoes(item.observacoes, item.recomendacoes, item.quantidade)})
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Erro ao salvar aplicações na clínica da consulta %s", corpo.consulta_id)
+        raise HTTPException(status_code=500, detail="Erro ao salvar as aplicações na clínica.")
+    return {"mensagem": "Aplicações na clínica registradas no prontuário.", "prescricao_id": prescricao_id, "total": len(validos)}
+
+
+@router.get("/aplicacoes-clinica/{consulta_id}")
+def listar_aplicacoes_clinica(
+    consulta_id: int,
+    usuario_logado=Depends(exigir_perfil(PERFIS_CLINICOS)),
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(
+        text("SELECT ip.medicamento, ip.dosagem, ip.frequencia, ip.duracao, ip.observacoes FROM item_prescricao ip "
+             "JOIN prescricao p ON p.id = ip.prescricao_id WHERE p.consulta_id = :c AND p.observacoes = :o ORDER BY ip.id"),
+        {"c": consulta_id, "o": OBS_APLICACOES_CLINICA}).mappings().all()
+    out = []
+    for r in rows:
+        item = {k: r[k] for k in ("medicamento", "dosagem", "frequencia", "duracao")}
+        item.update(_desempacotar_observacoes(r["observacoes"]))
+        item["tipo_uso"] = "CLINICA"
+        out.append(item)
+    return out
 
 
 def _iso(valor):
