@@ -916,24 +916,29 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         recomendacoes = corrigir_siglas(str(bruto.get("recomendacoes") or "").strip()[:300])
         lista_controle = _lista_controle_valida(bruto.get("lista_controle"))
         lista_ref = next((l for k, l in LISTA_CONHECIDA.items() if k in nome_n), None)
+        nota_lista = ""
         if lista_ref and lista_controle != lista_ref:
-            if lista_controle:
-                alertas.append(
-                    f"{nome}: a IA indicou a lista {lista_controle}, mas este princípio ativo consta na lista "
-                    f"{lista_ref} da Portaria 344/98. Foi usada a lista {lista_ref}; confirme na norma vigente."
-                )
+            if lista_controle:   # vai junto do aviso de controle especial (um aviso só por medicamento)
+                nota_lista = f" A IA indicou a lista {lista_controle}; foi usada a {lista_ref}, confirme na norma vigente."
             lista_controle = lista_ref
         # A IA classifica; a lista fixa é só uma rede de segurança contra falso negativo.
         controlado = (_verdadeiro(bruto.get("controlado")) or bool(lista_controle)
                       or any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS))
         quantidade = None
         if controlado:
-            alertas.append(
-                f"{nome}: medicamento de controle especial"
-                f"{f' (lista {lista_controle})' if lista_controle else ''} (Portaria SVS/MS 344/98). "
-                "Confira a lista vigente, o tipo de receituário exigido (A1-A3: Notificação de Receita A; "
-                "B1-B2: Notificação de Receita B; C1: receita de controle especial) e a quantidade antes de emitir."
-            )
+            lista_txt = f" (lista {lista_controle})" if lista_controle else ""
+            if tipo == "CLINICA":   # aplicado na clínica: não há receituário para o tutor, só o controle interno
+                alertas.append(
+                    f"{nome}: medicamento de controle especial{lista_txt} (Portaria SVS/MS 344/98). Aplicação na clínica: "
+                    f"registre no controle de medicamentos controlados da clínica; não há receituário para o tutor.{nota_lista}"
+                )
+            else:
+                alertas.append(
+                    f"{nome}: medicamento de controle especial{lista_txt} (Portaria SVS/MS 344/98). "
+                    "Confira a lista vigente, o tipo de receituário exigido (A1-A3: Notificação de Receita A; "
+                    "B1-B2: Notificação de Receita B; C1: receita de controle especial) e a quantidade antes de emitir."
+                    + nota_lista
+                )
             if "manipulad" in _norm(apresentacao):
                 alertas.append(
                     f"{nome}: apresentação manipulada de medicamento controlado. Confirme com a farmácia de "
