@@ -990,6 +990,11 @@ def atualizar_consulta(
     if not consulta_db:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
 
+    # prontuário travado depois de finalizado: só o ADMIN corrige (e antes disso reabre a conta no Caixa)
+    _perfil = usuario_logado.get("perfil") if isinstance(usuario_logado, dict) else getattr(usuario_logado, "perfil", "")
+    if str(consulta_db.status) in ("Aguardando Pagamento", "Finalizado") and str(getattr(_perfil, "value", _perfil) or "").upper() != "ADMIN":
+        raise HTTPException(status_code=409, detail="Atendimento finalizado: o prontuário está travado. Peça a um administrador para reabri-lo.")
+
     dados = consulta.model_dump(exclude_unset=True)
     nao_aceitam_vazio = {"animal_id", "usuario_id", "codigo", "status", "queixa_principal", "parecer_copiloto"}
 
