@@ -1017,6 +1017,8 @@ def excluir_consulta(
     consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
     if not consulta:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    if str(consulta.status) in ("Aguardando Pagamento", "Finalizado"):
+        raise HTTPException(status_code=409, detail="Atendimento finalizado não pode ser excluído (há conta e registro financeiro vinculados).")
     db.delete(consulta)
     db.commit()
     return {"mensagem": "Consulta excluída com sucesso."}
