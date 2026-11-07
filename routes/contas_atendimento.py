@@ -107,11 +107,28 @@ def _extrair_aplicacoes(*textos) -> tuple:
     return n, ml_total
 
 
-def _item(categoria, descricao, quantidade, valor_unitario, origem="AUTO", sem_preco=False, nota=None) -> dict:
+DESTINOS_EXAME = ("CLINICA", "EXTERNO", "PARCEIRO")
+
+
+def _item(categoria, descricao, quantidade, valor_unitario, origem="AUTO", sem_preco=False, nota=None,
+          destino=None, custo_laboratorio=None, laboratorio=None) -> dict:
     q, v = _d(quantidade, "1"), _d(valor_unitario)
+    destino = destino if destino in ("CLINICA", "PARCEIRO") else None
+    lab = (str(laboratorio).strip()[:120] or None) if laboratorio else None
     return {"categoria": categoria, "descricao": str(descricao)[:300], "quantidade": q, "valor_unitario": v,
             "valor_total": (q * v).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
-            "origem": origem, "sem_preco": bool(sem_preco), "nota": nota}
+            "origem": origem, "sem_preco": bool(sem_preco), "nota": nota,
+            "destino": destino, "laboratorio": lab if destino == "PARCEIRO" else None,
+            "custo_laboratorio": _d(custo_laboratorio) if (destino == "PARCEIRO" and custo_laboratorio is not None) else None}
+
+
+def _destino_sugerido(preco) -> str:
+    """Sugestão (o veterinário decide): com custo de parceiro cadastrado → PARCEIRO; com preço → CLINICA; senão EXTERNO."""
+    if preco and preco.get("custo_parceiro") is not None and _d(preco["custo_parceiro"]) > 0:
+        return "PARCEIRO"
+    if preco and _d(preco["valor"]) > 0:
+        return "CLINICA"
+    return "EXTERNO"
 
 
 def _totais(itens: list, desconto) -> tuple:
@@ -131,8 +148,8 @@ def _id_de(usuario):
 
 
 def _precos_ativos(db: Session) -> list:
-    rows = db.execute(text("select id, categoria, nome, palavras_chave, unidade, valor from public.tabela_precos "
-                           "where ativo order by id")).mappings().all()
+    rows = db.execute(text("select id, categoria, nome, palavras_chave, unidade, valor, custo_parceiro, laboratorio "
+                           "from public.tabela_precos where ativo order by id")).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -181,8 +198,24 @@ def _sugestao_retorno(db: Session, consulta: dict) -> dict:
                        "dias_desde": int(dias) if dias is not None else None, "prazo_dias": prazo}}
 
 
-def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_codigo: Optional[str]) -> tuple:
-    """Itens automáticos da conta + avisos para a recepção."""
+def _nomes_exames(db: Session, consulta_id: int) -> list:
+    """Exames do atendimento (solicitados + registrados), sem repetição."""
+    nomes = db.execute(text(
+        "select nome_exame from public.solicitacao_exame where consulta_id = :c "
+        "union select nome_exame from public.exame where consulta_id = :c"), {"c": consulta_id}).scalars().all()
+    vistos, out = set(), []
+    for nome in nomes:
+        chave = _norm(nome)
+        if chave and chave not in vistos:
+            vistos.add(chave)
+            out.append(nome)
+    return out
+
+
+def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_codigo: Optional[str],
+                  exames_destino: Optional[dict] = None) -> tuple:
+    """Itens automáticos da conta + avisos para a recepção + exames encaminhados a laboratório externo.
+    exames_destino: {nome normalizado: 'CLINICA'|'EXTERNO'|'PARCEIRO'} escolhido pelo veterinário (None = comportamento antigo)."""
     precos = _precos_ativos(db)
     itens, avisos = [], []
 
@@ -221,38 +254,53 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
         itens.append(_item("MEDICAMENTO", m["medicamento"], qtd, valor, sem_preco=(p is None or valor == 0),
                            nota=nota if (p and valor > 0) else "Sem preço cadastrado: defina o valor ou remova o item."))
 
-    # 3) exames: só entram os que têm preço cadastrado (indica que a clínica os realiza); os demais vão para o aviso
-    nomes = db.execute(text(
-        "select nome_exame from public.solicitacao_exame where consulta_id = :c "
-        "union select nome_exame from public.exame where consulta_id = :c"), {"c": consulta["id"]}).scalars().all()
-    vistos_ex, sem_preco = set(), []
-    for nome in nomes:
-        chave = _norm(nome)
-        if not chave or chave in vistos_ex:
-            continue
-        vistos_ex.add(chave)
+    # 3) exames: conforme o destino escolhido pelo veterinário
+    externos, sem_preco = [], []
+    for nome in _nomes_exames(db, consulta["id"]):
         p = _achar_preco(precos, "EXAME", nome)
         valor = _d(p["valor"]) if p else Decimal("0")
-        if p and valor > 0:
-            itens.append(_item("EXAME", nome, 1, valor, nota="Exame solicitado no atendimento: remova se o tutor fará em outro local."))
-        else:
-            sem_preco.append(nome)
+        if exames_destino is None:   # sem escolha explícita: só entra o que tem preço (clínica realiza)
+            if p and valor > 0:
+                itens.append(_item("EXAME", nome, 1, valor, nota="Exame solicitado no atendimento: remova se o tutor fará em outro local.",
+                                   destino="CLINICA"))
+            else:
+                sem_preco.append(nome)
+            continue
+        destino = exames_destino.get(_norm(nome)) or _destino_sugerido(p)
+        if destino == "EXTERNO":
+            externos.append(nome)
+        elif destino == "PARCEIRO":
+            custo = p.get("custo_parceiro") if p else None
+            lab = p.get("laboratorio") if p else None
+            falta = (p is None or valor == 0)
+            itens.append(_item("EXAME", nome, 1, valor, sem_preco=falta, destino="PARCEIRO", custo_laboratorio=custo, laboratorio=lab,
+                               nota=("Laboratório parceiro" + (f" ({lab})" if lab else "") + ": a clínica cobra o tutor e paga o laboratório."
+                                     if not falta else "Laboratório parceiro sem preço cadastrado: defina o valor cobrado do tutor.")))
+            if custo is None:
+                avisos.append(f"Exame '{nome}' enviado a laboratório parceiro sem custo cadastrado (o relatório do laboratório ficará sem o custo).")
+        else:   # CLINICA
+            falta = (p is None or valor == 0)
+            itens.append(_item("EXAME", nome, 1, valor, sem_preco=falta, destino="CLINICA",
+                               nota=None if not falta else "Exame feito na clínica sem preço cadastrado: defina o valor."))
     if sem_preco:
         avisos.append("Exames solicitados sem preço cadastrado (não cobrados automaticamente): " + "; ".join(sem_preco[:15])
                       + ". Se foram feitos na clínica, lance como item manual.")
+    if externos:
+        avisos.append("Exames encaminhados a laboratório externo (o tutor paga direto ao laboratório): " + "; ".join(externos[:15]) + ".")
     if consulta.get("indicacao_cirurgia"):
         avisos.append("Atendimento com indicação cirúrgica: cirurgia e internação não são cobradas automaticamente nesta versão; lance como item manual.")
-    return itens, avisos
+    return itens, avisos, externos
 
 
 def _gravar_itens(db: Session, conta_id: int, itens: list):
     db.execute(text("delete from public.item_conta where conta_id = :c"), {"c": conta_id})
     for i in itens:
         db.execute(text(
-            "insert into public.item_conta (conta_id, categoria, descricao, quantidade, valor_unitario, valor_total, origem, sem_preco, nota) "
-            "values (:c, :cat, :d, :q, :vu, :vt, :o, :sp, :n)"),
+            "insert into public.item_conta (conta_id, categoria, descricao, quantidade, valor_unitario, valor_total, origem, sem_preco, nota, "
+            "destino, custo_laboratorio, laboratorio) values (:c, :cat, :d, :q, :vu, :vt, :o, :sp, :n, :dest, :cl, :lab)"),
             {"c": conta_id, "cat": i["categoria"], "d": i["descricao"], "q": i["quantidade"], "vu": i["valor_unitario"],
-             "vt": i["valor_total"], "o": i["origem"], "sp": i["sem_preco"], "n": i.get("nota")})
+             "vt": i["valor_total"], "o": i["origem"], "sp": i["sem_preco"], "n": i.get("nota"),
+             "dest": i.get("destino"), "cl": i.get("custo_laboratorio"), "lab": i.get("laboratorio")})
 
 
 def _detalhe(db: Session, conta_id: int) -> dict:
@@ -264,8 +312,8 @@ def _detalhe(db: Session, conta_id: int) -> dict:
         "left join public.usuario u on u.id = ca.finalizada_por where ca.id = :i"), {"i": conta_id}).mappings().first()
     if not c:
         raise HTTPException(status_code=404, detail="Conta não encontrada.")
-    itens = db.execute(text("select id, categoria, descricao, quantidade, valor_unitario, valor_total, origem, sem_preco, nota "
-                            "from public.item_conta where conta_id = :i order by id"), {"i": conta_id}).mappings().all()
+    itens = db.execute(text("select id, categoria, descricao, quantidade, valor_unitario, valor_total, origem, sem_preco, nota, "
+                            "destino, custo_laboratorio, laboratorio from public.item_conta where conta_id = :i order by id"), {"i": conta_id}).mappings().all()
     out = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in dict(c).items()}
     out["itens"] = [{k: (float(v) if isinstance(v, Decimal) else v) for k, v in dict(i).items()} for i in itens]
     for k in ("subtotal", "desconto", "total"):
@@ -274,7 +322,13 @@ def _detalhe(db: Session, conta_id: int) -> dict:
 
 
 # ---------------------------------------------------------------- esquemas
+class ExameDestinoIn(BaseModel):
+    nome: str = Field(..., min_length=1, max_length=300)
+    destino: str = "CLINICA"
+
+
 class FinalizarIn(BaseModel):
+    exames: Optional[List[ExameDestinoIn]] = Field(None, max_length=60)   # destino de cada exame (None = comportamento antigo)
     retorno_gratuito: bool = False
     retorno_consulta_origem_id: Optional[int] = None
     retorno_motivo: Optional[str] = Field(None, max_length=500)
@@ -289,6 +343,9 @@ class ItemIn(BaseModel):
     origem: str = "MANUAL"
     sem_preco: bool = False
     nota: Optional[str] = Field(None, max_length=300)
+    destino: Optional[str] = None
+    custo_laboratorio: Optional[float] = Field(None, ge=0, le=1_000_000)
+    laboratorio: Optional[str] = Field(None, max_length=120)
 
 
 class ContaEdicaoIn(BaseModel):
@@ -308,6 +365,8 @@ class PrecoIn(BaseModel):
     palavras_chave: Optional[str] = Field(None, max_length=300)
     unidade: str = "un"
     valor: float = Field(0, ge=0, le=1_000_000)
+    custo_parceiro: Optional[float] = Field(None, ge=0, le=1_000_000)   # quanto o laboratório parceiro cobra da clínica
+    laboratorio: Optional[str] = Field(None, max_length=120)
     ativo: bool = True
 
 
@@ -318,24 +377,30 @@ def _validar_preco(p: PrecoIn):
         raise HTTPException(status_code=422, detail=f"Unidade inválida. Use: {', '.join(UNIDADES)}.")
 
 
+def _custo(p: PrecoIn):
+    return _d(p.custo_parceiro) if (p.custo_parceiro is not None and p.categoria == "EXAME") else None
+
+
 # ---------------------------------------------------------------- tabela de preços
 @router.get("/precos")
 def listar_precos(somente_ativos: bool = False, usuario=Depends(exigir_perfil(PERFIS_TODOS)), db: Session = Depends(get_db)):
-    sql = "select id, categoria, nome, palavras_chave, unidade, valor, ativo from public.tabela_precos"
+    sql = "select id, categoria, nome, palavras_chave, unidade, valor, custo_parceiro, laboratorio, ativo from public.tabela_precos"
     if somente_ativos:
         sql += " where ativo"
     rows = db.execute(text(sql + " order by categoria, nome")).mappings().all()
-    return [{**dict(r), "valor": float(r["valor"])} for r in rows]
+    return [{**dict(r), "valor": float(r["valor"]),
+             "custo_parceiro": float(r["custo_parceiro"]) if r["custo_parceiro"] is not None else None} for r in rows]
 
 
 @router.post("/precos")
 def criar_preco(dados: PrecoIn, usuario=Depends(exigir_perfil(["ADMIN"])), db: Session = Depends(get_db)):
     _validar_preco(dados)
     novo = db.execute(text(
-        "insert into public.tabela_precos (categoria, nome, palavras_chave, unidade, valor, ativo) "
-        "values (:c, :n, :k, :u, :v, :a) returning id"),
+        "insert into public.tabela_precos (categoria, nome, palavras_chave, unidade, valor, custo_parceiro, laboratorio, ativo) "
+        "values (:c, :n, :k, :u, :v, :cp, :lab, :a) returning id"),
         {"c": dados.categoria, "n": dados.nome.strip(), "k": (dados.palavras_chave or "").strip() or None,
-         "u": dados.unidade, "v": _d(dados.valor), "a": dados.ativo}).scalar()
+         "u": dados.unidade, "v": _d(dados.valor), "cp": _custo(dados), "lab": (dados.laboratorio or "").strip() or None,
+         "a": dados.ativo}).scalar()
     db.commit()
     return {"id": novo}
 
@@ -344,9 +409,11 @@ def criar_preco(dados: PrecoIn, usuario=Depends(exigir_perfil(["ADMIN"])), db: S
 def atualizar_preco(preco_id: int, dados: PrecoIn, usuario=Depends(exigir_perfil(["ADMIN"])), db: Session = Depends(get_db)):
     _validar_preco(dados)
     r = db.execute(text(
-        "update public.tabela_precos set categoria=:c, nome=:n, palavras_chave=:k, unidade=:u, valor=:v, ativo=:a where id=:i"),
+        "update public.tabela_precos set categoria=:c, nome=:n, palavras_chave=:k, unidade=:u, valor=:v, custo_parceiro=:cp, "
+        "laboratorio=:lab, ativo=:a where id=:i"),
         {"c": dados.categoria, "n": dados.nome.strip(), "k": (dados.palavras_chave or "").strip() or None,
-         "u": dados.unidade, "v": _d(dados.valor), "a": dados.ativo, "i": preco_id})
+         "u": dados.unidade, "v": _d(dados.valor), "cp": _custo(dados), "lab": (dados.laboratorio or "").strip() or None,
+         "a": dados.ativo, "i": preco_id})
     if r.rowcount == 0:
         raise HTTPException(status_code=404, detail="Item de preço não encontrado.")
     db.commit()
@@ -368,6 +435,21 @@ def desativar_preco(preco_id: int, usuario=Depends(exigir_perfil(["ADMIN"])), db
 def retorno_sugerido(consulta_id: int, usuario=Depends(exigir_perfil(PERFIS_VET)), db: Session = Depends(get_db)):
     """Sugere (não decide) se este atendimento é retorno do mesmo animal dentro do prazo gratuito."""
     return _sugestao_retorno(db, _consulta(db, consulta_id))
+
+
+@router.get("/exames-da-consulta/{consulta_id}")
+def exames_da_consulta(consulta_id: int, usuario=Depends(exigir_perfil(PERFIS_VET)), db: Session = Depends(get_db)):
+    """Exames do atendimento com o preço cadastrado e o destino sugerido (o veterinário confirma ao finalizar)."""
+    _consulta(db, consulta_id)
+    precos = _precos_ativos(db)
+    out = []
+    for nome in _nomes_exames(db, consulta_id):
+        p = _achar_preco(precos, "EXAME", nome)
+        out.append({"nome": nome, "destino_sugerido": _destino_sugerido(p),
+                    "valor": float(_d(p["valor"])) if p else None,
+                    "custo_parceiro": float(_d(p["custo_parceiro"])) if (p and p.get("custo_parceiro") is not None) else None,
+                    "laboratorio": p.get("laboratorio") if p else None})
+    return out
 
 
 # ---------------------------------------------------------------- finalizar (veterinário)
@@ -394,11 +476,14 @@ def finalizar_atendimento(consulta_id: int, dados: FinalizarIn,
     if conta and conta["status"] == "PAGA":
         raise HTTPException(status_code=409, detail="A conta deste atendimento já foi paga.")
 
-    itens, avisos = _montar_itens(db, consulta, dados.retorno_gratuito, origem_codigo)
+    exames_destino = None
+    if dados.exames is not None:
+        exames_destino = {_norm(e.nome): (e.destino if e.destino in DESTINOS_EXAME else "CLINICA") for e in dados.exames}
+    itens, avisos, externos = _montar_itens(db, consulta, dados.retorno_gratuito, origem_codigo, exames_destino)
     if conta:
         # reabertura/nova finalização antes do pagamento: mantém os itens lançados à mão
-        manuais = db.execute(text("select categoria, descricao, quantidade, valor_unitario, valor_total, origem, sem_preco, nota "
-                                  "from public.item_conta where conta_id = :c and origem = 'MANUAL'"), {"c": conta["id"]}).mappings().all()
+        manuais = db.execute(text("select categoria, descricao, quantidade, valor_unitario, valor_total, origem, sem_preco, nota, "
+                                  "destino, custo_laboratorio, laboratorio from public.item_conta where conta_id = :c and origem = 'MANUAL'"), {"c": conta["id"]}).mappings().all()
         itens += [dict(m) for m in manuais]
         conta_id = conta["id"]
     else:
@@ -411,9 +496,9 @@ def finalizar_atendimento(consulta_id: int, dados: FinalizarIn,
     _gravar_itens(db, conta_id, itens)
     db.execute(text(
         "update public.conta_atendimento set status='AGUARDANDO_PAGAMENTO', retorno_gratuito=:rg, retorno_consulta_origem_id=:ro, "
-        "retorno_motivo=:rm, subtotal=:s, desconto=:d, total=:t, avisos=:av, finalizada_por=:u, finalizada_em=now() where id=:i"),
+        "retorno_motivo=:rm, subtotal=:s, desconto=:d, total=:t, avisos=:av, exames_externos=:ex, finalizada_por=:u, finalizada_em=now() where id=:i"),
         {"rg": dados.retorno_gratuito, "ro": origem_id, "rm": (dados.retorno_motivo or "").strip() or None,
-         "s": subtotal, "d": desc, "t": total, "av": " | ".join(avisos) or None, "u": _id_de(usuario), "i": conta_id})
+         "s": subtotal, "d": desc, "t": total, "av": " | ".join(avisos) or None, "ex": "; ".join(externos) or None, "u": _id_de(usuario), "i": conta_id})
     db.execute(text(
         "update public.consulta set status = :st, finalizada_em = now(), retorno_dias = :rd, retorno_da_consulta_id = :ro where id = :c"),
         {"st": STATUS_AGUARDANDO, "rd": dados.retorno_dias, "ro": origem_id, "c": consulta_id})
@@ -463,7 +548,8 @@ def editar_conta(conta_id: int, dados: ContaEdicaoIn, usuario=Depends(exigir_per
     for i in dados.itens:
         cat = i.categoria if i.categoria in CATEGORIAS else "OUTRO"
         origem = i.origem if i.origem in ("AUTO", "MANUAL") else "MANUAL"
-        itens.append(_item(cat, i.descricao.strip(), i.quantidade, i.valor_unitario, origem=origem, sem_preco=i.sem_preco, nota=i.nota))
+        itens.append(_item(cat, i.descricao.strip(), i.quantidade, i.valor_unitario, origem=origem, sem_preco=i.sem_preco, nota=i.nota,
+                           destino=i.destino if cat == "EXAME" else None, custo_laboratorio=i.custo_laboratorio, laboratorio=i.laboratorio))
     subtotal, desc, total = _totais(itens, dados.desconto)
     if _d(dados.desconto) > subtotal:
         raise HTTPException(status_code=422, detail="O desconto não pode ser maior que o subtotal.")
@@ -513,6 +599,74 @@ def registrar_pagamento(conta_id: int, dados: PagamentoIn, usuario=Depends(exigi
     db.commit()
     logger.info("Conta %s paga (R$ %s, %s) por %s", conta_id, total, forma, _id_de(usuario))
     return _detalhe(db, conta_id)
+
+
+@router.get("/laboratorio/resumo")
+def resumo_laboratorio(mes: Optional[str] = None, usuario=Depends(exigir_perfil(PERFIS_CAIXA)), db: Session = Depends(get_db)):
+    """Exames de laboratório parceiro de contas PAGAS no mês (AAAA-MM): valor cobrado do tutor x custo do laboratório."""
+    if mes is not None and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", mes):
+        raise HTTPException(status_code=422, detail="Mês inválido. Use AAAA-MM.")
+    mes_ref = mes or db.execute(text("select to_char(now() at time zone 'America/Sao_Paulo', 'YYYY-MM')")).scalar()
+    rows = db.execute(text(
+        "select ic.id, ic.descricao, ic.quantidade, ic.valor_total, ic.custo_laboratorio, ic.laboratorio, ca.paga_em, ca.id as conta_id, "
+        "       co.codigo as consulta_codigo, a.nome as animal_nome "
+        "from public.item_conta ic join public.conta_atendimento ca on ca.id = ic.conta_id "
+        "join public.consulta co on co.id = ca.consulta_id left join public.animal a on a.id = co.animal_id "
+        "where ic.destino = 'PARCEIRO' and ca.status = 'PAGA' "
+        "  and to_char(ca.paga_em at time zone 'America/Sao_Paulo', 'YYYY-MM') = :m order by ca.paga_em"), {"m": mes_ref}).mappings().all()
+    itens, por_lab = [], {}
+    sem_custo = 0
+    for r in rows:
+        qtd = _d(r["quantidade"], "1")
+        cobrado = _d(r["valor_total"])
+        custo = (_d(r["custo_laboratorio"]) * qtd).quantize(Decimal("0.01")) if r["custo_laboratorio"] is not None else None
+        if custo is None:
+            sem_custo += 1
+        lab = r["laboratorio"] or "Sem laboratório informado"
+        g = por_lab.setdefault(lab, {"laboratorio": lab, "exames": 0, "cobrado": Decimal("0.00"), "custo": Decimal("0.00")})
+        g["exames"] += 1
+        g["cobrado"] += cobrado
+        g["custo"] += custo or Decimal("0.00")
+        itens.append({"conta_id": r["conta_id"], "consulta_codigo": r["consulta_codigo"], "animal_nome": r["animal_nome"],
+                      "exame": r["descricao"], "laboratorio": lab, "paga_em": r["paga_em"],
+                      "cobrado": float(cobrado), "custo": float(custo) if custo is not None else None})
+    labs = [{**g, "cobrado": float(g["cobrado"]), "custo": float(g["custo"]), "margem": float(g["cobrado"] - g["custo"])} for g in por_lab.values()]
+    tc = sum((g["cobrado"] for g in por_lab.values()), Decimal("0.00"))
+    tk = sum((g["custo"] for g in por_lab.values()), Decimal("0.00"))
+    return {"mes": mes_ref, "itens": itens, "laboratorios": labs, "itens_sem_custo": sem_custo,
+            "total_cobrado": float(tc), "total_custo": float(tk), "total_margem": float(tc - tk)}
+
+
+@router.get("/{conta_id}/recibo")
+def recibo_reembolso(conta_id: int, usuario=Depends(exigir_perfil(PERFIS_CAIXA)), db: Session = Depends(get_db)):
+    """Dados do recibo e do relatório clínico para pedido de reembolso a plano de saúde (conta PAGA).
+    Não substitui nota fiscal de serviço (o sistema não emite NFS-e)."""
+    conta = _detalhe(db, conta_id)
+    if conta["status"] != "PAGA":
+        raise HTTPException(status_code=409, detail="O recibo só é emitido depois do pagamento.")
+    cfg = {r["chave"]: r["valor"] for r in db.execute(text(
+        "select chave, valor from public.configuracoes_sistema where chave in "
+        "('clinica_nome','clinica_cnpj','clinica_endereco','clinica_telefone')")).mappings().all()}
+    co = db.execute(text(
+        "select c.codigo, c.data_consulta, c.queixa_principal, c.exame_fisico, c.suspeita_diagnostica, c.peso_atendimento, c.temperatura, "
+        "       c.frequencia_cardiaca, c.frequencia_respiratoria, c.usuario_id, u.nome as vet_nome, u.crmv as vet_crmv, "
+        "       a.nome as animal_nome, a.especie, a.raca, a.sexo, a.idade, a.microchip, "
+        "       t.nome as tutor_nome, t.cpf as tutor_cpf, t.telefone as tutor_telefone "
+        "from public.consulta c left join public.usuario u on u.id = c.usuario_id "
+        "left join public.animal a on a.id = c.animal_id left join public.tutor t on t.id = a.tutor_id "
+        "where c.id = :i"), {"i": conta["consulta_id"]}).mappings().first() or {}
+    meds = db.execute(text(
+        "select ip.medicamento, ip.dosagem, ip.frequencia, ip.duracao, ip.tipo_uso "
+        "from public.item_prescricao ip where ip.prescricao_id = (select max(id) from public.prescricao where consulta_id = :c) order by ip.id"),
+        {"c": conta["consulta_id"]}).mappings().all()
+    return {
+        "clinica": {"nome": cfg.get("clinica_nome"), "cnpj": cfg.get("clinica_cnpj"),
+                    "endereco": cfg.get("clinica_endereco"), "telefone": cfg.get("clinica_telefone")},
+        "conta": {k: conta.get(k) for k in ("id", "consulta_codigo", "subtotal", "desconto", "total", "forma_pagamento",
+                                            "paga_em", "retorno_gratuito", "exames_externos", "itens")},
+        "atendimento": {k: (str(v) if v is not None and not isinstance(v, (int, float, str)) else v) for k, v in dict(co).items()},
+        "medicamentos": [dict(m) for m in meds],
+    }
 
 
 @router.post("/{conta_id}/reabrir")
