@@ -294,8 +294,6 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
     if sem_preco:
         avisos.append("Exames solicitados sem preço cadastrado (não cobrados automaticamente): " + "; ".join(sem_preco[:15])
                       + ". Se foram feitos na clínica, lance como item manual.")
-    if externos:
-        avisos.append("Exames encaminhados a laboratório externo (o tutor paga direto ao laboratório): " + "; ".join(externos[:15]) + ".")
     if consulta.get("indicacao_cirurgia"):
         avisos.append("Atendimento com indicação cirúrgica: cirurgia e internação não são cobradas automaticamente nesta versão; lance como item manual.")
     return itens, avisos, externos
