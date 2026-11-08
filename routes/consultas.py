@@ -175,6 +175,22 @@ def _incluir_urinalise_no_parecer(texto: str, checkup: bool, especie: str, idade
     return "\n".join(linhas)
 
 
+def _incluir_conduta_dermato(texto: str, especie: str, dados_caso: str, suspeita: str = "") -> str:
+    """Cão estável com dermatopatia pruriginosa: o parecer registra a conduta inicial (não espera os exames rápidos)."""
+    if not texto or not re.search(r"c[ãa]o|cachorro|canin", (especie or "").lower()):
+        return texto
+    tn = _sem_acento_local(f"{dados_caso} {suspeita} {texto}")
+    if not re.search(r"dermatite|piodermite|prurid|coceira|escabiose|sarna|demodic|pulga", tn):
+        return texto
+    if re.search(r"instavel|choque|politrauma|convuls|epilep|sepse|gestante|prenhe|lactante|esporotric|leishmani", tn):
+        return texto
+    if re.search(r"conduta inicial.{0,60}(ectoparasit|antiparasit)", tn):
+        return texto
+    return texto.rstrip() + ("\n- Conduta inicial (não depende dos exames rápidos): controle ectoparasiticida sistêmico de amplo espectro "
+                            "e banhos antissépticos com clorexidina. Citologia, raspado e tricograma podem ser realizados na própria "
+                            "consulta, com resultado na hora; antipruriginoso e antibiótico sistêmico só depois desses resultados.")
+
+
 def _sem_acento_local(t: str) -> str:
     import unicodedata
     return "".join(c for c in unicodedata.normalize("NFKD", str(t or "").lower()) if not unicodedata.combining(c))
@@ -692,6 +708,9 @@ def sugestoes_copiloto_multimodal(
         sugestoes_extraidas = _incluir_urinalise_no_parecer(
             sugestoes_extraidas, _flag_checkup, str(especie_real or ""),
             idade or (getattr(animal_db, "idade", None) if animal_db else None))
+        sugestoes_extraidas = _incluir_conduta_dermato(
+            sugestoes_extraidas, str(especie_real or ""), " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)),
+            suspeita_extraida)
         parecer_com_anexos = sugestoes_extraidas
         _prov = str(resposta_ia.provedor)
         _modelo = str(getattr(resposta_ia, "modelo", "") or "").lower()

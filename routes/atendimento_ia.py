@@ -650,6 +650,75 @@ def _suspeita_hipoglicemia(texto_caso: str, suspeita: str = "") -> bool:
     return bool(re.search(r"(dextrose|glicose)[^.\n]{0,80}bolus|bolus[^.\n]{0,80}(dextrose|glicose)", _norm(texto_caso)))
 
 
+# --------------------------------------------------------------------------- #
+# Plano inicial para cão estável com dermatopatia pruriginosa: não espera os exames para dar alívio.
+# Antiparasitário sistêmico de amplo espectro (pulga, sarna, demodicose) + banho antisséptico. Antipruriginoso e
+# antibiótico ficam CONDICIONADOS ao raspado/citologia (que saem na própria consulta), só como aviso.
+# --------------------------------------------------------------------------- #
+_DERMATO_GATILHO = ("dermatite", "piodermite", "prurid", "coceira", "escabiose", "sarna", "demodic", "pulga")
+_DERMATO_EXCLUI = ("instavel", "choque", "politrauma", "convuls", "epilep", "sepse", "gestante", "prenhe",
+                   "lactante", "esporotric", "leishmani")
+_ISOXAZOLINAS = ("nexgard", "simparic", "bravecto", "credeli", "fluralaner", "afoxolaner", "sarolaner", "lotilaner")
+# NexGard Spectra (afoxolaner + milbemicina), 1 comprimido mastigável por faixa de peso, a cada 30 dias
+_SPECTRA_FAIXAS = ((2.0, 3.5, "2 a 3,5 kg"), (3.5, 7.5, "3,6 a 7,5 kg"), (7.5, 15.0, "7,6 a 15 kg"),
+                   (15.0, 30.0, "15,1 a 30 kg"), (30.0, 60.0, "30,1 a 60 kg"))
+
+
+def _plano_dermato_canino(grupo: str, peso, texto_caso: str, suspeita: str, itens: list) -> tuple:
+    """Devolve (itens_novos, alertas_novos); ([], []) quando o caso não se enquadra."""
+    if grupo != "canino":
+        return [], []
+    tn = _norm(f"{suspeita} {texto_caso}")
+    if not any(g in tn for g in _DERMATO_GATILHO) or any(e in tn for e in _DERMATO_EXCLUI):
+        return [], []
+    try:
+        kg = float(peso)
+    except (TypeError, ValueError):
+        return [], ["Plano dermatológico não calculado: informe o peso do paciente."]
+    nomes = " ".join(_norm(i.get("medicamento")) for i in itens)
+    novos, alertas = [], []
+    if not any(x in nomes for x in _ISOXAZOLINAS):
+        faixa = next((f for f in _SPECTRA_FAIXAS if f[0] < kg <= f[1] or (f[0] == 2.0 and kg == 2.0)), None)
+        if faixa:
+            novos.append({
+                "medicamento": f"NexGard Spectra ({faixa[2]}) — afoxolaner + milbemicina oxima",
+                "dosagem": f"1 comprimido mastigável (faixa {faixa[2]}), via oral",
+                "frequencia": "Dose única, repetir a cada 30 dias",
+                "duracao": "Sarna/demodicose: ao menos 2 a 3 doses mensais; reavaliar",
+                "tipo_uso": "VETERINARIO", "tipo_uso_rotulo": TIPO_USO_ROTULO["VETERINARIO"],
+                "observacoes": "Antiparasitário sistêmico de amplo espectro (pulga, carrapato, sarna e demodicose). Dar junto ou após a refeição.",
+                "controlado": False, "lista_controle": None,
+                "recomendacoes": "Associar controle ambiental contra pulgas. Confira a faixa de peso na embalagem.",
+                "quantidade": "1 comprimido mastigável",
+            })
+        else:
+            alertas.append(f"Antiparasitário sistêmico: peso de {_fmt(kg)} kg fora das faixas do NexGard Spectra (2 a 60 kg). Defina o produto e a dose manualmente.")
+    if not any(x in nomes for x in ("clorexidina", "shampoo", "xampu")):
+        novos.append({
+            "medicamento": "Shampoo de clorexidina 2% a 4%",
+            "dosagem": "Banho terapêutico: massagear na pele molhada e deixar agir por 10 minutos antes de enxaguar",
+            "frequencia": "2 a 3 vezes por semana",
+            "duracao": "2 a 4 semanas; reavaliar",
+            "tipo_uso": "VETERINARIO", "tipo_uso_rotulo": TIPO_USO_ROTULO["VETERINARIO"],
+            "observacoes": "Antisséptico para a piodermite superficial. Enxaguar bem e evitar olhos e mucosas.",
+            "controlado": False, "lista_controle": None, "recomendacoes": "", "quantidade": "1 frasco",
+        })
+    comp = max(0.5, round(kg * 0.5 / 5.4 * 2) / 2)
+    real = comp * 5.4 / kg
+    ajuste = "" if 0.36 <= real <= 0.66 else " Fora da faixa de 0,4 a 0,6 mg/kg com a apresentação de 5,4 mg: considere outra apresentação."
+    txt_comp = f"{comp:g}".replace(".", ",")
+    alertas.append(
+        f"Antipruriginoso (oclacitinib, cães acima de 12 meses; ex.: Apoquel 5,4 mg): 0,4 a 0,6 mg/kg a cada 12 h por até 14 dias, "
+        f"depois 1 vez ao dia. Para {_fmt(kg)} kg: ≈ {txt_comp} comprimido(s) de 5,4 mg (≈ {_fmt(round(real, 2))} mg/kg). "
+        f"Iniciar somente se o raspado for negativo para ácaros e a citologia não mostrar infecção ativa; inclua manualmente se julgar adequado.{ajuste}"
+    )
+    alertas.append(
+        "Antibiótico sistêmico só se a citologia mostrar bactérias; cultura com antibiograma se não houver resposta ao tratamento "
+        "ou se houver suspeita de resistência. Citologia, raspado e tricograma podem ser feitos na consulta, com resultado na hora."
+    )
+    return novos, alertas
+
+
 def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     sensivel_oral: bool = False, texto_caso: str = "", suspeita: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
@@ -1019,6 +1088,12 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     and any(k in n_av for k in ("obrigatori", "oficial", "mapa", "imediat"))):
                 continue
             alertas.append(corrigir_siglas(_cortar_texto(aviso.strip(), 300)))
+    novos_dermato, alertas_dermato = _plano_dermato_canino(grupo, peso, texto_caso, suspeita, itens)
+    if novos_dermato or alertas_dermato:
+        itens = itens + novos_dermato
+        # o aviso genérico "tratamento será definido após os exames" contradiz o plano inicial
+        alertas = [a for a in alertas if "sera definido" not in _norm(a)]
+        alertas = alertas_dermato + alertas
     # Aplicação feita na clínica não é prescrição para o tutor: sai da receita e vira registro/aviso.
     clinicos = [it for it in itens if it.get("tipo_uso") == "CLINICA"]
     if clinicos:

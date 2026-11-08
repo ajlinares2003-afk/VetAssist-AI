@@ -129,8 +129,14 @@ def _item(categoria, descricao, quantidade, valor_unitario, origem="AUTO", sem_p
             "custo_laboratorio": _d(custo_laboratorio) if (destino == "PARCEIRO" and custo_laboratorio is not None) else None}
 
 
-def _destino_sugerido(preco) -> str:
-    """Sugestão (o veterinário decide): com custo de parceiro cadastrado → PARCEIRO; com preço → CLINICA; senão EXTERNO."""
+EXAMES_DE_CONSULTA = ("citologia", "raspado", "tricograma", "otoscopia", "teste rapido", "glicemia")
+
+
+def _destino_sugerido(preco, nome: str = "") -> str:
+    """Sugestão (o veterinário decide): exame rápido de consulta → CLINICA; com custo de parceiro → PARCEIRO;
+    com preço → CLINICA; senão EXTERNO."""
+    if any(k in _norm(nome) for k in EXAMES_DE_CONSULTA):
+        return "CLINICA"
     if preco and preco.get("custo_parceiro") is not None and _d(preco["custo_parceiro"]) > 0:
         return "PARCEIRO"
     if preco and _d(preco["valor"]) > 0:
@@ -279,7 +285,7 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
             else:
                 sem_preco.append(nome)
             continue
-        destino = exames_destino.get(_norm(nome)) or _destino_sugerido(p)
+        destino = exames_destino.get(_norm(nome)) or _destino_sugerido(p, nome)
         if destino == "EXTERNO":
             externos.append(nome)
         elif destino == "PARCEIRO":
@@ -456,7 +462,7 @@ def exames_da_consulta(consulta_id: int, usuario=Depends(exigir_perfil(PERFIS_VE
     out = []
     for nome in _nomes_exames(db, consulta_id):
         p = _achar_preco(precos, "EXAME", nome)
-        out.append({"nome": nome, "destino_sugerido": _destino_sugerido(p),
+        out.append({"nome": nome, "destino_sugerido": _destino_sugerido(p, nome),
                     "valor": float(_d(p["valor"])) if p else None,
                     "custo_parceiro": float(_d(p["custo_parceiro"])) if (p and p.get("custo_parceiro") is not None) else None,
                     "laboratorio": p.get("laboratorio") if p else None})
