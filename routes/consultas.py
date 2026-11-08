@@ -191,6 +191,37 @@ def _incluir_conduta_dermato(texto: str, especie: str, dados_caso: str, suspeita
                             "consulta, com resultado na hora; antipruriginoso e antibiótico sistêmico só depois desses resultados.")
 
 
+_INT_CRITICO = re.compile(r"metemoglobin|cianose|cianotic|choque|convuls|dispneia (?:grave|intensa|severa)|insuficiencia respiratoria|coma\b|comatos|politraumat|sangramento ativo|hemorragia ativa|parada cardio")
+_INT_ANALGESICO_HUMANO = re.compile(r"paracetamol|acetaminofeno|tylenol|ibuprofeno|naproxeno|diclofenaco|aspirina|\baas\b|cetoprofeno|nimesulida|dorflex")
+_INT_MODERADO = re.compile(r"intoxica|envenena|desidratacao (?:grave|severa)|obstrucao uretral|globo vesical|hipoglicemia|ingeriu .{0,40}(?:paracetamol|ibuprofeno|naproxeno|diclofenaco|tylenol)")
+
+
+def _internacao_recomendada(dados_caso: str, suspeita: str, parecer: str, especie: str = "") -> Optional[dict]:
+    """Sugere internação (o veterinário decide) a partir do que foi registrado no atendimento: sinais de instabilidade,
+    intoxicação sintomática, etc. Devolve {nivel, motivo} ou None."""
+    base = _sem_acento_local(f"{dados_caso} {suspeita}")
+    nivel = None
+    # gato que ingeriu analgésico/anti-inflamatório humano: alerta máximo (paracetamol → metemoglobinemia, hemólise, necrose hepática)
+    gato = bool(re.search(r"gat|felin", _sem_acento_local(especie)))
+    if gato and _INT_ANALGESICO_HUMANO.search(base) and re.search(r"ingeri|ingest|deu|dei|tomou|comeu|engoliu|administr|intoxica|toxic", base):
+        nivel = "CRITICO"
+    elif _INT_CRITICO.search(base):
+        nivel = "CRITICO"
+    elif _INT_MODERADO.search(base):
+        nivel = "MODERADO"
+    else:   # a própria IA escreveu que precisa de internação (e não negou)
+        pt = _sem_acento_local(parecer)
+        for m in re.finditer(r"internacao|internar|internado", pt):
+            antes = pt[max(0, m.start() - 40):m.start()]
+            if not re.search(r"\b(sem|nao|desnecessari|dispensa|descartar|evitar)", antes):
+                nivel = "MODERADO"
+                break
+    if not nivel:
+        return None
+    motivo = re.sub(r"\s+", " ", str(suspeita or "").strip())[:200] or "Monitoramento e suporte intensivo"
+    return {"nivel": nivel, "motivo": motivo}
+
+
 def _sem_acento_local(t: str) -> str:
     import unicodedata
     return "".join(c for c in unicodedata.normalize("NFKD", str(t or "").lower()) if not unicodedata.combining(c))
@@ -711,6 +742,12 @@ def sugestoes_copiloto_multimodal(
         sugestoes_extraidas = _incluir_conduta_dermato(
             sugestoes_extraidas, str(especie_real or ""), " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)),
             suspeita_extraida)
+        _dados_caso_int = " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico))
+        indicacao_internacao = None if doenca_oficial else _internacao_recomendada(_dados_caso_int, suspeita_extraida, sugestoes_extraidas, str(especie_real or ""))
+        if indicacao_internacao and not re.search(r"(?i)interna[çc][ãa]o", sugestoes_extraidas):
+            sugestoes_extraidas = sugestoes_extraidas.rstrip() + (
+                "\n- Internação recomendada (nível " + indicacao_internacao["nivel"].lower() + "): monitoramento e suporte "
+                "intensivo; o veterinário decide e pode encaminhar pelo botão de internação.")
         parecer_com_anexos = sugestoes_extraidas
         _prov = str(resposta_ia.provedor)
         _modelo = str(getattr(resposta_ia, "modelo", "") or "").lower()
@@ -746,6 +783,7 @@ def sugestoes_copiloto_multimodal(
             "anexos": anexos_salvos,
             "indicacao_cirurgia": tem_indicacao,
             "justificativa_cirurgica": justificativa_cirurgica_texto,
+            "indicacao_internacao": indicacao_internacao,
             "doenca_oficial": doenca_oficial["nome"] if doenca_oficial else None,
             "exames_oficiais": exames_oficiais(doenca_oficial) if doenca_oficial else None,
         }

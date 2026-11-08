@@ -243,7 +243,7 @@ UNIDADES_CONCENTRACAO = {
 
 DOSE_MAXIMA_MG_KG = 100.0   # trava de sanidade contra erro grosseiro da IA
 # Exceções: bolus de glicose na hipoglicemia usa 0,5 a 1 g/kg (500 a 1000 mg/kg), acima da trava geral.
-DOSE_MAXIMA_ESPECIFICA = {"dextrose": 1000.0, "glicose": 1000.0}
+DOSE_MAXIMA_ESPECIFICA = {"dextrose": 1000.0, "glicose": 1000.0, "acetilcisteina": 150.0}   # NAC: ataque de 140 mg/kg
 BOLUS_GLICOSE_MG_KG = (250.0, 500.0)   # protocolo adotado: 0,25 a 0,5 g/kg (1 a 2 mL/kg de dextrose a 25%)
 
 # Faixas de dose por tomada (mg/kg) usadas SÓ para alertar, nunca para alterar a dose.
@@ -254,7 +254,7 @@ FAIXAS_DOSE_REFERENCIA = {
 }
 # Dose DIÁRIA total (mg/kg/dia) para cães, só para alertar. Carprofeno: 4,4 mg/kg/dia (2,2 mg/kg a cada 12 h
 # ou 4,4 mg/kg a cada 24 h). Confira sempre o formulário/bula.
-CONCENTRACOES_USUAIS = {"buprenorfina": (0.3,)}
+CONCENTRACOES_USUAIS = {"buprenorfina": (0.3,), "acetilcisteina": (100.0,)}   # NAC injetável usual: 100 mg/mL (300 mg/3 mL)
 FAIXAS_DOSE_DIARIA_REFERENCIA = {"carprofeno": (4.0, 4.8)}
 PESO_MAXIMO_KG = 1500.0
 
@@ -719,6 +719,63 @@ def _plano_dermato_canino(grupo: str, peso, texto_caso: str, suspeita: str, iten
     return novos, alertas
 
 
+# --------------------------------------------------------------------------- #
+# Intoxicação por paracetamol (cão/gato): antídoto com o protocolo completo, calculado pelo peso.
+# Acetilcisteína: ataque 140 mg/kg e manutenção 70 mg/kg a cada 6 h, 7 aplicações (36 a 48 h), IV lento diluída.
+# Substitui o que a IA tenha escrito para a acetilcisteína (dose/frequência variam entre as respostas).
+# --------------------------------------------------------------------------- #
+_PARACETAMOL = re.compile(r"paracetamol|acetaminofeno|tylenol")
+_INGESTAO = re.compile(r"\b(dei|deu|dado|dada|ingeriu|ingerir|ingestao|tomou|comeu|engoliu|administr\w*|toxic\w*|intoxica\w*)\b")
+ACETILCISTEINA_CONC_MG_ML = 100.0   # ampola injetável 100 mg/mL (confira a concentração do frasco)
+
+
+def _antidoto_paracetamol(grupo: str, peso, texto_caso: str, suspeita: str, itens: list) -> tuple:
+    """Devolve (itens_sem_acetilcisteina_da_IA + itens_do_protocolo, alertas). Sem o caso, devolve (itens, [])."""
+    if grupo not in ("canino", "felino"):
+        return itens, []
+    m = re.search(r"- Queixa principal: ([^\n]*)", texto_caso or "")
+    queixa = _norm(m.group(1)) if m else ""
+    sus = _norm(suspeita)
+    caso = bool(
+        (_PARACETAMOL.search(sus) and _INGESTAO.search(sus))
+        or (_PARACETAMOL.search(queixa) and _INGESTAO.search(queixa))
+    )
+    if not caso:
+        return itens, []
+    try:
+        kg = float(peso)
+    except (TypeError, ValueError):
+        return itens, ["Intoxicação por paracetamol: informe o peso para calcular o antídoto (acetilcisteína 140 mg/kg de ataque e 70 mg/kg a cada 6 h, 7 aplicações)."]
+    if kg <= 0:
+        return itens, []
+    conc = ACETILCISTEINA_CONC_MG_ML
+    mg_ataque, mg_manut = 140.0 * kg, 70.0 * kg
+    v_ataque, v_manut = mg_ataque / conc, mg_manut / conc
+    restantes = [i for i in itens if "acetilcistein" not in _norm(i.get("medicamento"))]
+    base = {"tipo_uso": "CLINICA", "tipo_uso_rotulo": TIPO_USO_ROTULO["CLINICA"], "controlado": False,
+            "lista_controle": None, "recomendacoes": ""}
+    novos = [
+        {**base,
+         "medicamento": "Acetilcisteína solução injetável 100 mg/mL — dose de ataque",
+         "dosagem": f"140 mg/kg ({_fmt(round(mg_ataque))} mg ≈ {_fmt(round(v_ataque, 2))} mL), via intravenosa lenta",
+         "frequencia": "Dose única (ataque)", "duracao": "1ª aplicação",
+         "observacoes": "Diluir em NaCl 0,9% (cerca de 1:3) e administrar IV lenta em 15 a 20 minutos, com filtro quando disponível. Confira a concentração do frasco.",
+         "quantidade": f"1 (uma) aplicação de ≈ {_fmt(round(v_ataque, 2))} mL (total ≈ {_fmt(round(v_ataque, 2))} mL), na clínica"},
+        {**base,
+         "medicamento": "Acetilcisteína solução injetável 100 mg/mL — manutenção",
+         "dosagem": f"70 mg/kg ({_fmt(round(mg_manut))} mg ≈ {_fmt(round(v_manut, 2))} mL), via intravenosa lenta",
+         "frequencia": "A cada 6 horas (QID)", "duracao": "7 aplicações (36 a 48 horas)",
+         "observacoes": "Mesma diluição e velocidade do ataque. Reavaliar metemoglobinemia, hemograma (corpúsculos de Heinz) e enzimas hepáticas.",
+         "quantidade": f"7 (sete) aplicações de ≈ {_fmt(round(v_manut, 2))} mL (total ≈ {_fmt(round(v_manut * 7, 2))} mL), na clínica"},
+    ]
+    alertas = [
+        "Intoxicação por paracetamol: antídoto = acetilcisteína 140 mg/kg de ataque e 70 mg/kg a cada 6 h por 7 aplicações (36 a 48 h), "
+        "calculado pelo peso e com concentração de 100 mg/mL. Substituiu o esquema sugerido pela IA; confirme o protocolo e a concentração do frasco.",
+        "Internação recomendada: monitorar oxigenação, metemoglobinemia, hemólise e função hepática. Em gatos, evitar AINEs e dipirona.",
+    ]
+    return restantes + novos, alertas
+
+
 def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     sensivel_oral: bool = False, texto_caso: str = "", suspeita: str = "") -> dict:
     """Valida cada medicamento sugerido, calcula a dose e aplica as travas de segurança."""
@@ -743,6 +800,20 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             "dose_mg_kg": BOLUS_GLICOSE_MG_KG[0], "frequencia_horas": None, "duracao_dias": 1,
             "disponibilidade": "CLINICA", "controlado": False,
         })
+    # Intoxicação por paracetamol (acetaminofeno): protocolo da acetilcisteína = ataque 140 mg/kg + manutenção
+    # 70 mg/kg a cada 6 h (7 aplicações). Substitui o que a IA sugeriu (dose e nº de aplicações variam muito).
+    _tn_int = _norm(f"{suspeita} {texto_caso}")
+    if (peso and re.search(r"paracetamol|acetaminofen|tylenol", _tn_int) and "intoxic" in _tn_int):
+        lista_meds = [m for m in lista_meds if not (isinstance(m, dict) and "acetilcisteina" in _norm(m.get("nome")))]
+        _base_nac = {"apresentacao": "solução injetável", "concentracao_valor": 100, "concentracao_unidade": "mg/mL",
+                     "via": "intravenosa", "disponibilidade": "CLINICA", "controlado": False}
+        lista_meds = [
+            {**_base_nac, "nome": "Acetilcisteína (dose de ataque)", "dose_mg_kg": 140, "frequencia_horas": None, "duracao_dias": 1},
+            {**_base_nac, "nome": "Acetilcisteína (manutenção)", "dose_mg_kg": 70, "frequencia_horas": 6, "duracao_dias": 1.75},
+        ] + lista_meds
+        alertas.append("Acetilcisteína: protocolo padrão na intoxicação por paracetamol (ataque 140 mg/kg, depois 70 mg/kg a cada 6 h, "
+                       "7 aplicações). Confirme com o seu protocolo e a concentração do produto (usual: 100 mg/mL).")
+
     for bruto in lista_meds[:12]:
         if not isinstance(bruto, dict):
             continue
@@ -948,7 +1019,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 and grupo in ("canino", "felino")):
             volume = dose * peso / conc_n
             limite = LIMITE_VOLUME_ORAL_ML if _via_oral(via_bruta) else LIMITE_VOLUME_INJETAVEL_ML
-            if volume > limite:
+            if volume > limite and "acetilcisteina" not in nome_n:   # NAC é diluída antes da aplicação
                 alertas.append(
                     f"{nome}: volume de ≈ {_fmt(volume)} mL por tomada parece alto para esta espécie. Confira a "
                     "concentração do produto ou escolha outra apresentação (ex.: comprimido ou concentração maior)."
@@ -965,7 +1036,7 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     "analgesia (ex.: analgésico oral para casa) fica a critério do veterinário. Ajuste manualmente, "
                     "se julgar necessário."
                 )
-        if tipo == "CLINICA" and dias_n and freq_h and freq_h < 24:
+        if tipo == "CLINICA" and dias_n and freq_h and freq_h < 24 and "acetilcisteina" not in nome_n:   # NAC é feita na internação
             n_aplic = int(-(-dias_n * 24 // freq_h))
             if n_aplic > 4:
                 alertas.append(
@@ -1080,6 +1151,17 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
             f"Mantido apenas {mantido}; inclua {removidos} manualmente se julgar adequado."
         )
 
+    # NAC na intoxicação por paracetamol: ataque e manutenção ficam claros para quem aplica
+    for it in itens:
+        if it["medicamento"].startswith("Acetilcisteína (dose de ataque)"):
+            it["frequencia"], it["duracao"] = "Dose única (ataque)", "Seguir com a manutenção"
+        elif it["medicamento"].startswith("Acetilcisteína (manutenção)"):
+            it["frequencia"], it["duracao"] = "A cada 6 horas", "7 aplicações (≈ 42 h), após o ataque"
+        else:
+            continue
+        it["recomendacoes"] = ("Diluir em NaCl 0,9% (solução a no máximo 5%) e aplicar por via intravenosa lenta, em 15 a 20 minutos, "
+                               "de preferência com filtro. Monitorar metemoglobinemia (mucosas), hemograma com corpúsculos de Heinz "
+                               "e função hepática.")
     for aviso in dados.get("alertas") or []:
         if isinstance(aviso, str) and aviso.strip():
             n_av = _norm(aviso)
@@ -1088,6 +1170,9 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                     and any(k in n_av for k in ("obrigatori", "oficial", "mapa", "imediat"))):
                 continue
             alertas.append(corrigir_siglas(_cortar_texto(aviso.strip(), 300)))
+    itens, alertas_antidoto = _antidoto_paracetamol(grupo, peso, texto_caso, suspeita, itens)
+    if alertas_antidoto:
+        alertas = alertas_antidoto + alertas
     novos_dermato, alertas_dermato = _plano_dermato_canino(grupo, peso, texto_caso, suspeita, itens)
     if novos_dermato or alertas_dermato:
         itens = itens + novos_dermato
