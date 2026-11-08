@@ -1,6 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import datetime
 from database import get_db
@@ -96,6 +97,15 @@ def criar_internacao(
     db.add(nova)
     db.commit()
     db.refresh(nova)
+
+    # O atendimento de origem passa a mostrar que o paciente está internado (não sobrescreve cirurgia, cobrança ou finalizado).
+    if dados.consulta_id:
+        novo_status = "Em Internação UTI" if nova.nivel_criticidade == "CRITICO" else "Em Internação"
+        db.execute(
+            text("UPDATE consulta SET status = :s WHERE id = :c "
+                 "AND status NOT IN ('Aguardando Cirurgia', 'Aguardando Pagamento', 'Finalizado', 'Cancelado', 'FINALIZADO', 'CANCELADO')"),
+            {"s": novo_status, "c": dados.consulta_id})
+        db.commit()
     return nova
 
 @router.put("/{internacao_id}/alta")
@@ -111,6 +121,13 @@ def dar_alta(
     internacao.status = "ALTA"
     internacao.data_alta = datetime.now()
     db.commit()
+
+    # Com a alta, o atendimento volta para "Em Atendimento": o veterinário revisa o prontuário e finaliza para cobrança.
+    if internacao.consulta_id:
+        db.execute(
+            text("UPDATE consulta SET status = 'Em Atendimento' WHERE id = :c AND status LIKE 'Em Internação%'"),
+            {"c": internacao.consulta_id})
+        db.commit()
     return {"mensagem": "Alta médica registrada com sucesso!"}
 
 @router.get("/{internacao_id}/evolucoes")

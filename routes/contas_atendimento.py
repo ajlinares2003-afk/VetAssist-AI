@@ -476,6 +476,9 @@ def finalizar_atendimento(consulta_id: int, dados: FinalizarIn,
     consulta = _consulta(db, consulta_id)
     if consulta["status"] == STATUS_FINALIZADO:
         raise HTTPException(status_code=409, detail="Este atendimento já foi finalizado e pago.")
+    if str(consulta["status"] or "").startswith("Em Internação"):
+        raise HTTPException(status_code=409, detail="Paciente internado: dê alta na Internação antes de finalizar o atendimento "
+                                                    "(cobrança de internação entra na Fase 2).")
     if consulta["status"] == "Aguardando Cirurgia" or consulta.get("indicacao_cirurgia"):
         raise HTTPException(status_code=409, detail="Atendimento com indicação cirúrgica: finalize depois do procedimento "
                                                     "(cirurgia e internação entram na Fase 2).")
