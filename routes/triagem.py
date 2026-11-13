@@ -1,5 +1,9 @@
+import hashlib
+import json
 import logging
+import time
 import unicodedata
+from collections import OrderedDict
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -219,6 +223,43 @@ def _validar_avaliacao(dados: dict) -> dict:
     if not isinstance(justificativa, str) or not justificativa.strip():
         raise ValueError("Justificativa ausente.")
     return {"classificacao_risco": cor, "justificativa": justificativa.strip()}
+
+# Cache das avaliações: os mesmos dados clínicos devolvem SEMPRE a mesma classificação.
+# Sem isso a IA (e a troca de provedor no fallback) podia responder Urgente, Muito Urgente ou Pouco Urgente
+# para o mesmo paciente a cada reavaliação.
+_CACHE_AVALIACOES: "OrderedDict[str, tuple]" = OrderedDict()
+_CACHE_TTL_SEG = 6 * 3600
+_CACHE_MAX = 500
+
+
+def _assinatura_avaliacao(dados, queixa_norm: str) -> str:
+    base = {
+        "animal": dados.animal_id, "especie": _normalizar(dados.especie or ""), "raca": _normalizar(dados.raca or ""),
+        "queixa": " ".join(_normalizar(queixa_norm).split()),
+        "t": dados.temperatura, "fc": dados.frequencia_cardiaca, "fr": dados.frequencia_respiratoria,
+        "tpc": dados.tpc_segundos, "muc": _normalizar(dados.mucosas or ""),
+    }
+    return hashlib.sha1(json.dumps(base, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _cache_ler(chave: str):
+    item = _CACHE_AVALIACOES.get(chave)
+    if not item:
+        return None
+    guardado_em, resposta = item
+    if time.time() - guardado_em > _CACHE_TTL_SEG:
+        _CACHE_AVALIACOES.pop(chave, None)
+        return None
+    _CACHE_AVALIACOES.move_to_end(chave)
+    return dict(resposta)
+
+
+def _cache_gravar(chave: str, resposta: dict):
+    _CACHE_AVALIACOES[chave] = (time.time(), dict(resposta))
+    _CACHE_AVALIACOES.move_to_end(chave)
+    while len(_CACHE_AVALIACOES) > _CACHE_MAX:
+        _CACHE_AVALIACOES.popitem(last=False)
+
 
 def _valor_ou_nao_aferido(valor, unidade: str) -> str:
     return f"{valor} {unidade}" if valor is not None else "não aferido"
@@ -499,6 +540,11 @@ def avaliar_triagem_ia(
             "origem": "REGRA_FISICA",
         }
 
+    chave_cache = _assinatura_avaliacao(dados, queixa_norm)
+    em_cache = _cache_ler(chave_cache)
+    if em_cache:
+        return em_cache
+
     perfil, idade, _animal = _perfil_do_animal(db, dados.animal_id, dados.model_dump())
     faixa = _faixa_do_paciente(perfil, idade)
 
@@ -534,6 +580,11 @@ def avaliar_triagem_ia(
         f"- Mucosas: {dados.mucosas or 'não informadas'}\n\n"
         f"{_contexto_referencia(bib_ref, pendente_ref, aviso_faixa)}\n"
         "REGRAS:\n"
+        "- Critérios de nível (siga-os para que o mesmo quadro dê sempre o mesmo nível):\n"
+        "  VERMELHO = risco iminente à vida; LARANJA = muito urgente (dois ou mais sinais vitais fora da faixa clínica, "
+        "dispneia, dor intensa ou sinais neurológicos); AMARELO = urgente (um sinal vital acima/abaixo da faixa de repouso "
+        "ou queixa sistêmica relevante, com o paciente estável); VERDE = pouco urgente (sinais vitais dentro das faixas, queixa leve); "
+        "AZUL = não urgente (rotina, retorno, vacina).\n"
         "- 'não aferido' NÃO significa normal; não presuma valores.\n"
         "- Compare os valores com as faixas da espécie E da faixa etária informadas, nunca com as de gato ou cão doméstico.\n"
         "- Em dúvida entre dois níveis, escolha o mais urgente.\n\n"
@@ -553,12 +604,14 @@ def avaliar_triagem_ia(
             detail="IA indisponível no momento. Classifique o paciente manualmente."
         )
 
-    return {
+    resultado = {
         **resposta.dados,
         "origem": "IA",
         "provedor_ia": resposta.provedor,
         "modelo_ia": resposta.modelo,
     }
+    _cache_gravar(chave_cache, resultado)
+    return resultado
 
 # --------------------------------------------------------------------------- #
 # Persistência e filas
