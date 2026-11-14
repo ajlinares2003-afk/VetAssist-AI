@@ -41,6 +41,7 @@ from routes import atendimento_ia
 from routes import contas_atendimento
 from services import rag_service
 from services.rag_service import router as rag_router
+from routes import sinais_vitais
 
 logger = logging.getLogger("vetassist.startup")
 
@@ -143,6 +144,7 @@ app.include_router(configuracoes.router)
 app.include_router(atendimento_ia.router)
 app.include_router(contas_atendimento.router)
 app.include_router(rag_router)
+app.include_router(sinais_vitais.router)
 
 
 @app.get("/")
