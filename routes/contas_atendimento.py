@@ -38,7 +38,7 @@ STATUS_AGUARDANDO = "Aguardando Pagamento"
 STATUS_FINALIZADO = "Finalizado"
 PRAZO_RETORNO_PADRAO = 15
 FORMAS_PAGAMENTO = ["Dinheiro", "Pix", "Cartão de débito", "Cartão de crédito", "Transferência", "Isento"]
-CATEGORIAS = ["CONSULTA", "RETORNO", "EXAME", "MEDICAMENTO", "PROCEDIMENTO", "INTERNACAO", "CIRURGIA", "INSUMO", "OUTRO"]
+CATEGORIAS = ["CONSULTA", "RETORNO", "EXAME", "MEDICAMENTO", "VACINA", "PROCEDIMENTO", "INTERNACAO", "CIRURGIA", "INSUMO", "OUTRO"]
 UNIDADES = ["un", "aplicacao", "mL", "dose", "dia"]
 
 PERFIS_VET = ["ADMIN", "VETERINARIO"]
@@ -262,7 +262,9 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
             continue
         vistos.add(chave)
         n, ml_total = _extrair_aplicacoes(m["observacoes"], m["dosagem"])
-        p = _achar_preco(precos, "MEDICAMENTO", m["medicamento"])
+        pv = _achar_preco(precos, "VACINA", m["medicamento"])   # vacina/imunizante tem categoria própria na tabela de preços
+        p = pv or _achar_preco(precos, "MEDICAMENTO", m["medicamento"])
+        cat_item = "VACINA" if pv else "MEDICAMENTO"
         if p and p["unidade"] == "mL":
             qtd = ml_total if ml_total is not None else Decimal("1")
             nota = (f"{qtd} mL pela receita" if ml_total is not None else "Volume não informado na receita: conferir a quantidade.")
@@ -270,7 +272,7 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
             qtd = Decimal(n) if n else Decimal("1")
             nota = (f"{n} aplicação(ões) pela receita" if n else "Quantidade não informada na receita: conferir.")
         valor = _d(p["valor"]) if p else Decimal("0")
-        itens.append(_item("MEDICAMENTO", m["medicamento"], qtd, valor, sem_preco=(p is None or valor == 0),
+        itens.append(_item(cat_item, m["medicamento"], qtd, valor, sem_preco=(p is None or valor == 0),
                            nota=nota if (p and valor > 0) else "Sem preço cadastrado: defina o valor ou remova o item."))
 
     # 3) exames: conforme o destino escolhido pelo veterinário
