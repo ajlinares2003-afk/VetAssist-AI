@@ -139,6 +139,21 @@ MARCADORES_CONTRAINDICACAO_AINE = (
     "falencia hepatica", "hepatopatia",
 )
 
+# Suplementos e itens sabidamente SEM controle especial: a IA às vezes os marca como controlados por engano.
+# Só vale se o nome não contiver também um princípio ativo controlado.
+NAO_CONTROLADOS = (
+    "probiotico", "simbiotico", "prebiotico", "enterococcus", "lactobacillus", "bifidobacterium", "saccharomyces",
+    "esmectita", "diosmectita", "caulim", "caolim", "vitamina", "suplemento", "polivitaminico", "omega", "ringer",
+    "cloreto de sodio", "soro fisiologico", "glicose", "eletrolit", "pasta oral", "sucralfato", "omeprazol",
+)
+
+
+def _isento_controle(nome_n: str) -> bool:
+    return (any(t in nome_n for t in NAO_CONTROLADOS)
+            and not any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS)
+            and not any(k in nome_n for k in LISTA_CONHECIDA))
+
+
 LISTAS_CONTROLE = {"A1", "A2", "A3", "B1", "B2", "C1", "C2", "C3", "C4", "C5"}
 
 # Marcadores usados para guardar recomendações e quantidade dentro de item_prescricao.observacoes,
@@ -1064,6 +1079,8 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         # A IA classifica; a lista fixa é só uma rede de segurança contra falso negativo.
         controlado = (_verdadeiro(bruto.get("controlado")) or bool(lista_controle)
                       or any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS))
+        if _isento_controle(nome_n):   # suplemento/probiótico/fluido não é controlado, mesmo que a IA tenha marcado
+            controlado, lista_controle = False, None
         quantidade = None
         if controlado:
             lista_txt = f" (lista {lista_controle})" if lista_controle else ""
@@ -1267,7 +1284,7 @@ def sugerir_receita(
         "7. PROPORCIONALIDADE E INTERAÇÕES FATAIS: A prescrição deve ser compatível com a gravidade. Evite opioides fortes em quadros leves; quando indicados, pelo menor tempo necessário (poucos dias, com reavaliação). "
         "É EXPRESSAMENTE PROIBIDO prescrever AINEs e Corticosteroides simultaneamente (risco severo de úlcera). NUNCA prescreva AINEs para pacientes com suspeita de intoxicação aguda, desidratação severa ou falência renal/hepática.\n"
         "8. MEDICINA BASEADA EM EVIDÊNCIAS: Mantenha o foco estritamente na medicina alopática veterinária. É proibido prescrever ou sugerir chás, simpatias, homeopatia não comprovada ou remédios caseiros humanos.\n"
-        "9. controlado: true se o princípio ativo consta nas listas de controle especial da Portaria "
+        "9. controlado: SUPLEMENTOS, probióticos, prebióticos, vitaminas, argilas (esmectita), protetores de mucosa e fluidos NÃO são controlados (false e null). Marque true se o princípio ativo consta nas listas de controle especial da Portaria "
         "SVS/MS 344/98 da ANVISA (listas A1 a C5) OU nas normativas de controle especial do MAPA "
         "(ex: IN 35/2017 para anestésicos). Nesse caso informe a lista em lista_controle (ex: 'C1', 'MAPA'). Caso contrário, false e null.\n"
         "9.1 observacao: descreva só a finalidade do medicamento (ex.: \"Analgesia\"). É proibido classificar antimicrobiano como \"de primeira linha\", \"de escolha\" ou semelhante, e afirmar espectro ou eficácia (ex.: \"útil contra E. coli\"); diga apenas a via e a finalidade (ex.: \"Antimicrobiano\").\n"
@@ -1428,9 +1445,10 @@ def analisar_medicamentos(
         nome_n = _norm(m.medicamento)
         saida.append({
             "medicamento": m.medicamento,
-            "controlado": (_verdadeiro(bruto.get("controlado")) or bool(lista)
-                           or any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS)),
-            "lista_controle": lista,
+            "controlado": (not _isento_controle(nome_n)
+                           and (_verdadeiro(bruto.get("controlado")) or bool(lista)
+                                or any(c in nome_n for c in POSSIVELMENTE_CONTROLADOS))),
+            "lista_controle": None if _isento_controle(nome_n) else lista,
             "recomendacoes": str(bruto.get("recomendacoes") or "").strip()[:300],
         })
     return {"itens": saida, "provedor": resp.provedor, "modelo": resp.modelo}
