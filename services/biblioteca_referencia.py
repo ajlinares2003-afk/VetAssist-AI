@@ -36,10 +36,10 @@ STOP = frozenset({
 SILVESTRE = frozenset({
     "silvestre", "silvestres", "selvagem", "selvagens", "exotico", "exotica", "exoticos",
 })
-# Porte do cadastro -> palavra usada nos perfis de cães. "Pequeno" fica de fora de
-# propósito: não existe perfil de "pequeno porte" e não vamos presumir equivalência.
+# Porte do cadastro -> palavra usada nos perfis de cães. "Pequeno" só casa com o perfil
+# "Cão Pequeno (ex: Schnauzer...)", que passou a existir na biblioteca; Toy/Mini seguem em "miniatura".
 PORTE_ALIAS = {
-    "mini": "miniatura", "miniatura": "miniatura", "toy": "miniatura",
+    "mini": "miniatura", "miniatura": "miniatura", "toy": "miniatura", "pequeno": "pequeno", "pequeno porte": "pequeno",
     "medio": "medio", "grande": "grande", "gigante": "gigante",
 }
 
@@ -146,11 +146,8 @@ def _montar_descritores(linhas) -> list:
     return list(por_texto.values())
 
 
-def _escolher_descritor_nivel(descritores, especie, sub_especie, raca, porte,
-                              nome_cientifico=None):
-    """Devolve (perfil | None, nível). Nível = com que precisão o perfil foi achado: "raca" (nome ou exemplo da
-    raça), "sub_especie", "especie" (só a espécie biológica), "grupo" (único perfil do grupo) ou "porte"
-    (desempate pelo porte do cadastro, o mais genérico: o peso do paciente pode não caber no perfil)."""
+def _escolher_descritor(descritores, especie, sub_especie, raca, porte,
+                        nome_cientifico=None) -> Optional[Descritor]:
     raca_n = _norm(raca)
     partes_raca = {p for p in _partes(raca) if p not in GENERICAS}
 
@@ -160,7 +157,7 @@ def _escolher_descritor_nivel(descritores, especie, sub_especie, raca, porte,
     if chave_cient:
         mesma_especie = [d for d in descritores if chave_cient in d.cientificos]
         if len(mesma_especie) == 1 and not partes_raca:
-            return mesma_especie[0], "especie"
+            return mesma_especie[0]
         if mesma_especie:
             descritores = mesma_especie
 
@@ -169,9 +166,9 @@ def _escolher_descritor_nivel(descritores, especie, sub_especie, raca, porte,
         for campo in ("aliases", "exemplos"):
             achados = [d for d in descritores if partes_raca & getattr(d, campo)]
             if len(achados) == 1:
-                return achados[0], "raca"
+                return achados[0]
             if len(achados) > 1:
-                return None, None
+                return None
 
     # 2) Sub-espécie = nome do perfil (ou início dele). Ex.: "Gato Doméstico".
     sub_n = _norm(sub_especie)
@@ -179,7 +176,7 @@ def _escolher_descritor_nivel(descritores, especie, sub_especie, raca, porte,
         achados = [d for d in descritores
                    if any(a == sub_n or a.startswith(sub_n + " ") for a in d.aliases)]
         if len(achados) == 1:
-            return achados[0], "sub_especie"
+            return achados[0]
 
     # 3) Espécie/sub-espécie (grupo), raça genérica e porte como desempate.
     texto_animal = f"{especie or ''} {sub_especie or ''}"
@@ -191,25 +188,20 @@ def _escolher_descritor_nivel(descritores, especie, sub_especie, raca, porte,
         candidatos = [d for d in candidatos if "domestic" not in d.grupo]
 
     if len(candidatos) == 1:
-        return candidatos[0], "grupo"
+        return candidatos[0]
 
     if raca_n in GENERICAS:  # "SRD" só vale entre perfis que listam SRD no nome
         marcados = [d for d in candidatos if raca_n in d.aliases]
         if len(marcados) == 1:
-            return marcados[0], "grupo"
+            return marcados[0]
 
     palavra_porte = PORTE_ALIAS.get(_norm(porte))
     if palavra_porte:
         por_porte = [d for d in candidatos if palavra_porte in d.palavras]
         if len(por_porte) == 1:
-            return por_porte[0], "porte"
+            return por_porte[0]
 
-    return None, None  # ambíguo ou desconhecido: não adivinhar
-
-
-def _escolher_descritor(descritores, especie, sub_especie, raca, porte,
-                        nome_cientifico=None) -> Optional[Descritor]:
-    return _escolher_descritor_nivel(descritores, especie, sub_especie, raca, porte, nome_cientifico)[0]
+    return None  # ambíguo ou desconhecido: não adivinhar
 
 
 def _escolher_linha(descritor: Descritor, sexo, faixa_etaria="adulto"):
@@ -230,17 +222,11 @@ def selecionar_referencia(linhas, *, especie, sub_especie, raca, sexo, porte,
                           nome_cientifico=None, faixa_etaria="adulto"):
     """Versão pura (sem banco): recebe as linhas e devolve a escolhida ou None."""
     descritores = _montar_descritores(linhas)
-    descritor, nivel = _escolher_descritor_nivel(descritores, especie, sub_especie, raca, porte,
-                                                 nome_cientifico)
+    descritor = _escolher_descritor(descritores, especie, sub_especie, raca, porte,
+                                    nome_cientifico)
     if descritor is None:
         return None
-    linha = _escolher_linha(descritor, sexo, faixa_etaria)
-    if linha is not None:
-        try:  # atributo transitório (não vai ao banco): a tela avisa quando o perfil veio só do porte
-            linha._nivel_correspondencia = nivel
-        except Exception:
-            pass
-    return linha
+    return _escolher_linha(descritor, sexo, faixa_etaria)
 
 
 def ids_rascunho(db) -> set:
