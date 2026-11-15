@@ -275,6 +275,35 @@ def _montar_itens(db: Session, consulta: dict, retorno_gratuito: bool, origem_co
         itens.append(_item(cat_item, m["medicamento"], qtd, valor, sem_preco=(p is None or valor == 0),
                            nota=nota if (p and valor > 0) else "Sem preço cadastrado: defina o valor ou remova o item."))
 
+    # 2b) vacinas/imunizantes: (a) registradas na carteira de vacinação do animal no dia do atendimento;
+    #     (b) se nada foi registrado, a vacina do agendamento ("Agendado: Vacina - Vacinação V10"), para a recepção conferir.
+    vac_itens = 0
+    vacs = db.execute(text(
+        "select nome_vacina, dose from public.vacina where animal_id = :a "
+        "and data_aplicacao = (cast(:d as timestamptz) at time zone 'America/Sao_Paulo')::date order by id"),
+        {"a": consulta["animal_id"], "d": consulta["data_consulta"]}).mappings().all()
+    for v in vacs:
+        chave = _norm(v["nome_vacina"])
+        if not chave or chave in vistos:
+            continue
+        vistos.add(chave)
+        p = _achar_preco(precos, "VACINA", v["nome_vacina"])
+        valor = _d(p["valor"]) if p else Decimal("0")
+        itens.append(_item("VACINA", v["nome_vacina"] + (f" ({v['dose']})" if v.get("dose") else ""), 1, valor,
+                           sem_preco=(p is None or valor == 0),
+                           nota="Vacina registrada na carteira de vacinação." if (p and valor > 0)
+                           else "Sem preço cadastrado na categoria Vacina / Imunizante: defina o valor ou remova o item."))
+        vac_itens += 1
+    if not vac_itens:
+        mq = re.match(r"\s*Agendado:\s*Vacina\w*\s*-\s*(.+)", str(consulta.get("queixa_principal") or ""), re.I)
+        if mq and _norm(mq.group(1)) not in vistos:
+            nome_v = mq.group(1).strip()[:200]
+            p = _achar_preco(precos, "VACINA", nome_v)
+            valor = _d(p["valor"]) if p else Decimal("0")
+            itens.append(_item("VACINA", nome_v, 1, valor, sem_preco=(p is None or valor == 0),
+                               nota="Vacina do agendamento: confirme se foi aplicada." if (p and valor > 0)
+                               else "Vacina do agendamento sem preço cadastrado (categoria Vacina / Imunizante): defina o valor ou remova o item."))
+
     # 3) exames: conforme o destino escolhido pelo veterinário
     externos, sem_preco = [], []
     for nome in _nomes_exames(db, consulta["id"]):
