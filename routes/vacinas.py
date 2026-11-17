@@ -1,6 +1,8 @@
+import re
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException       
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from database import get_db
 from models.vacina import Vacina
@@ -63,6 +65,79 @@ def criar_vacina(
     db.commit()
     db.refresh(nova_vacina)
     return nova_vacina
+
+def _data_iso(d):
+    return d.isoformat() if d else None
+
+
+@router.get("/completas")
+def listar_vacinas_completas(
+    usuario_logado: str = Depends(obter_usuario_logado),
+    db: Session = Depends(get_db)
+):
+    """Vacinas ja com paciente e tutor (tela de controle, carteira e lembrete de reforco)."""
+    linhas = db.execute(text("""
+        SELECT v.id, v.animal_id, v.nome_vacina, v.fabricante, v.dose, v.lote,
+               v.data_aplicacao, v.data_reforco, v.observacoes,
+               a.nome AS animal_nome, a.codigo AS animal_codigo, a.especie, a.raca,
+               a.sexo, a.idade, a.peso, a.data_nascimento,
+               t.nome AS tutor_nome, t.telefone AS tutor_telefone
+        FROM vacina v
+        LEFT JOIN animal a ON a.id = v.animal_id
+        LEFT JOIN tutor t ON t.id = a.tutor_id
+        ORDER BY v.data_aplicacao DESC NULLS LAST, v.id DESC
+    """)).mappings().all()
+    saida = []
+    for l in linhas:
+        d = dict(l)
+        d["data_aplicacao"] = _data_iso(d["data_aplicacao"])
+        d["data_reforco"] = _data_iso(d["data_reforco"])
+        d["data_nascimento"] = _data_iso(d["data_nascimento"])
+        d["idade"] = float(d["idade"]) if d["idade"] is not None else None
+        d["peso"] = float(d["peso"]) if d["peso"] is not None else None
+        saida.append(d)
+    return saida
+
+
+@router.get("/pendentes")
+def listar_vacinas_pendentes(
+    dias: int = 60,
+    usuario_logado: str = Depends(obter_usuario_logado),
+    db: Session = Depends(get_db)
+):
+    """Atendimentos de vacinacao (vindos da Agenda) que ainda nao tem a aplicacao registrada."""
+    linhas = db.execute(text("""
+        SELECT c.id AS consulta_id, c.codigo AS consulta_codigo, c.data_consulta, c.status,
+               c.queixa_principal,
+               a.id AS animal_id, a.nome AS animal_nome, a.codigo AS animal_codigo,
+               a.especie, a.idade, a.data_nascimento,
+               t.nome AS tutor_nome
+        FROM consulta c
+        JOIN animal a ON a.id = c.animal_id
+        LEFT JOIN tutor t ON t.id = a.tutor_id
+        WHERE c.queixa_principal ILIKE 'Agendado: Vacina%'
+          AND c.data_consulta >= (now() - make_interval(days => :dias))
+          AND COALESCE(c.status, '') NOT ILIKE 'cancel%'
+          AND NOT EXISTS (
+                SELECT 1 FROM vacina v
+                WHERE v.animal_id = a.id
+                  AND v.data_aplicacao = (c.data_consulta AT TIME ZONE 'America/Sao_Paulo')::date
+          )
+        ORDER BY c.data_consulta DESC
+    """), {"dias": max(1, int(dias or 60))}).mappings().all()
+    saida = []
+    for l in linhas:
+        d = dict(l)
+        m = re.match(r"\s*Agendado:\s*Vacina\w*\s*-\s*(.+)", d.pop("queixa_principal") or "", re.IGNORECASE)
+        nome = (m.group(1).strip() if m else "")
+        nome = re.sub(r"^(vacina[cç][aã]o|vacina)\s+", "", nome, flags=re.IGNORECASE).strip()
+        d["vacina_sugerida"] = nome
+        d["data_consulta"] = d["data_consulta"].isoformat() if d["data_consulta"] else None
+        d["data_nascimento"] = _data_iso(d["data_nascimento"])
+        d["idade"] = float(d["idade"]) if d["idade"] is not None else None
+        saida.append(d)
+    return saida
+
 
 @router.get("/{vacina_id}")
 def buscar_vacina(
