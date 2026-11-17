@@ -2084,6 +2084,60 @@ def _iso(valor):
     return valor.isoformat() if hasattr(valor, "isoformat") else valor
 
 
+@router.get("/pedidos-exames")
+def listar_pedidos_exames(
+    dias: int = 90,
+    incluir_substituidos: bool = False,
+    limite: int = 300,
+    usuario_logado=Depends(exigir_perfil(PERFIS_CLINICOS)),
+    db: Session = Depends(get_db),
+):
+    """
+    Pedidos de exames de TODOS os pacientes (um pedido = um 'lote' de `solicitacao_exame`).
+    `dias` = 0 traz todo o período. Por padrão só entra o pedido VIGENTE de cada atendimento
+    (o último lote; os anteriores foram substituídos quando o veterinário gerou de novo).
+    """
+    dias = max(0, min(int(dias), 3650))
+    limite = max(1, min(int(limite), 1000))
+    linhas = db.execute(
+        text(
+            "SELECT se.id, se.consulta_id, se.lote, se.nome_exame, se.categoria, se.prioridade, se.justificativa, "
+            "       se.data_solicitacao, "
+            "       (se.lote IS NOT DISTINCT FROM (SELECT s2.lote FROM solicitacao_exame s2 WHERE s2.consulta_id = se.consulta_id "
+            "                                       ORDER BY s2.data_solicitacao DESC, s2.id DESC LIMIT 1)) AS vigente, "
+            "       c.codigo AS consulta_codigo, a.id AS animal_id, a.nome AS animal_nome, a.codigo AS animal_codigo, "
+            "       a.especie, t.nome AS tutor_nome, u.nome AS vet_nome, u.crmv AS vet_crmv "
+            "FROM solicitacao_exame se JOIN consulta c ON c.id = se.consulta_id "
+            "LEFT JOIN animal a ON a.id = c.animal_id LEFT JOIN tutor t ON t.id = a.tutor_id "
+            "LEFT JOIN usuario u ON u.id = c.usuario_id "
+            "WHERE (:d = 0 OR se.data_solicitacao >= now() - make_interval(days => :d)) "
+            "ORDER BY se.data_solicitacao DESC, se.id"
+        ),
+        {"d": dias},
+    ).mappings().all()
+
+    pedidos: dict = {}
+    for r in linhas:
+        if not r["vigente"] and not incluir_substituidos:
+            continue
+        chave = str(r["lote"])
+        p = pedidos.get(chave)
+        if p is None:
+            if len(pedidos) >= limite:
+                continue
+            p = pedidos[chave] = {
+                "lote": chave, "consulta_id": r["consulta_id"],
+                "consulta_codigo": r["consulta_codigo"] or f"CNS-{r['consulta_id']:04d}",
+                "data": _iso(r["data_solicitacao"]), "vigente": bool(r["vigente"]),
+                "animal_id": r["animal_id"], "animal_nome": r["animal_nome"], "animal_codigo": r["animal_codigo"],
+                "especie": r["especie"], "tutor_nome": r["tutor_nome"],
+                "veterinario_nome": r["vet_nome"], "veterinario_crmv": r["vet_crmv"], "itens": [],
+            }
+        p["itens"].append({"nome": r["nome_exame"], "categoria": r["categoria"],
+                           "prioridade": r["prioridade"], "justificativa": r["justificativa"]})
+    return list(pedidos.values())
+
+
 @router.get("/historico/{animal_id}")
 def historico_do_paciente(
     animal_id: int,
