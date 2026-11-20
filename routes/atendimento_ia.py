@@ -1715,6 +1715,26 @@ def _garantir_parvovirose(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _garantir_pre_anestesia_retorno(exames: list, d: dict) -> list:
+    """Retorno com suspeita de shunt/hepatopatia: coagulograma e glicemia fazem parte da avaliação antes de sedação
+    ou cirurgia, mesmo que a IA os omita (a regra 'só o que falta' pode deixá-los de fora)."""
+    if not d.get("retorno_ctx"):
+        return exames
+    base = _norm(f"{d.get('suspeita_diagnostica') or ''} {d.get('parecer_copiloto') or ''} {d.get('queixa_principal') or ''}")
+    if not (_suspeita_shunt(d) or re.search(r"hepat", base)):
+        return exames
+    presentes = {_chave_exame(e["nome"]) for e in exames}
+    feitos = {_chave_exame(n) for n in _exames_ja_pedidos(d)} if d.get("exames_anexados") else set()
+    faltam = []
+    if "coagulacao" not in presentes and "coagulograma" not in presentes and "coagulograma" not in feitos:
+        faltam.append({"nome": "Coagulograma (TP e TTPA)", "categoria": "LABORATORIAL", "prioridade": "ROTINA",
+                       "justificativa": "Hepatopatia reduz a síntese de fatores de coagulação: avaliar antes de sedação, anestesia ou cirurgia."})
+    if "glicemia" not in presentes and "glicemia" not in feitos:
+        faltam.append({"nome": "Glicemia (jejum e seriada)", "categoria": "LABORATORIAL", "prioridade": "ROTINA",
+                       "justificativa": "Risco de hipoglicemia em shunt e jejum pré-anestésico: avaliar antes do procedimento."})
+    return exames + faltam
+
+
 def _garantir_exames_cardiacos(exames: list, d: dict, limite: int) -> list:
     """Gato com suspeita de cardiopatia (ex.: cardiomiopatia hipertrófica): inclui a pressão arterial sistêmica
     (hipertensão ou hipotensão podem causar ou agravar o quadro) e o NT-proBNP (biomarcador de estresse miocárdico),
@@ -2084,13 +2104,14 @@ def sugerir_exames(
 
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
+    exames_ia = _garantir_pre_anestesia_retorno(exames_ia, d)
     exames_ia, ja_realizados = _remover_exames_ja_realizados(exames_ia, d)
     aviso = "Sugestão gerada por IA. O veterinário decide quais exames solicitar."
     if ja_realizados:
         aviso = ("Retorno com laudo anexado: não foram sugeridos de novo os exames já pedidos antes (" + "; ".join(ja_realizados)
                  + "). Se algum não foi realizado, adicione-o manualmente. " + aviso)
     elif d.get("retorno_ctx") and not exames_ia:
-        aviso = "Retorno: nenhum exame adicional sugerido. " + aviso
+        aviso = "Retorno: nenhum exame adicional é necessário pelo parecer."
     if ja_realizados:
         resposta_exames = exames_ia   # sem os 'garantidos': eles poderiam reinserir o exame já feito
         return {"exames": resposta_exames, "ja_realizados": ja_realizados, "provedor": resp.provedor,
