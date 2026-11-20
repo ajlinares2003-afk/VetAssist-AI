@@ -1718,8 +1718,6 @@ def _garantir_parvovirose(exames: list, d: dict, limite: int) -> list:
 def _garantir_pre_anestesia_retorno(exames: list, d: dict) -> list:
     """Retorno com suspeita de shunt/hepatopatia: coagulograma e glicemia fazem parte da avaliação antes de sedação
     ou cirurgia, mesmo que a IA os omita (a regra 'só o que falta' pode deixá-los de fora)."""
-    if not d.get("retorno_ctx"):
-        return exames
     base = _norm(f"{d.get('suspeita_diagnostica') or ''} {d.get('parecer_copiloto') or ''} {d.get('queixa_principal') or ''}")
     if not (_suspeita_shunt(d) or re.search(r"hepat", base)):
         return exames
@@ -2104,8 +2102,8 @@ def sugerir_exames(
 
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
-    exames_ia = _garantir_pre_anestesia_retorno(exames_ia, d)
     exames_ia, ja_realizados = _remover_exames_ja_realizados(exames_ia, d)
+    exames_ia = _garantir_pre_anestesia_retorno(exames_ia, d)
     aviso = "Sugestão gerada por IA. O veterinário decide quais exames solicitar."
     if ja_realizados:
         aviso = ("Retorno com laudo anexado: não foram sugeridos de novo os exames já pedidos antes (" + "; ".join(ja_realizados)
