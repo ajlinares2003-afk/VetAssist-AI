@@ -473,6 +473,119 @@ def _roedor_ou_lagomorfo(*descricoes) -> bool:
     return any(p.startswith(RADICAIS_LAGOMORFO_ROEDOR) for p in palavras)
 
 
+# --------------------------------------------------------------------------- #
+# Contexto de RETORNO: o que já foi pedido/feito antes (para a IA não repetir exames)
+# --------------------------------------------------------------------------- #
+JANELA_RETORNO_DIAS = 45
+
+_TAGS_EXAME = (
+    ("hemograma", ("hemograma", "eritrograma", "leucograma")),
+    ("bioquimica", ("bioquim", "perfil renal", "perfil hepatic", "alt ", "creatinina", "ureia", "fosfatase", "albumina")),
+    ("amonia", ("amonia",)),
+    ("acidos_biliares", ("acidos biliares", "acido biliar", "bile acid")),
+    ("urinalise", ("urinalise", "urinalalise", "urina tipo", "eas ", "exame de urina", "urina rotina")),
+    ("coagulograma", ("coagul", "ttpa", "aptt", "protrombina")),
+    ("usg_abdominal", ("ultrassonografia abdominal", "ultrassom abdominal", "usg abdominal", "ultrassonografia com doppler",
+                       "ultrassonografia abdominal com doppler", "doppler")),
+    ("rx_abdominal", ("radiografia abdominal", "raio x abdominal", "rx abdominal")),
+    ("glicemia", ("glicemia", "glicose")),
+)
+
+
+def _chave_exame(nome: str) -> str:
+    """Etiqueta canônica do exame (nomes diferentes do mesmo exame -> mesma chave)."""
+    n = f" {_norm(nome)} "
+    for tag, termos in _TAGS_EXAME:
+        if any(t in n for t in termos):
+            return tag
+    return n.strip()
+
+
+def _ultimo_pedido_de_exames(db: Session, consulta_id: int) -> Optional[dict]:
+    """Último lote de exames solicitado na consulta (o lote mais recente substitui os anteriores)."""
+    rows = db.execute(text(
+        "select nome_exame, data_solicitacao from public.solicitacao_exame where consulta_id = :c "
+        "  and lote is not distinct from (select lote from public.solicitacao_exame where consulta_id = :c "
+        "                                  order by data_solicitacao desc, id desc limit 1) "
+        "order by id"), {"c": consulta_id}).mappings().all()
+    if not rows:
+        return None
+    return {"data": str(rows[0]["data_solicitacao"])[:10], "exames": [r["nome_exame"] for r in rows if r["nome_exame"]]}
+
+
+def _contexto_retorno(db: Session, consulta_id: Optional[int], animal_id: Optional[int]) -> Optional[dict]:
+    """Retorno/reavaliação: já houve pedido de exames neste atendimento OU atendimento anterior do mesmo animal
+    (até JANELA_RETORNO_DIAS dias). Nunca interrompe o fluxo: em qualquer falha devolve None."""
+    if not consulta_id:
+        return None
+    try:
+        proprio = _ultimo_pedido_de_exames(db, consulta_id)
+        anterior = None
+        if animal_id:
+            ant = db.execute(text(
+                "select c.id, c.codigo, c.data_consulta, c.queixa_principal, c.suspeita_diagnostica "
+                "from public.consulta c where c.animal_id = :a and c.id < :id "
+                "  and c.data_consulta >= now() - make_interval(days => :d) order by c.id desc limit 1"),
+                {"a": animal_id, "id": consulta_id, "d": JANELA_RETORNO_DIAS}).mappings().first()
+            if ant:
+                anterior = {"codigo": ant["codigo"], "data": str(ant["data_consulta"])[:10],
+                            "queixa": _cortar_texto(str(ant["queixa_principal"] or ""), 300),
+                            "suspeita": _cortar_texto(str(ant["suspeita_diagnostica"] or ""), 200),
+                            "pedido": _ultimo_pedido_de_exames(db, ant["id"])}
+        if not proprio and not anterior:
+            return None
+        return {"proprio": proprio, "anterior": anterior}
+    except Exception as exc:   # noqa: BLE001
+        logger.warning("contexto de retorno indisponível: %s", exc)
+        try:
+            db.rollback()
+        except Exception:   # noqa: BLE001
+            pass
+        return None
+
+
+def _exames_ja_pedidos(d: dict) -> list:
+    """Nomes dos exames do último pedido (do atendimento; senão, do atendimento anterior)."""
+    r = d.get("retorno_ctx") or {}
+    if r.get("proprio") and r["proprio"].get("exames"):
+        return list(r["proprio"]["exames"])
+    ant = r.get("anterior") or {}
+    return list((ant.get("pedido") or {}).get("exames") or [])
+
+
+def _texto_retorno(d: dict) -> str:
+    r = d.get("retorno_ctx")
+    if not r:
+        return ""
+    linhas = ["- RETORNO / REAVALIAÇÃO: este paciente já tem exames solicitados antes."]
+    if r.get("proprio"):
+        linhas.append(f"  Neste atendimento, último pedido em {r['proprio']['data']}: " + "; ".join(r["proprio"]["exames"]))
+    ant = r.get("anterior")
+    if ant:
+        linhas.append(f"  Atendimento anterior {ant.get('codigo') or ''} em {ant['data']} (queixa: {ant.get('queixa') or '-'}; "
+                      f"suspeita: {ant.get('suspeita') or '-'})")
+        if ant.get("pedido"):
+            linhas.append("  Exames pedidos nele: " + "; ".join(ant["pedido"]["exames"]))
+    if d.get("exames_anexados"):
+        linhas.append("  Há laudos anexados agora: os exames pedidos antes já foram REALIZADOS e seus resultados estão no parecer.")
+    return "\n".join(linhas) + "\n"
+
+
+def _remover_exames_ja_realizados(exames: list, d: dict) -> tuple:
+    """Com laudo anexado em um retorno, tira da sugestão os exames do último pedido (mesma etiqueta canônica).
+    Devolve (lista filtrada, nomes retirados). Sem anexo ou sem pedido anterior, não mexe em nada."""
+    if not d.get("exames_anexados"):
+        return exames, []
+    feitos = {_chave_exame(n) for n in _exames_ja_pedidos(d)}
+    if not feitos:
+        return exames, []
+    ficam, tirados = [], []
+    for e in exames:
+        (tirados if _chave_exame(e["nome"]) in feitos else ficam).append(e)
+    return ficam, [e["nome"] for e in tirados]
+
+
+
 def _carregar_contexto(db: Session, ctx: ContextoClinico) -> dict:
     """Junta o que veio da tela com o cadastro do animal (o cadastro manda na espécie/raça)."""
     dados = ctx.model_dump()
@@ -495,6 +608,7 @@ def _carregar_contexto(db: Session, ctx: ContextoClinico) -> dict:
     dados["grupo"] = _grupo_animal(
         dados.get("especie"), dados.get("sub_especie"), dados.get("raca"), dados.get("nome_cientifico")
     )
+    dados["retorno_ctx"] = _contexto_retorno(db, ctx.consulta_id, ctx.animal_id)
     return dados
 
 
@@ -524,6 +638,7 @@ def _texto_do_caso(d: dict) -> str:
         f"- Exame físico: {d.get('exame_fisico') or '-'}\n"
         f"- Sinais vitais: {vitais}\n"
         f"- Exames já anexados: {d.get('exames_anexados') or 'nenhum'}\n"
+        f"{_texto_retorno(d)}"
         f"- Suspeita diagnóstica: {d.get('suspeita_diagnostica') or '-'}\n"
         f"- Parecer do Copiloto Clínico:\n{d.get('parecer_copiloto') or '-'}"
     )
@@ -1342,6 +1457,10 @@ def sugerir_receita(
         receita["alertas"] = [a for a in receita["alertas"]
                               if not re.search(r"(?i)luvas|isol|avalia[çc][ãa]o m[ée]dica humana|atendimento m[ée]dico|itraconazol|notifica", a)]
         receita["alertas"] = (fixos + receita["alertas"])[:15]
+    if _suspeita_shunt(d):
+        receita["alertas"] = [a for a in receita["alertas"]
+                              if not re.search(r"(?i)(lipidose|fluidoterapia|ringer|diazepam|benzodiazep)", a)]
+        receita["alertas"] = (_ALERTAS_SHUNT + receita["alertas"])[:15]
     if _suspeita_lipidose(d):
         # a IA costuma escrever que a nutrição "será definida após a confirmação diagnóstica": troca pelo aviso fixo
         receita["alertas"] = [a for a in receita["alertas"]
@@ -1689,8 +1808,22 @@ def _garantir_exame_da_suspeita(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+def _suspeita_shunt(d: dict) -> bool:
+    """Shunt portossistêmico / encefalopatia hepática no caso (suspeita, parecer ou queixa)."""
+    return bool(re.search(r"portossistem|shunt|encefalopatia hepatica|desvio portossist", _norm(_texto_do_caso(d))))
+
+
 def _suspeita_lipidose(d: dict) -> bool:
-    return bool(re.search(r"lipidose", _norm(_texto_do_caso(d))))
+    # o alerta de lipidose só vale se o quadro NÃO for de shunt/encefalopatia (o parecer pode citar lipidose só como diferencial)
+    return bool(re.search(r"lipidose", _norm(_texto_do_caso(d)))) and not _suspeita_shunt(d)
+
+
+_ALERTAS_SHUNT = [
+    "Shunt portossistêmico / encefalopatia hepática suspeita: evite benzodiazepínicos (ex.: diazepam) e outros fármacos de "
+    "metabolização hepática sem avaliação do veterinário; a sedação e a anestesia exigem planejamento.",
+    "Fluidoterapia na insuficiência hepática: prefira NaCl 0,9% ou Plasma-Lyte; o lactato do Ringer exige cautela. "
+    "Monitore a glicemia (risco de hipoglicemia) e os eletrólitos.",
+]
 
 
 _ALERTAS_LIPIDOSE = [
@@ -1925,6 +2058,9 @@ def sugerir_exames(
         "1.1 ESPECIFICIDADE: cada exame deve ter alvo claro no próprio nome (ex.: \"PCR para Leptospira spp.\", \"RSAT para Brucella canis\"; nunca \"RSAT\" sozinho nem \"PCR para patógenos comuns\"). É proibido pedir painéis genéricos ou exames de baixo rendimento para a suspeita (ex.: perfil hormonal sem suspeita endócrina). Não peça exame de confirmação cuja única função seja repetir outro já pedido; exame de segunda linha (ex.: PCR após cultura negativa) só se a justificativa disser quando solicitá-lo.\n"
         "2. Não repita exames que já constam como anexados, a menos que precisem ser repetidos "
         "(explique na justificativa).\n"
+        "2.1 RETORNO: se o caso traz RETORNO / REAVALIAÇÃO com laudos anexados, os exames já pedidos foram REALIZADOS e o parecer descreve os resultados: NUNCA os peça de novo, mesmo com outro nome. "
+        "Peça somente o que ainda falta e muda a conduta (ex.: coagulograma e glicemia antes de qualquer cirurgia ou sedação em hepatopata; "
+        "exame de controle quando o parecer o indicar). Se nada falta, devolva a lista vazia.\n"
         "3. MEDICINA VETERINÁRIA (NÃO HUMANA): Respeite a fisiologia da espécie. É expressamente proibido pedir exames "
         "próprios da medicina humana (ex.: teste de intolerância à lactose em gato adulto; nessa situação o diagnóstico é clínico). "
         "Adeque os exames à espécie.\n"
@@ -1948,6 +2084,17 @@ def sugerir_exames(
 
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
+    exames_ia, ja_realizados = _remover_exames_ja_realizados(exames_ia, d)
+    aviso = "Sugestão gerada por IA. O veterinário decide quais exames solicitar."
+    if ja_realizados:
+        aviso = ("Retorno com laudo anexado: não foram sugeridos de novo os exames já pedidos antes (" + "; ".join(ja_realizados)
+                 + "). Se algum não foi realizado, adicione-o manualmente. " + aviso)
+    elif d.get("retorno_ctx") and not exames_ia:
+        aviso = "Retorno: nenhum exame adicional sugerido. " + aviso
+    if ja_realizados:
+        resposta_exames = exames_ia   # sem os 'garantidos': eles poderiam reinserir o exame já feito
+        return {"exames": resposta_exames, "ja_realizados": ja_realizados, "provedor": resp.provedor,
+                "modelo": resp.modelo, "aviso": aviso}
     return {
         "exames": _garantir_exames_cardiacos(_garantir_urinalise_checkup(_garantir_coagulograma_hepatico(_ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
             _garantir_triagem_brucella(exames_ia, d), d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
@@ -1957,7 +2104,7 @@ def sugerir_exames(
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
         "provedor": resp.provedor,
         "modelo": resp.modelo,
-        "aviso": "Sugestão gerada por IA. O veterinário decide quais exames solicitar.",
+        "aviso": aviso,
     }
 
 

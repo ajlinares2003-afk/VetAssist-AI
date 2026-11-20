@@ -102,7 +102,7 @@ def contextos_clinicos(
     linhas = db.execute(text("""
         SELECT c.id AS consulta_id, c.codigo AS consulta_codigo, c.status, c.data_consulta,
                c.queixa_principal, c.historico_clinico, c.exame_fisico,
-               c.indicacao_cirurgia, c.justificativa_cirurgica,
+               c.indicacao_cirurgia, c.justificativa_cirurgica, c.suspeita_diagnostica,
                c.temperatura, c.frequencia_cardiaca, c.frequencia_respiratoria,
                COALESCE(c.peso_atendimento, a.peso) AS peso,
                a.id AS animal_id, a.nome AS animal_nome, a.codigo AS animal_codigo,
