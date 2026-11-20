@@ -90,6 +90,63 @@ def criar_cirurgia(
     return nova_cirurgia
 
 
+# --- CONTEXTO CLINICO (paciente + atendimento) PARA A FILA E OS PROCEDIMENTOS ---
+
+@router.get("/contextos")
+def contextos_clinicos(
+    db: Session = Depends(get_db),
+    usuario_logado: str = Depends(obter_usuario_logado)
+):
+    """Atendimentos com indicacao cirurgica ou com procedimento aberto, ja com paciente, tutor,
+    queixa/anamnese, exame fisico e sinais vitais (para a fila cirurgica e a ficha anestesica)."""
+    linhas = db.execute(text("""
+        SELECT c.id AS consulta_id, c.codigo AS consulta_codigo, c.status, c.data_consulta,
+               c.queixa_principal, c.historico_clinico, c.exame_fisico,
+               c.indicacao_cirurgia, c.justificativa_cirurgica,
+               c.temperatura, c.frequencia_cardiaca, c.frequencia_respiratoria,
+               COALESCE(c.peso_atendimento, a.peso) AS peso,
+               a.id AS animal_id, a.nome AS animal_nome, a.codigo AS animal_codigo,
+               a.especie, a.raca, a.sexo, a.idade,
+               t.nome AS tutor_nome
+        FROM consulta c
+        JOIN animal a ON a.id = c.animal_id
+        LEFT JOIN tutor t ON t.id = a.tutor_id
+        WHERE c.indicacao_cirurgia = true
+           OR c.id IN (SELECT consulta_id FROM procedimentos_cirurgicos)
+        ORDER BY c.data_consulta DESC
+        LIMIT 300
+    """)).mappings().all()
+    saida = []
+    for l in linhas:
+        d = dict(l)
+        d["data_consulta"] = d["data_consulta"].isoformat() if d["data_consulta"] else None
+        for k in ("peso", "idade", "temperatura"):
+            d[k] = float(d[k]) if d.get(k) is not None else None
+        saida.append(d)
+    return saida
+
+
+@router.post("/dispensar-indicacao/{consulta_id}")
+def dispensar_indicacao(
+    consulta_id: int,
+    usuario_logado = Depends(exigir_perfil(["ADMIN", "VETERINARIO"])),
+    db: Session = Depends(get_db)
+):
+    """Remove o paciente da fila cirurgica (a indicacao foi descartada pelo veterinario).
+    Nao altera o status do atendimento, a nao ser que ele esteja 'Aguardando Cirurgia'."""
+    consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
+    if not consulta:
+        raise HTTPException(status_code=404, detail="Atendimento não encontrado.")
+    ja_tem = db.execute(text("SELECT 1 FROM procedimentos_cirurgicos WHERE consulta_id = :c LIMIT 1"), {"c": consulta_id}).first()
+    if ja_tem:
+        raise HTTPException(status_code=400, detail="Este atendimento já tem procedimento cirúrgico aberto.")
+    consulta.indicacao_cirurgia = False
+    if consulta.status == "Aguardando Cirurgia":
+        consulta.status = "Em Atendimento"
+    db.commit()
+    return {"mensagem": "Indicação cirúrgica dispensada."}
+
+
 # --- BIBLIOTECA DE FARMACOS ANESTESICOS (calculo de dose por peso) ---
 
 CAMPOS_FARMACO = (
