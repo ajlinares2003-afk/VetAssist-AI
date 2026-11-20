@@ -200,6 +200,7 @@ def _internacao_recomendada(dados_caso: str, suspeita: str, parecer: str, especi
     """Sugere internação (o veterinário decide) a partir do que foi registrado no atendimento: sinais de instabilidade,
     intoxicação sintomática, etc. Devolve {nivel, motivo} ou None."""
     base = _sem_acento_local(f"{dados_caso} {suspeita}")
+    base = re.sub(r"convuls\w*\s+(?:leves?|discretas?|isoladas?|unica)", " ", base)   # convulsão leve/isolada não é crise crítica
     nivel = None
     # gato que ingeriu analgésico/anti-inflamatório humano: alerta máximo (paracetamol → metemoglobinemia, hemólise, necrose hepática)
     gato = bool(re.search(r"gat|felin", _sem_acento_local(especie)))
@@ -480,6 +481,7 @@ def sugestoes_copiloto_multimodal(
     mucosas: Optional[str] = Form(None),
     ecc: Optional[str] = Form(None),
     solicitar_exames_preventivos: Optional[str] = Form("false"),
+    consulta_id: Optional[int] = Form(None),
     files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     usuario_logado = Depends(obter_usuario_logado)
@@ -487,6 +489,9 @@ def sugestoes_copiloto_multimodal(
     try:
         # Busca a espécie real do banco, sobrepondo o que vem do formulário
         animal_db = db.query(Animal).filter(Animal.id == animal_id).first() if animal_id else None
+        # paciente já internado: não recomendar internação de novo (o acompanhamento é na tela de Internação)
+        consulta_atual = db.query(Consulta).filter(Consulta.id == consulta_id).first() if consulta_id else None
+        ja_internado = bool(consulta_atual and str(consulta_atual.status or "").startswith("Em Internação"))
         especie_real = (animal_db.especie if animal_db and animal_db.especie else especie) or "Não informada"
 
         nomes_arquivos_originais = []
@@ -743,7 +748,12 @@ def sugestoes_copiloto_multimodal(
             sugestoes_extraidas, str(especie_real or ""), " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)),
             suspeita_extraida)
         _dados_caso_int = " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico))
-        indicacao_internacao = None if doenca_oficial else _internacao_recomendada(_dados_caso_int, suspeita_extraida, sugestoes_extraidas, str(especie_real or ""))
+        indicacao_internacao = None if (doenca_oficial or ja_internado) else _internacao_recomendada(_dados_caso_int, suspeita_extraida, sugestoes_extraidas, str(especie_real or ""))
+        if ja_internado:
+            # o parecer não pode voltar a sugerir internação: o paciente já está internado
+            sugestoes_extraidas = re.sub(r"(?im)^[^\n]*interna[çc][ãa]o recomendada[^\n]*\n?", "", sugestoes_extraidas)
+            sugestoes_extraidas = sugestoes_extraidas.rstrip() + (
+                "\n- Paciente já internado: a evolução e as condutas de internação são registradas na tela de Internação.")
         if indicacao_internacao and not re.search(r"(?i)interna[çc][ãa]o", sugestoes_extraidas):
             sugestoes_extraidas = sugestoes_extraidas.rstrip() + (
                 "\n- Internação recomendada (nível " + indicacao_internacao["nivel"].lower() + "): monitoramento e suporte "
