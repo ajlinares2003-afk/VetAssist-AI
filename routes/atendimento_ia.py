@@ -1470,7 +1470,7 @@ def sugerir_receita(
             meds_ia = []
             resp.dados["medicamentos"] = meds_ia
         if not any("lactulos" in _norm(str(m.get("nome") or "")) for m in meds_ia if isinstance(m, dict)):
-            meds_ia.append({"nome": "Lactulose", "apresentacao": "Lactulose xarope 667 mg/mL",
+            meds_ia.append({"nome": "Lactulose", "apresentacao": "xarope 667 mg/mL",
                             "concentracao_valor": 667, "concentracao_unidade": "mg/mL", "via": "oral",
                             "dose_mg_kg": None, "frequencia_horas": 8, "duracao_dias": 30,
                             "disponibilidade": "USO_HUMANO", "posologia_texto": "",
