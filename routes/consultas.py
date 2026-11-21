@@ -175,6 +175,18 @@ def _incluir_urinalise_no_parecer(texto: str, checkup: bool, especie: str, idade
     return "\n".join(linhas)
 
 
+def _incluir_angio_shunt(texto: str, dados_caso: str, suspeita: str = "") -> str:
+    """Shunt/desvio portossistêmico: a angiotomografia é o exame de planejamento vascular. Entra na conduta
+    futura (após estabilização), sem indicar cirurgia, quando a IA não a mencionou."""
+    tn = _sem_acento_local(f"{dados_caso} {suspeita} {texto}")
+    if not re.search(r"portossistem|shunt|encefalopatia hepat", tn):
+        return texto
+    if re.search(r"angiotomograf|tomografia", tn):
+        return texto
+    return texto.rstrip() + ("\n- Planejamento vascular (após estabilização clínica, se o cirurgião ou anestesista julgar necessário): "
+                            "angiotomografia abdominal com contraste para mapear o desvio portossistêmico.")
+
+
 def _incluir_conduta_dermato(texto: str, especie: str, dados_caso: str, suspeita: str = "") -> str:
     """Cão estável com dermatopatia pruriginosa: o parecer registra a conduta inicial (não espera os exames rápidos)."""
     if not texto or not re.search(r"c[ãa]o|cachorro|canin", (especie or "").lower()):
@@ -747,6 +759,8 @@ def sugestoes_copiloto_multimodal(
         sugestoes_extraidas = _incluir_conduta_dermato(
             sugestoes_extraidas, str(especie_real or ""), " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)),
             suspeita_extraida)
+        sugestoes_extraidas = _incluir_angio_shunt(
+            sugestoes_extraidas, " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico)), suspeita_extraida)
         _dados_caso_int = " ".join(str(x or "") for x in (queixa_principal, sintomas, exame_fisico))
         indicacao_internacao = None if (doenca_oficial or ja_internado) else _internacao_recomendada(_dados_caso_int, suspeita_extraida, sugestoes_extraidas, str(especie_real or ""))
         if ja_internado:
