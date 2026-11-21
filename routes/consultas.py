@@ -1044,7 +1044,17 @@ def buscar_consulta(
     consulta = db.query(Consulta).filter(Consulta.id == consulta_id).first()
     if not consulta:
         raise HTTPException(status_code=404, detail="Consulta não encontrada.")
+    consulta.parecer_copiloto_em = _parecer_em(db, consulta_id)
     return consulta
+
+def _parecer_em(db: Session, consulta_id: int):
+    """Data/hora em que o parecer atual foi gerado e salvo no atendimento (ISO 8601, com fuso)."""
+    try:
+        r = db.execute(text("select parecer_copiloto_em from public.consulta where id = :id"), {"id": consulta_id}).first()
+        return r[0].isoformat() if r and r[0] else None
+    except Exception:   # noqa: BLE001
+        db.rollback()
+        return None
 
 @router.put("/{consulta_id}")
 def atualizar_consulta(
@@ -1064,6 +1074,9 @@ def atualizar_consulta(
 
     dados = consulta.model_dump(exclude_unset=True)
     nao_aceitam_vazio = {"animal_id", "usuario_id", "codigo", "status", "queixa_principal", "parecer_copiloto"}
+    # parecer novo (texto diferente do gravado): marca a data/hora de criação
+    parecer_novo = dados.get("parecer_copiloto")
+    parecer_mudou = bool(parecer_novo) and parecer_novo != (consulta_db.parecer_copiloto or "")
 
     for campo, valor in dados.items():
         if campo in nao_aceitam_vazio and not valor:
@@ -1072,7 +1085,14 @@ def atualizar_consulta(
             setattr(consulta_db, campo, valor)
 
     db.commit()
+    if parecer_mudou:
+        try:
+            db.execute(text("update public.consulta set parecer_copiloto_em = now() where id = :id"), {"id": consulta_id})
+            db.commit()
+        except Exception:   # noqa: BLE001
+            db.rollback()
     db.refresh(consulta_db)
+    consulta_db.parecer_copiloto_em = _parecer_em(db, consulta_id)
     return consulta_db
 
 @router.delete("/{consulta_id}")

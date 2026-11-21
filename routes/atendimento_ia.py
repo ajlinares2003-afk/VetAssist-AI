@@ -572,8 +572,8 @@ def _texto_retorno(d: dict) -> str:
 
 
 _RESULTADO_NO_PARECER = {
-    "coagulograma": r"coagul|ttpa|aptt|protrombina|\btp\b",
-    "coagulacao": r"coagul|ttpa|aptt|protrombina|\btp\b",
+    "coagulograma": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
+    "coagulacao": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
     "glicemia": r"glicemia|glicose",
 }
 
