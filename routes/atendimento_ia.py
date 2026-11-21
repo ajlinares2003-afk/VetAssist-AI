@@ -1441,6 +1441,17 @@ def sugerir_receita(
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 
+    # Shunt/encefalopatia hepática citados com lactulose no parecer: a lactulose é a base da conduta.
+    # Se a IA não a trouxe (a resposta de reserva costuma vir vazia), ela é incluída aqui, com a dose em mL/kg.
+    if _suspeita_shunt(d) and re.search(r"lactulos", _norm(d.get("parecer_copiloto") or "")):
+        meds_ia = resp.dados.get("medicamentos") if isinstance(resp.dados, dict) else None
+        if isinstance(meds_ia, list) and not any("lactulos" in _norm(str(m.get("nome") or "")) for m in meds_ia if isinstance(m, dict)):
+            meds_ia.append({"nome": "Lactulose", "apresentacao": "Lactulose xarope 667 mg/mL",
+                            "concentracao_valor": 667, "concentracao_unidade": "mg/mL", "via": "oral",
+                            "dose_mg_kg": None, "frequencia_horas": 8, "duracao_dias": 30,
+                            "disponibilidade": "USO_HUMANO", "posologia_texto": "",
+                            "observacao": "Redução da absorção de amônia e acidificação do meio colônico.",
+                            "recomendacoes": "", "lista_controle": None, "controlado": False})
     receita = _montar_receita(
         resp.dados, d.get("peso"), d["grupo"],
         sensivel_oral=_roedor_ou_lagomorfo(d.get("especie"), d.get("sub_especie"), d.get("raca"),
