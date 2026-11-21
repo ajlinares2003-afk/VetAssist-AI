@@ -631,6 +631,16 @@ def _carregar_contexto(db: Session, ctx: ContextoClinico) -> dict:
     dados["grupo"] = _grupo_animal(
         dados.get("especie"), dados.get("sub_especie"), dados.get("raca"), dados.get("nome_cientifico")
     )
+    if not dados.get("exames_anexados") and ctx.consulta_id:
+        try:
+            nomes_lau = [r[0] for r in db.execute(text("select nome_original from public.consulta_anexo "
+                                                       "where consulta_id = :c order by id"),
+                                                  {"c": ctx.consulta_id}).all() if r[0]]
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            nomes_lau = []
+        if nomes_lau:
+            dados["exames_anexados"] = ", ".join(nomes_lau)
     dados["retorno_ctx"] = _contexto_retorno(db, ctx.consulta_id, ctx.animal_id)
     return dados
 

@@ -589,6 +589,19 @@ def sugestoes_copiloto_multimodal(
                               anexo["original"]))
             nomes_ia.append(anexo["original"])
 
+        # Sem arquivo novo nesta análise: usa os laudos já guardados no atendimento.
+        if not anexos_salvos and consulta_id:
+            for lau in db.execute(text("select nome_original, tipo_mime, conteudo from public.consulta_anexo "
+                                       "where consulta_id = :c order by id"), {"c": consulta_id}).mappings().all():
+                dados_l = bytes(lau["conteudo"])
+                nome_l = lau["nome_original"] or "laudo"
+                if len(anexos_ia) >= MAX_ANEXOS_IA or total_bytes + len(dados_l) > MAX_BYTES_ANEXOS_IA:
+                    nomes_fora.append(nome_l)
+                    continue
+                total_bytes += len(dados_l)
+                anexos_ia.append((dados_l, lau["tipo_mime"] or "application/octet-stream", nome_l))
+                nomes_ia.append(nome_l)
+
         # A conduta oficial (notificar, só testes oficiais, sem tratamento) é decidida em Python.
         # Aqui a IA só NOMEIA a doença; regras de conduta no prompt fazem a IA aplicá-las a doenças
         # que não são oficiais (e a citar doenças de outra espécie).
