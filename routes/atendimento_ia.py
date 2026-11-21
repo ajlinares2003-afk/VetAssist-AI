@@ -48,7 +48,7 @@ PERFIS_CLINICOS = ["ADMIN", "VETERINARIO"]
 # Tabelas de apoio
 # --------------------------------------------------------------------------- #
 TIPO_USO_ROTULO = {
-    "HUMANO": "Uso Humano (Farmácia / Drogaria)",
+    "HUMANO": "Venda em Farmácia ou Drogaria",
     "VETERINARIO": "Uso Veterinário (Pet Shop / Agropecuária)",
     "CLINICA": "Uso Clínico (aplicação na clínica)",
     "A_CONFIRMAR": "Disponibilidade a confirmar",
