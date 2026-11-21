@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import hashlib
 import uuid
 import logging
 from pathlib import Path
@@ -476,6 +477,57 @@ def upload_anexo_exame(
         logger.error(f"Erro ao salvar anexo: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno ao salvar o arquivo.")
 
+def _salvar_laudos_no_banco(db: Session, consulta_id: int, anexos_salvos: list) -> None:
+    """Guarda os laudos enviados no próprio banco, ligados ao atendimento (o disco do servidor não é permanente).
+    Não duplica: o mesmo arquivo (mesmo SHA-256) não entra duas vezes no mesmo atendimento."""
+    try:
+        for anexo in anexos_salvos:
+            dados = (UPLOADS_DIR / anexo["salvo"]).read_bytes()
+            digest = hashlib.sha256(dados).hexdigest()
+            ja = db.execute(text("select 1 from public.consulta_anexo where consulta_id = :c and sha256 = :h limit 1"),
+                            {"c": consulta_id, "h": digest}).first()
+            if ja:
+                continue
+            db.execute(text("insert into public.consulta_anexo (consulta_id, nome_original, tipo_mime, tamanho_bytes, sha256, conteudo) "
+                            "values (:c, :n, :t, :s, :h, :d)"),
+                       {"c": consulta_id, "n": anexo["original"],
+                        "t": MIME_POR_EXTENSAO.get(Path(anexo["salvo"]).suffix.lower(), "application/octet-stream"),
+                        "s": len(dados), "h": digest, "d": dados})
+        db.commit()
+    except Exception as exc:   # noqa: BLE001
+        logger.warning("não foi possível guardar os laudos no banco: %s", exc)
+        db.rollback()
+
+
+@router.get("/{consulta_id}/anexos")
+def listar_laudos_consulta(
+    consulta_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    rows = db.execute(text("select id, nome_original, tipo_mime, tamanho_bytes, criado_em from public.consulta_anexo "
+                           "where consulta_id = :c order by id"), {"c": consulta_id}).mappings().all()
+    return [{"id": r["id"], "nome_original": r["nome_original"], "tipo_mime": r["tipo_mime"],
+             "tamanho_bytes": r["tamanho_bytes"], "criado_em": r["criado_em"].isoformat() if r["criado_em"] else None}
+            for r in rows]
+
+
+@router.get("/anexos/{anexo_id}/download")
+def baixar_laudo_consulta(
+    anexo_id: int,
+    db: Session = Depends(get_db),
+    usuario_logado = Depends(obter_usuario_logado)
+):
+    from fastapi.responses import Response
+    r = db.execute(text("select nome_original, tipo_mime, conteudo from public.consulta_anexo where id = :i"),
+                   {"i": anexo_id}).mappings().first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Laudo não encontrado.")
+    nome = str(r["nome_original"] or "laudo").replace('"', "")
+    return Response(content=bytes(r["conteudo"]), media_type=r["tipo_mime"] or "application/octet-stream",
+                    headers={"Content-Disposition": f'inline; filename="{nome}"'})
+
+
 @router.post("/sugestoes-copiloto-multimodal")
 def sugestoes_copiloto_multimodal(
     queixa_principal: str = Form(...),
@@ -513,6 +565,9 @@ def sugestoes_copiloto_multimodal(
                 novo_nome, _ = salvar_anexo(file)
                 nomes_arquivos_originais.append(file.filename)
                 anexos_salvos.append({"original": file.filename, "salvo": novo_nome})
+
+        if consulta_id and anexos_salvos:
+            _salvar_laudos_no_banco(db, consulta_id, anexos_salvos)
 
         texto_anexos = ", ".join(nomes_arquivos_originais) if nomes_arquivos_originais else "Nenhum"
 
