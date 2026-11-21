@@ -503,15 +503,15 @@ def _chave_exame(nome: str) -> str:
 
 
 def _ultimo_pedido_de_exames(db: Session, consulta_id: int) -> Optional[dict]:
-    """Último lote de exames solicitado na consulta (o lote mais recente substitui os anteriores)."""
+    """Exames já solicitados neste atendimento, somando todos os lotes: o que já foi pedido não é pedido de novo.
+    (Quando o exame não tem resultado no parecer, ele continua pendente: ver _feitos_no_retorno.)"""
     rows = db.execute(text(
-        "select nome_exame, data_solicitacao from public.solicitacao_exame where consulta_id = :c "
-        "  and lote is not distinct from (select lote from public.solicitacao_exame where consulta_id = :c "
-        "                                  order by data_solicitacao desc, id desc limit 1) "
-        "order by id"), {"c": consulta_id}).mappings().all()
+        "select nome_exame, data_solicitacao from public.solicitacao_exame where consulta_id = :c order by id"),
+        {"c": consulta_id}).mappings().all()
     if not rows:
         return None
-    return {"data": str(rows[0]["data_solicitacao"])[:10], "exames": [r["nome_exame"] for r in rows if r["nome_exame"]]}
+    nomes = list(dict.fromkeys(r["nome_exame"] for r in rows if r["nome_exame"]))
+    return {"data": str(rows[-1]["data_solicitacao"])[:10], "exames": nomes}
 
 
 def _contexto_retorno(db: Session, consulta_id: Optional[int], animal_id: Optional[int]) -> Optional[dict]:
@@ -573,7 +573,7 @@ def _texto_retorno(d: dict) -> str:
 
 
 _RESULTADO_NO_PARECER = {
-    "angiotomografia": r"angiotomograf[^.;]{0,80}\b(achad|observ|evidenc|mostr|revel|demonstr)",
+    "angiotomografia": r"angiotomograf[^.;]{0,120}\b(achad|observ|evidenc|mostr|revel|demonstr|compativ|sugestiv|descrev|relat)",
     "coagulograma": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
     "coagulacao": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
     "glicemia": r"glicemia|glicose",
