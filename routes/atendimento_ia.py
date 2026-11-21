@@ -479,6 +479,7 @@ def _roedor_ou_lagomorfo(*descricoes) -> bool:
 JANELA_RETORNO_DIAS = 45
 
 _TAGS_EXAME = (
+    ("angiotomografia", ("angiotomograf", "angio tomograf")),
     ("hemograma", ("hemograma", "eritrograma", "leucograma")),
     ("bioquimica", ("bioquim", "perfil renal", "perfil hepatic", "alt ", "creatinina", "ureia", "fosfatase", "albumina")),
     ("amonia", ("amonia",)),
@@ -572,6 +573,7 @@ def _texto_retorno(d: dict) -> str:
 
 
 _RESULTADO_NO_PARECER = {
+    "angiotomografia": r"angiotomograf[^.;]{0,80}\b(achad|observ|evidenc|mostr|revel|demonstr)",
     "coagulograma": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
     "coagulacao": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
     "glicemia": r"glicemia|glicose",
@@ -1473,7 +1475,7 @@ def sugerir_receita(
             meds_ia.append({"nome": "Lactulose", "apresentacao": "xarope 667 mg/mL",
                             "concentracao_valor": 667, "concentracao_unidade": "mg/mL", "via": "oral",
                             "dose_mg_kg": None, "frequencia_horas": 8, "duracao_dias": 30,
-                            "disponibilidade": "USO_HUMANO", "posologia_texto": "",
+                            "disponibilidade": "HUMANO", "posologia_texto": "",
                             "observacao": "Redução da absorção de amônia e acidificação do meio colônico.",
                             "recomendacoes": "", "lista_controle": None, "controlado": False})
     receita = _montar_receita(
@@ -1757,6 +1759,17 @@ def _garantir_parvovirose(exames: list, d: dict, limite: int) -> list:
         "justificativa": "Investiga parvovirose em filhote com vômito e apatia; o resultado rápido define isolamento e conduta.",
     })
     return exames
+
+
+def _garantir_angio_shunt(exames: list, d: dict) -> list:
+    """Shunt/desvio portossistêmico: a angiotomografia é o exame de planejamento vascular (após estabilização).
+    Entra na lista mesmo que a IA a omita; o veterinário remove com o X se não quiser."""
+    if not _suspeita_shunt(d):
+        return exames
+    if any(_chave_exame(e["nome"]) == "angiotomografia" for e in exames):
+        return exames
+    return exames + [{"nome": "Angiotomografia computadorizada de abdômen", "categoria": "IMAGEM", "prioridade": "ROTINA",
+                      "justificativa": "Mapeia a anatomia vascular e o trajeto do desvio portossistêmico para planejamento cirúrgico, após estabilização."}]
 
 
 def _garantir_pre_anestesia_retorno(exames: list, d: dict) -> list:
@@ -2152,6 +2165,7 @@ def sugerir_exames(
                  if not _sorologia_em_semen(e["nome"])]
     exames_ia, ja_realizados = _remover_exames_ja_realizados(exames_ia, d)
     exames_ia = _garantir_pre_anestesia_retorno(exames_ia, d)
+    exames_ia = _garantir_angio_shunt(exames_ia, d)
     aviso = "Sugestão gerada por IA. O veterinário decide quais exames solicitar."
     if ja_realizados:
         aviso = ("Retorno com laudo anexado: não foram sugeridos de novo os exames já pedidos antes (" + "; ".join(ja_realizados)
