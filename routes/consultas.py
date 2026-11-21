@@ -702,6 +702,10 @@ def sugestoes_copiloto_multimodal(
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome exato e direto, em português do Brasil e sem termos em inglês, de UMA única hipótese principal]\n"
+            f"FORMATAÇÃO DO PARECER (obrigatória): separe as seções com títulos em linha própria, terminados em dois pontos "
+            f"(ex.: Avaliação clínica e sinais vitais:; Diagnósticos diferenciais a investigar:; Conduta e exames complementares:; "
+            f"Achados nos anexos:). Em cada seção, escreva um item por linha, iniciado por hífen e espaço. "
+            f"Nunca escreva o parecer em um único bloco de texto.\n"
             f"SUGESTOES: [Análise clínica, conduta e exames pertinentes ao caso]"
             )
 
