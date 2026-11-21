@@ -574,8 +574,8 @@ def _texto_retorno(d: dict) -> str:
 
 _RESULTADO_NO_PARECER = {
     "angiotomografia": r"angiotomograf[^.;]{0,120}\b(achad|observ|evidenc|mostr|revel|demonstr|compativ|sugestiv|descrev|relat)",
-    "coagulograma": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
-    "coagulacao": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro)",
+    "coagulograma": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro|sem altera)",
+    "coagulacao": r"(coagulograma|coagulacao|protrombina|ttpa|aptt|\btp\b)[^.;]{0,80}\b(\d|prolongad|alterad|normal|reduzid|aumentad|encurtad|dentro|sem altera)",
     "glicemia": r"glicemia|glicose",
 }
 
@@ -1778,6 +1778,8 @@ def _garantir_angio_shunt(exames: list, d: dict) -> list:
         return exames
     if any(_chave_exame(e["nome"]) == "angiotomografia" for e in exames):
         return exames
+    if d.get("exames_anexados") and "angiotomografia" in _feitos_no_retorno(d):
+        return exames   # já pedida e com resultado no laudo anexado: não pede de novo
     return exames + [{"nome": "Angiotomografia computadorizada de abdômen", "categoria": "IMAGEM", "prioridade": "ROTINA",
                       "justificativa": "Mapeia a anatomia vascular e o trajeto do desvio portossistêmico para planejamento cirúrgico, após estabilização."}]
 
