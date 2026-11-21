@@ -349,7 +349,8 @@ def ha_indicacao_cirurgica(texto: str) -> bool:
     """Opinião explícita da IA (última linha do parecer) tem prioridade; senão, varredura por termos."""
     m = re.search(r"indica[çc][ãa]o cir[úu]rgica\s*:\s*(sim|n[ãa]o|a confirmar)", (texto or "").lower())
     if m:
-        return m.group(1) != "não" and m.group(1) != "nao"
+        # Só "SIM" ativa o status "Aguardando Cirurgia"; "A CONFIRMAR" fica como dúvida no parecer, sem mudar o status.
+        return m.group(1) == "sim"
     """True se o parecer indica cirurgia em pelo menos uma menção que não esteja negada."""
     t = (texto or "").lower()
     for termo in _TERMOS_CIRURGIA:
