@@ -1719,7 +1719,11 @@ def _garantir_pre_anestesia_retorno(exames: list, d: dict) -> list:
     """Retorno com suspeita de shunt/hepatopatia: coagulograma e glicemia fazem parte da avaliação antes de sedação
     ou cirurgia, mesmo que a IA os omita (a regra 'só o que falta' pode deixá-los de fora)."""
     base = _norm(f"{d.get('suspeita_diagnostica') or ''} {d.get('parecer_copiloto') or ''} {d.get('queixa_principal') or ''}")
-    if not (_suspeita_shunt(d) or re.search(r"hepat", base)):
+    decisao = _suspeita_shunt(d) or bool(re.search(r"hepat", base))
+    logger.info("guarda pre-anestesia: shunt=%s len_suspeita=%s len_parecer=%s len_queixa=%s n_exames=%s anexados=%s retorno=%s",
+                decisao, len(str(d.get('suspeita_diagnostica') or '')), len(str(d.get('parecer_copiloto') or '')),
+                len(str(d.get('queixa_principal') or '')), len(exames), bool(d.get('exames_anexados')), bool(d.get('retorno_ctx')))
+    if not decisao:
         return exames
     presentes = {_chave_exame(e["nome"]) for e in exames}
     feitos = {_chave_exame(n) for n in _exames_ja_pedidos(d)} if d.get("exames_anexados") else set()
