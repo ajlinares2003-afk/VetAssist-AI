@@ -571,12 +571,33 @@ def _texto_retorno(d: dict) -> str:
     return "\n".join(linhas) + "\n"
 
 
+_RESULTADO_NO_PARECER = {
+    "coagulograma": r"coagul|ttpa|aptt|protrombina|\btp\b",
+    "coagulacao": r"coagul|ttpa|aptt|protrombina|\btp\b",
+    "glicemia": r"glicemia|glicose",
+}
+
+
+def _feitos_no_retorno(d: dict) -> set:
+    """Exames do pedido anterior que o laudo anexado realmente cobre. Um exame só conta como feito se o
+    resultado aparece no parecer; pedido anterior sem resultado no parecer continua pendente."""
+    base = _norm(str(d.get("parecer_copiloto") or ""))
+    feitos = set()
+    for n in _exames_ja_pedidos(d):
+        k = _chave_exame(n)
+        padrao = _RESULTADO_NO_PARECER.get(k)
+        if padrao and not re.search(padrao, base):
+            continue
+        feitos.add(k)
+    return feitos
+
+
 def _remover_exames_ja_realizados(exames: list, d: dict) -> tuple:
     """Com laudo anexado em um retorno, tira da sugestão os exames do último pedido (mesma etiqueta canônica).
     Devolve (lista filtrada, nomes retirados). Sem anexo ou sem pedido anterior, não mexe em nada."""
     if not d.get("exames_anexados"):
         return exames, []
-    feitos = {_chave_exame(n) for n in _exames_ja_pedidos(d)}
+    feitos = _feitos_no_retorno(d)
     if not feitos:
         return exames, []
     ficam, tirados = [], []
@@ -1441,11 +1462,14 @@ def sugerir_receita(
     except IAIndisponivelError as exc:
         _erro_ia(exc)
 
-    # Shunt/encefalopatia hepática citados com lactulose no parecer: a lactulose é a base da conduta.
-    # Se a IA não a trouxe (a resposta de reserva costuma vir vazia), ela é incluída aqui, com a dose em mL/kg.
-    if _suspeita_shunt(d) and re.search(r"lactulos", _norm(d.get("parecer_copiloto") or "")):
-        meds_ia = resp.dados.get("medicamentos") if isinstance(resp.dados, dict) else None
-        if isinstance(meds_ia, list) and not any("lactulos" in _norm(str(m.get("nome") or "")) for m in meds_ia if isinstance(m, dict)):
+    # Shunt/encefalopatia hepática: a lactulose é a base da conduta. Se a IA não a trouxe (ela nem sempre cita
+    # no parecer), é incluída aqui, com a dose em mL/kg, para o veterinário conferir.
+    if _suspeita_shunt(d) and isinstance(resp.dados, dict):
+        meds_ia = resp.dados.get("medicamentos")
+        if not isinstance(meds_ia, list):
+            meds_ia = []
+            resp.dados["medicamentos"] = meds_ia
+        if not any("lactulos" in _norm(str(m.get("nome") or "")) for m in meds_ia if isinstance(m, dict)):
             meds_ia.append({"nome": "Lactulose", "apresentacao": "Lactulose xarope 667 mg/mL",
                             "concentracao_valor": 667, "concentracao_unidade": "mg/mL", "via": "oral",
                             "dose_mg_kg": None, "frequencia_horas": 8, "duracao_dias": 30,
@@ -1746,7 +1770,7 @@ def _garantir_pre_anestesia_retorno(exames: list, d: dict) -> list:
     if not decisao:
         return exames
     presentes = {_chave_exame(e["nome"]) for e in exames}
-    feitos = {_chave_exame(n) for n in _exames_ja_pedidos(d)} if d.get("exames_anexados") else set()
+    feitos = _feitos_no_retorno(d) if d.get("exames_anexados") else set()
     faltam = []
     if "coagulacao" not in presentes and "coagulograma" not in presentes and "coagulograma" not in feitos:
         faltam.append({"nome": "Coagulograma (TP e TTPA)", "categoria": "LABORATORIAL", "prioridade": "ROTINA",
