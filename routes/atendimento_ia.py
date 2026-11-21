@@ -1133,11 +1133,15 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
                 )
         if "lactulose" in nome_n:
             # Lactulose é xarope medido em mL/kg (não em mg/kg): a dose em mg/kg sugerida pela IA não se aplica.
+            # Frequência única: a mesma usada no campo "Frequência" da receita (bruto), para o texto da dose não divergir.
+            fh_lact = _numero(bruto.get("frequencia_horas")) or 8
+            bruto["frequencia_horas"] = fh_lact
+            freq_lact = _frequencia_texto(fh_lact).split(" (")[0].lower()   # ex.: "a cada 8 horas"
             if peso:
-                dosagem = ("0,5 a 1 mL/kg por via oral, a cada 8 a 12 horas, ajustada pela resposta. "
+                dosagem = (f"0,5 a 1 mL/kg por via oral, {freq_lact}, ajustada pela resposta clínica. "
                            f"Com {_fmt(peso)} kg: {_fmt(0.5 * peso)} a {_fmt(peso)} mL por tomada.")
             else:
-                dosagem = "0,5 a 1 mL/kg por via oral, a cada 8 a 12 horas, ajustada pela resposta (calcular com o peso atual)."
+                dosagem = f"0,5 a 1 mL/kg por via oral, {freq_lact}, ajustada pela resposta clínica (calcular com o peso atual)."
             alertas.append(f"{nome}: dose em mL/kg (xarope). Confirme a faixa de referência e o ajuste com o veterinário.")
             dose = None
         elif dose is not None:
