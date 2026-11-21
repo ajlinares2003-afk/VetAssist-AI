@@ -1778,7 +1778,9 @@ def _anotar_momento(exames: list) -> list:
     """Marca quando pedir: exames de anestesia, sedação ou procedimento invasivo ficam para após a estabilização."""
     for e in exames:
         n = _norm(str(e.get("nome") or ""))
-        e["momento"] = "APOS_ESTABILIZACAO" if any(t in n for t in _TERMOS_APOS_ESTABILIZACAO) else "AGORA"
+        just = _norm(str(e.get("justificativa") or ""))
+        apos = any(t in n for t in _TERMOS_APOS_ESTABILIZACAO) or "apos estabiliz" in just
+        e["momento"] = "APOS_ESTABILIZACAO" if apos else "AGORA"
     return exames
 
 
