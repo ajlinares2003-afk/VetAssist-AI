@@ -346,6 +346,10 @@ _NEGACOES = ("sem ", "não ", "nao ", "evitar", "evite", "descart", "nenhuma", "
 
 
 def ha_indicacao_cirurgica(texto: str) -> bool:
+    """Opinião explícita da IA (última linha do parecer) tem prioridade; senão, varredura por termos."""
+    m = re.search(r"indica[çc][ãa]o cir[úu]rgica\s*:\s*(sim|n[ãa]o|a confirmar)", (texto or "").lower())
+    if m:
+        return m.group(1) != "não" and m.group(1) != "nao"
     """True se o parecer indica cirurgia em pelo menos uma menção que não esteja negada."""
     t = (texto or "").lower()
     for termo in _TERMOS_CIRURGIA:
@@ -715,6 +719,7 @@ def sugestoes_copiloto_multimodal(
             f"12. Responda estritamente no formato abaixo, sem adicionar introduções:\n"
             f"ESTADO DO PACIENTE: [Declarar se está ESTÁVEL ou CRÍTICO baseado apenas nos sinais vitais fornecidos]\n"
             f"SUSPEITA: [Nome exato e direto, em português do Brasil e sem termos em inglês, de UMA única hipótese principal]\n"
+            f"INDICAÇÃO CIRÚRGICA (obrigatória): inclua, como última linha do parecer, a sua opinião no formato 'Indicação cirúrgica: SIM', 'NÃO' ou 'A CONFIRMAR', seguida da condição (ex.: após estabilização e angiotomografia). Baseie-se nos achados; o veterinário responsável decide.\n"
             f"FORMATAÇÃO DO PARECER (obrigatória): separe as seções com títulos em linha própria, terminados em dois pontos "
             f"(ex.: Avaliação clínica e sinais vitais:; Diagnósticos diferenciais a investigar:; Conduta e exames complementares:; "
             f"Achados nos anexos:). Em cada seção, escreva um item por linha, iniciado por hífen e espaço. "
