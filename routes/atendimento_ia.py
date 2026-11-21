@@ -2187,6 +2187,9 @@ def sugerir_exames(
     exames_ia = [e for e in _montar_exames(resp.dados, limite=MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES)
                  if not _sorologia_em_semen(e["nome"])]
     exames_ia, ja_realizados = _remover_exames_ja_realizados(exames_ia, d)
+    logger.info("diag exames: consulta=%s laudo_no_contexto=%s pedidos_anteriores=%s feitos=%s retirados=%s",
+                d.get("consulta_id"), bool(d.get("exames_anexados")), len(_exames_ja_pedidos(d)),
+                sorted(_feitos_no_retorno(d)) if d.get("exames_anexados") else None, ja_realizados)
     exames_ia = _garantir_pre_anestesia_retorno(exames_ia, d)
     exames_ia = _garantir_angio_shunt(exames_ia, d)
     aviso = "Sugestão gerada por IA. O veterinário decide quais exames solicitar."
