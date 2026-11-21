@@ -1771,6 +1771,17 @@ def _garantir_parvovirose(exames: list, d: dict, limite: int) -> list:
     return exames
 
 
+_TERMOS_APOS_ESTABILIZACAO = ("angiotomograf", "tomograf", "ressonancia", "endoscop", "biopsia", "cintilograf", "histopatolog")
+
+
+def _anotar_momento(exames: list) -> list:
+    """Marca quando pedir: exames de anestesia, sedação ou procedimento invasivo ficam para após a estabilização."""
+    for e in exames:
+        n = _norm(str(e.get("nome") or ""))
+        e["momento"] = "APOS_ESTABILIZACAO" if any(t in n for t in _TERMOS_APOS_ESTABILIZACAO) else "AGORA"
+    return exames
+
+
 def _garantir_angio_shunt(exames: list, d: dict) -> list:
     """Shunt/desvio portossistêmico: a angiotomografia é o exame de planejamento vascular (após estabilização).
     Entra na lista mesmo que a IA a omita; o veterinário remove com o X se não quiser."""
@@ -2185,10 +2196,10 @@ def sugerir_exames(
     elif d.get("retorno_ctx") and not exames_ia:
         aviso = "Retorno: nenhum exame adicional é necessário pelo parecer."
     if ja_realizados:
-        resposta_exames = exames_ia   # sem os 'garantidos': eles poderiam reinserir o exame já feito
+        resposta_exames = _anotar_momento(exames_ia)   # sem os 'garantidos': eles poderiam reinserir o exame já feito
         return {"exames": resposta_exames, "ja_realizados": ja_realizados, "provedor": resp.provedor,
                 "modelo": resp.modelo, "aviso": aviso}
-    return {
+    resp_final = {
         "exames": _garantir_exames_cardiacos(_garantir_urinalise_checkup(_garantir_coagulograma_hepatico(_ajustar_exames_esporotricose(_garantir_exame_da_suspeita(
             _garantir_triagem_brucella(exames_ia, d), d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
             d, MAX_EXAMES_CHECKUP if d.get("solicitar_exames_preventivos") else MAX_EXAMES),
@@ -2199,6 +2210,8 @@ def sugerir_exames(
         "modelo": resp.modelo,
         "aviso": aviso,
     }
+    resp_final["exames"] = _anotar_momento(resp_final["exames"])
+    return resp_final
 
 
 # --------------------------------------------------------------------------- #
