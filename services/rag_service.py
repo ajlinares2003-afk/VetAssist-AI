@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 import math
 import os
+import shutil
+import tempfile
 import re
 import threading
 import unicodedata
@@ -381,15 +383,18 @@ def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TO
 _SENTENCA = re.compile(r"(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9])")
 
 
-def extrair_texto_pdf(arquivo: str | BinaryIO) -> str:
-    """Extrai o texto de todas as páginas do PDF."""
+def extrair_texto_pdf(arquivo: str | BinaryIO, ao_progredir: Callable[[int, int], None] | None = None) -> str:
+    """Extrai o texto de todas as páginas do PDF. `ao_progredir(lidas, total)` informa o andamento."""
     try:
         # Página a página, liberando o cache do pdfplumber: evita estourar a memória do Render com livros grandes.
         paginas: list[str] = []
         with pdfplumber.open(arquivo) as pdf:
+            total_paginas = len(pdf.pages)
             for pagina in pdf.pages:
                 paginas.append(pagina.extract_text() or "")
                 pagina.flush_cache()
+                if ao_progredir:
+                    ao_progredir(len(paginas), total_paginas)
     except Exception as exc:
         raise IngestaoError(f"PDF ilegível ou corrompido: {exc}") from exc
 
@@ -728,25 +733,42 @@ def ingerir_pdf(
     return ResultadoIngestao(titulo, gravados, len(chunks))
 
 
-def _processar_em_segundo_plano(titulo: str, chunks: list[str], api_key: str) -> None:
-    """Executa a gravação fora da requisição, com sessão própria, atualizando o andamento."""
-    def progresso(n: int) -> None:
-        with _JOBS_LOCK:
-            if titulo in _JOBS:
-                _JOBS[titulo]["feitos"] = n
+def _atualizar_job(titulo: str, **campos) -> None:
+    with _JOBS_LOCK:
+        if titulo in _JOBS:
+            _JOBS[titulo].update(**campos)
 
+
+def _processar_em_segundo_plano(titulo: str, caminho_pdf: str, estrategia: str, api_key: str) -> None:
+    """Lê o PDF (fase 'lendo', por página), fatia e vetoriza (fase 'vetorizando'), com sessão própria."""
     db = SessionLocal()
     try:
-        gravar_trechos(db, titulo, chunks, api_key, progresso)
+        def progresso_leitura(lidas: int, total: int) -> None:
+            _atualizar_job(titulo, fase="lendo", feitos=lidas, total=total)
+
+        with open(caminho_pdf, "rb") as f:
+            texto = extrair_texto_pdf(f, progresso_leitura)
+        chunks = fatiar_por_farmaco(texto) if estrategia == "farmaco" else fatiar_em_chunks(texto)
+        if not chunks:
+            raise IngestaoError("Nenhum trecho gerado a partir do PDF.")
+
+        _atualizar_job(titulo, fase="vetorizando", feitos=0, total=len(chunks))
+
+        def progresso_vetor(n: int) -> None:
+            _atualizar_job(titulo, feitos=n)
+
+        gravar_trechos(db, titulo, chunks, api_key, progresso_vetor)
         with _JOBS_LOCK:
             _JOBS.pop(titulo, None)  # concluída: a base passa a mostrá-la como pronta
     except Exception as exc:  # noqa: BLE001 — nada pode escapar da thread sem registro
         logger.exception("Ingestão em segundo plano falhou: '%s'", titulo)
-        with _JOBS_LOCK:
-            if titulo in _JOBS:
-                _JOBS[titulo].update(estado="erro", mensagem=str(exc))
+        _atualizar_job(titulo, estado="erro", mensagem=str(exc))
     finally:
         db.close()
+        try:
+            os.remove(caminho_pdf)
+        except OSError:
+            pass
 
 
 # Rota FastAPI -------------------------------------------------------------------
@@ -840,11 +862,11 @@ def listar_publicacoes(db: Session = Depends(get_db)) -> dict[str, list[dict[str
             "estado": "pronta", "feitos": None, "total": None, "mensagem": None,
         }
         if job:
-            item.update(estado=job["estado"], feitos=job["feitos"], total=job["total"], mensagem=job.get("mensagem"))
+            item.update(estado=job["estado"], fase=job.get("fase"), feitos=job["feitos"], total=job["total"], mensagem=job.get("mensagem"))
         itens.append(item)
     for titulo, job in jobs.items():  # em andamento/erro, ainda sem trechos gravados
         itens.append({
-            "titulo": titulo, "trechos": 0, "caracteres": 0, "estado": job["estado"],
+            "titulo": titulo, "trechos": 0, "caracteres": 0, "estado": job["estado"], "fase": job.get("fase"),
             "feitos": job["feitos"], "total": job["total"], "mensagem": job.get("mensagem"),
         })
     return {"publicacoes": itens}
@@ -862,24 +884,44 @@ def incluir_publicacao(
     estrategia: str = Form("frases", description="'frases' (livros) ou 'farmaco' (bulário)"),
     db: Session = Depends(get_db),
 ) -> dict[str, int | str]:
-    """Valida e fatia o PDF na hora; a vetorização roda em segundo plano (acompanhe em GET /rag/publicacoes)."""
+    """Recebe o PDF e responde na hora; a leitura (por página) e a vetorização rodam em segundo plano.
+    Acompanhe o andamento em GET /rag/publicacoes."""
     _validar_pdf(arquivo)
+    estrategia_n = _normalizar_estrategia(estrategia)
+    if estrategia_n not in ESTRATEGIAS_FATIAMENTO:
+        raise HTTPException(422, f"Estratégia inválida. Use uma de: {', '.join(ESTRATEGIAS_FATIAMENTO)}.")
+    titulo_limpo = (titulo or "").strip()
+    if not titulo_limpo:
+        raise HTTPException(422, "Título obrigatório.")
+    if len(titulo_limpo) > MAX_TITULO_CHARS:
+        raise HTTPException(422, f"Título acima de {MAX_TITULO_CHARS} caracteres.")
     try:
         api_key = _obter_api_key_gemini(db)
-        titulo_limpo, chunks = preparar_ingestao(db, arquivo.file, titulo, estrategia)
-    except IngestaoError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        ja_existe = db.scalar(
+            select(DocumentoVeterinario.id).where(DocumentoVeterinario.titulo == titulo_limpo).limit(1)
+        )
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Falha ao consultar a base.") from exc
     except RagError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    if ja_existe:
+        raise HTTPException(422, f"Já existe literatura ingerida com o título '{titulo_limpo}'.")
 
     with _JOBS_LOCK:
         if titulo_limpo in _JOBS:  # duas requisições simultâneas com o mesmo título
             raise HTTPException(422, f"Já existe literatura ingerida com o título '{titulo_limpo}'.")
         _JOBS[titulo_limpo] = {
-            "estado": "processando", "feitos": 0, "total": len(chunks), "mensagem": None,
+            "estado": "processando", "fase": "lendo", "feitos": 0, "total": 0, "mensagem": None,
         }
-    background.add_task(_processar_em_segundo_plano, titulo_limpo, chunks, api_key)
-    return {"titulo": titulo_limpo, "trechos_total": len(chunks), "estado": "processando"}
+
+    # o arquivo enviado só vive durante a requisição: copia para disco antes de responder
+    fd, caminho = tempfile.mkstemp(suffix=".pdf")
+    with os.fdopen(fd, "wb") as destino:
+        arquivo.file.seek(0)
+        shutil.copyfileobj(arquivo.file, destino)
+    background.add_task(_processar_em_segundo_plano, titulo_limpo, caminho, estrategia_n, api_key)
+    return {"titulo": titulo_limpo, "estado": "processando"}
 
 
 @router.delete("/publicacoes", dependencies=[Depends(exigir_admin)])
