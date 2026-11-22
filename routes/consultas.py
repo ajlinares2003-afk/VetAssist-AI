@@ -540,6 +540,7 @@ class ContextoAsa(BaseModel):
     temperatura: Optional[Any] = None
     frequencia_cardiaca: Optional[Any] = None
     frequencia_respiratoria: Optional[Any] = None
+    peso: Optional[Any] = None
 
 
 ASA_VALORES = [
@@ -575,6 +576,7 @@ def sugerir_asa(
         ("Temperatura (°C)", ctx.temperatura),
         ("Frequência cardíaca (bpm)", ctx.frequencia_cardiaca),
         ("Frequência respiratória (ir/min)", ctx.frequencia_respiratoria),
+        ("Peso (kg)", ctx.peso),
     ])
     prompt = (
         "Você é um médico veterinário anestesiologista experiente, atuando como ASSISTENTE DE RACIOCÍNIO e checklist "
@@ -593,7 +595,9 @@ def sugerir_asa(
         "REGRAS:\n"
         "- NÃO informe doses, concentrações nem nomes de fármacos anestésicos ou analgésicos.\n"
         "- NÃO escolha nem sugira procedimento cirúrgico.\n"
-        "- Se faltar dado essencial (ex.: exames, peso, glicemia), diga isso no checklist em vez de presumir.\n"
+        "- Os dados já informados no caso (peso, temperatura, FC, FR) NÃO devem aparecer no checklist como pendência.\n"
+        "- O checklist lista apenas o que ainda falta medir ou confirmar (ex.: glicemia capilar atual, coagulograma, "
+        "eletrólitos, exames de imagem, jejum, acesso venoso). Não presuma resultados.\n"
         "- Não escreva nada fora do JSON.\n\n"
         'FORMATO: {"classificacao_asa": "...", "justificativa": "...", "checklist_pre_anestesico": ["..."], '
         '"observacoes_pos": "...", "descricao_tecnica": ""}'
