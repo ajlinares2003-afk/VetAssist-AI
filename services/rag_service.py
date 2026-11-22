@@ -384,8 +384,12 @@ _SENTENCA = re.compile(r"(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9])")
 def extrair_texto_pdf(arquivo: str | BinaryIO) -> str:
     """Extrai o texto de todas as páginas do PDF."""
     try:
+        # Página a página, liberando o cache do pdfplumber: evita estourar a memória do Render com livros grandes.
+        paginas: list[str] = []
         with pdfplumber.open(arquivo) as pdf:
-            paginas = [(p.extract_text() or "") for p in pdf.pages]
+            for pagina in pdf.pages:
+                paginas.append(pagina.extract_text() or "")
+                pagina.flush_cache()
     except Exception as exc:
         raise IngestaoError(f"PDF ilegível ou corrompido: {exc}") from exc
 
