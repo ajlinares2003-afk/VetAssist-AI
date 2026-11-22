@@ -59,7 +59,7 @@ EMBED_BATCH_COMMIT = 20          # commit a cada N chunks
 EMBED_REQ_POR_MINUTO = int(os.getenv("EMBED_REQ_POR_MINUTO", "90"))  # cota gratuita do Gemini: 100/min
 INGESTAO_TENTATIVAS = 6          # na ingestão vale esperar mais pela cota
 ESPERA_MAXIMA_429 = 65           # segundos (a cota é por minuto)
-MAX_PDF_BYTES = 50 * 1024 * 1024
+MAX_PDF_BYTES = 100 * 1024 * 1024
 MAX_TITULO_CHARS = 255
 
 # Uso dentro de outras rotas (ex.: Copiloto Clínico): a busca não pode atrasar nem derrubar a rota.
@@ -782,7 +782,7 @@ def ingerir_literatura(
 
     arquivo.file.seek(0, os.SEEK_END)
     if arquivo.file.tell() > MAX_PDF_BYTES:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF acima de 50 MB.")
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF acima de 100 MB.")
     arquivo.file.seek(0)
 
     try:
@@ -802,7 +802,7 @@ def _validar_pdf(arquivo: UploadFile) -> None:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Envie um arquivo PDF.")
     arquivo.file.seek(0, os.SEEK_END)
     if arquivo.file.tell() > MAX_PDF_BYTES:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF acima de 50 MB.")
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "PDF acima de 100 MB.")
     arquivo.file.seek(0)
 
 
