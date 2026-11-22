@@ -5,7 +5,7 @@ import hashlib
 import uuid
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -533,12 +533,13 @@ def baixar_laudo_consulta(
 
 
 class ContextoAsa(BaseModel):
-    queixa_principal: Optional[str] = None
-    historico_clinico: Optional[str] = None
-    exame_fisico: Optional[str] = None
-    temperatura: Optional[str] = None
-    frequencia_cardiaca: Optional[str] = None
-    frequencia_respiratoria: Optional[str] = None
+    # Aceita texto ou número: o front envia temperatura e frequências como número.
+    queixa_principal: Optional[Any] = None
+    historico_clinico: Optional[Any] = None
+    exame_fisico: Optional[Any] = None
+    temperatura: Optional[Any] = None
+    frequencia_cardiaca: Optional[Any] = None
+    frequencia_respiratoria: Optional[Any] = None
 
 
 ASA_VALORES = [
