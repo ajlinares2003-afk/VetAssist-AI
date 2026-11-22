@@ -8,7 +8,7 @@ Contém:
   4. Ingestão de PDFs (chunking por frases) + rota FastAPI
 
 Pré-requisitos:
-  pip install pgvector pdfplumber python-multipart
+  pip install pgvector pymupdf python-multipart
   SQL (uma vez, como superusuário/owner do banco):
       CREATE EXTENSION IF NOT EXISTS vector;
       CREATE INDEX IF NOT EXISTS ix_documentos_vet_embedding
@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from typing import BinaryIO, Callable
 
-import pdfplumber
+import pymupdf
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from google.genai import types
 from pgvector.sqlalchemy import Vector
@@ -383,18 +383,19 @@ def referencias_para_prompt(db: Session, consulta_clinica: str, limite: int = TO
 _SENTENCA = re.compile(r"(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9])")
 
 
-def extrair_texto_pdf(arquivo: str | BinaryIO, ao_progredir: Callable[[int, int], None] | None = None) -> str:
-    """Extrai o texto de todas as páginas do PDF. `ao_progredir(lidas, total)` informa o andamento."""
+def extrair_texto_pdf(caminho_pdf: str, ao_progredir: Callable[[int, int], None] | None = None) -> str:
+    """Extrai o texto de todas as páginas do PDF (caminho em disco). `ao_progredir(lidas, total)` informa o andamento."""
     try:
-        # Página a página, liberando o cache do pdfplumber: evita estourar a memória do Render com livros grandes.
+        # PyMuPDF é bem mais leve em memória que pdfplumber: livros grandes não estouram o plano gratuito do Render.
         paginas: list[str] = []
-        with pdfplumber.open(arquivo) as pdf:
-            total_paginas = len(pdf.pages)
-            for pagina in pdf.pages:
-                paginas.append(pagina.extract_text() or "")
-                pagina.flush_cache()
+        with pymupdf.open(caminho_pdf) as pdf:
+            total_paginas = pdf.page_count
+            for numero in range(total_paginas):
+                pagina = pdf.load_page(numero)
+                paginas.append(pagina.get_text("text") or "")
+                pagina = None  # libera a página antes da próxima
                 if ao_progredir:
-                    ao_progredir(len(paginas), total_paginas)
+                    ao_progredir(numero + 1, total_paginas)
     except Exception as exc:
         raise IngestaoError(f"PDF ilegível ou corrompido: {exc}") from exc
 
@@ -746,8 +747,7 @@ def _processar_em_segundo_plano(titulo: str, caminho_pdf: str, estrategia: str, 
         def progresso_leitura(lidas: int, total: int) -> None:
             _atualizar_job(titulo, fase="lendo", feitos=lidas, total=total)
 
-        with open(caminho_pdf, "rb") as f:
-            texto = extrair_texto_pdf(f, progresso_leitura)
+        texto = extrair_texto_pdf(caminho_pdf, progresso_leitura)
         chunks = fatiar_por_farmaco(texto) if estrategia == "farmaco" else fatiar_em_chunks(texto)
         if not chunks:
             raise IngestaoError("Nenhum trecho gerado a partir do PDF.")
