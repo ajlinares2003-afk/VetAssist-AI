@@ -984,6 +984,10 @@ def _montar_receita(dados: dict, peso: Optional[float], grupo: str,
         if not nome:
             continue
         nome_n = _norm(nome)
+        if "lactulose" in nome_n:
+            # Lactulose é medida em mL/kg: a dose em mg/kg que a IA eventualmente informa não se aplica
+            # e não pode descartar o item (antes, um valor fora da faixa mg/kg derrubava a lactulose da receita).
+            bruto["dose_mg_kg"] = None
 
         if any(p in nome_n for p in proibidos):
             alertas.append(
