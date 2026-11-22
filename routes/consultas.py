@@ -17,7 +17,7 @@ from models.usuario import Usuario
 from schemas.consulta import ConsultaUpdate
 from services.security import obter_usuario_logado, exigir_perfil
 from services.texto_clinico import corrigir_siglas
-from services.ia_service import gerar_texto, IAIndisponivelError
+from services.ia_service import gerar_texto, gerar_json, IAIndisponivelError
 from services.rag_service import referencias_para_prompt
 from services.barragem_sanitaria import (
     extrair_secoes, aplicar_barragem, detectar_doenca_oficial, exames_oficiais,
@@ -349,8 +349,7 @@ def ha_indicacao_cirurgica(texto: str) -> bool:
     """Opinião explícita da IA (última linha do parecer) tem prioridade; senão, varredura por termos."""
     m = re.search(r"indica[çc][ãa]o cir[úu]rgica\s*:\s*(sim|n[ãa]o|a confirmar)", (texto or "").lower())
     if m:
-        # Só "SIM" ativa o status "Aguardando Cirurgia"; "A CONFIRMAR" fica como dúvida no parecer, sem mudar o status.
-        return m.group(1) == "sim"
+        return m.group(1) != "não" and m.group(1) != "nao"
     """True se o parecer indica cirurgia em pelo menos uma menção que não esteja negada."""
     t = (texto or "").lower()
     for termo in _TERMOS_CIRURGIA:
@@ -531,6 +530,81 @@ def baixar_laudo_consulta(
     nome = str(r["nome_original"] or "laudo").replace('"', "")
     return Response(content=bytes(r["conteudo"]), media_type=r["tipo_mime"] or "application/octet-stream",
                     headers={"Content-Disposition": f'inline; filename="{nome}"'})
+
+
+class ContextoAsa(BaseModel):
+    queixa_principal: Optional[str] = None
+    historico_clinico: Optional[str] = None
+    exame_fisico: Optional[str] = None
+    temperatura: Optional[str] = None
+    frequencia_cardiaca: Optional[str] = None
+    frequencia_respiratoria: Optional[str] = None
+
+
+ASA_VALORES = [
+    "ASA I - Paciente Saudável",
+    "ASA II - Doença Sistêmica Leve",
+    "ASA III - Doença Sistêmica Grave",
+    "ASA IV - Risco de Vida Constante",
+]
+
+
+def _validar_sugestao_asa(dados: dict) -> dict:
+    if not isinstance(dados, dict):
+        raise ValueError("resposta fora do formato")
+    if str(dados.get("classificacao_asa") or "") not in ASA_VALORES:
+        raise ValueError("classificação ASA inválida")
+    if not isinstance(dados.get("checklist_pre_anestesico"), list):
+        raise ValueError("checklist pré-anestésico ausente")
+    return dados
+
+
+@router.post("/sugerir-asa")
+def sugerir_asa(
+    ctx: ContextoAsa,
+    usuario_logado=Depends(obter_usuario_logado),
+    db: Session = Depends(get_db),
+):
+    """Apoio de raciocínio para o Centro Cirúrgico: classificação ASA e checklist pré-anestésico.
+    NÃO sugere doses, fármacos nem procedimento: isso é decisão do veterinário anestesista/cirurgião."""
+    caso = "\n".join(f"- {rotulo}: {valor or 'não informado'}" for rotulo, valor in [
+        ("Queixa principal", ctx.queixa_principal),
+        ("Histórico clínico", ctx.historico_clinico),
+        ("Exame físico", ctx.exame_fisico),
+        ("Temperatura (°C)", ctx.temperatura),
+        ("Frequência cardíaca (bpm)", ctx.frequencia_cardiaca),
+        ("Frequência respiratória (ir/min)", ctx.frequencia_respiratoria),
+    ])
+    prompt = (
+        "Você é um médico veterinário anestesiologista experiente, atuando como ASSISTENTE DE RACIOCÍNIO e checklist "
+        "para o Centro Cirúrgico. O veterinário responsável decide tudo; você apenas organiza o raciocínio.\n\n"
+        f"CASO:\n{caso}\n\n"
+        "TAREFA:\n"
+        "1. classificacao_asa: escolha UMA destas strings exatas: "
+        + " | ".join(f'"{v}"' for v in ASA_VALORES)
+        + ". Considere o estado clínico descrito, não só a idade.\n"
+        "2. justificativa: 2 a 4 frases clínicas explicando a classificação e os riscos anestésicos do caso.\n"
+        "3. checklist_pre_anestesico: lista de 4 a 10 itens curtos e verificáveis antes da anestesia "
+        "(exames pendentes ou desatualizados, jejum, estabilização, acesso venoso, hidratação, glicemia, "
+        "riscos específicos do caso). Cada item com no máximo 160 caracteres.\n"
+        "4. observacoes_pos: 1 a 3 pontos de monitoramento pós-anestésico relevantes ao caso, ou string vazia se não houver.\n"
+        "5. descricao_tecnica: sempre string vazia (o procedimento não foi informado).\n\n"
+        "REGRAS:\n"
+        "- NÃO informe doses, concentrações nem nomes de fármacos anestésicos ou analgésicos.\n"
+        "- NÃO escolha nem sugira procedimento cirúrgico.\n"
+        "- Se faltar dado essencial (ex.: exames, peso, glicemia), diga isso no checklist em vez de presumir.\n"
+        "- Não escreva nada fora do JSON.\n\n"
+        'FORMATO: {"classificacao_asa": "...", "justificativa": "...", "checklist_pre_anestesico": ["..."], '
+        '"observacoes_pos": "...", "descricao_tecnica": ""}'
+    )
+    try:
+        resp = gerar_json(db, prompt, validar=_validar_sugestao_asa, timeout=90)
+    except IAIndisponivelError as exc:
+        raise HTTPException(status_code=503, detail="A IA está indisponível no momento. Preencha manualmente.")
+    dados = dict(resp.dados)
+    dados["checklist_pre_anestesico"] = [str(i)[:160] for i in dados.get("checklist_pre_anestesico", [])][:10]
+    dados["descricao_tecnica"] = ""
+    return dados
 
 
 @router.post("/sugestoes-copiloto-multimodal")
