@@ -113,6 +113,50 @@ class DocumentoVeterinario(Base):
     embedding = Column(Vector(EMBEDDING_DIM), nullable=False)
 
 
+class PublicacaoRag(Base):
+    """Estado de cada publicação: permite retomar uma ingestão interrompida sem recomeçar do zero."""
+    __tablename__ = "publicacoes_rag"
+
+    titulo = Column(String(MAX_TITULO_CHARS), primary_key=True)
+    estrategia = Column(String(20), nullable=False)
+    total_trechos = Column(Integer, nullable=False)
+    estado = Column(String(20), nullable=False)  # processando | pronta | incompleta
+    mensagem = Column(Text, nullable=True)
+
+
+def _garantir_tabela_publicacoes() -> None:
+    sessao = SessionLocal()
+    try:
+        PublicacaoRag.__table__.create(bind=sessao.get_bind(), checkfirst=True)
+    except Exception:  # noqa: BLE001 — o servidor sobe mesmo assim; as rotas informam o erro depois
+        logger.exception("Não foi possível criar a tabela publicacoes_rag")
+    finally:
+        sessao.close()
+
+
+_garantir_tabela_publicacoes()
+
+
+def _item_publicacao(titulo: str, trechos: int, caracteres: int, rec, job) -> dict[str, object]:
+    """Uma linha da lista: combina o que está gravado no banco com o andamento em memória."""
+    item: dict[str, object] = {
+        "titulo": titulo, "trechos": trechos, "caracteres": caracteres,
+        "estado": "pronta", "fase": None, "feitos": None, "total": None, "mensagem": None,
+    }
+    if rec is not None and rec.estado != "pronta":
+        item.update(estado="incompleta", feitos=trechos, total=rec.total_trechos, mensagem=rec.mensagem)
+    if rec is not None and rec.estado == "processando" and job is None:
+        item.update(
+            estado="incompleta", feitos=trechos, total=rec.total_trechos,
+            mensagem="Interrompida (o servidor reiniciou ou parou). Envie o mesmo PDF com o mesmo título para retomar.",
+        )
+    if job is not None:
+        item.update(estado=job["estado"], fase=job.get("fase"), feitos=job["feitos"], total=job["total"], mensagem=job.get("mensagem"))
+        if job["estado"] == "erro" and rec is not None:
+            item.update(estado="incompleta", feitos=trechos, total=rec.total_trechos)
+    return item
+
+
 # 2. Embeddings ----------------------------------------------------------------
 def gerar_embedding(
     texto: str,
@@ -619,18 +663,6 @@ class ResultadoIngestao:
     chunks_total: int
 
 
-def _limpar_ingestao_parcial(db: Session, titulo: str) -> bool:
-    """Remove trechos já gravados de uma ingestão que falhou, para permitir nova tentativa."""
-    try:
-        db.execute(delete(DocumentoVeterinario).where(DocumentoVeterinario.titulo == titulo))
-        db.commit()
-        return True
-    except SQLAlchemyError:
-        db.rollback()
-        logger.exception("Não foi possível limpar a ingestão parcial de '%s'", titulo)
-        return False
-
-
 # Andamento das ingestões em segundo plano (em memória; vale para 1 processo/worker).
 _JOBS: dict[str, dict] = {}
 _JOBS_LOCK = threading.Lock()
@@ -679,7 +711,7 @@ def gravar_trechos(
     api_key: str,
     ao_progredir: Callable[[int], None] | None = None,
 ) -> int:
-    """Vetoriza e grava por lotes, respeitando a cota. Se falhar, desfaz o que foi gravado."""
+    """Vetoriza e grava por lotes, respeitando a cota. Se falhar, mantém os lotes já gravados (a retomada segue dali)."""
     gravados = 0
     intervalo = 60.0 / max(1, EMBED_REQ_POR_MINUTO)  # espaça as chamadas para respeitar a cota
     proxima_chamada = time.monotonic()
@@ -706,15 +738,12 @@ def gravar_trechos(
         db.commit()
         gravados = len(chunks)
     except (EmbeddingError, SQLAlchemyError) as exc:
-        db.rollback()
-        limpo = _limpar_ingestao_parcial(db, titulo)
+        db.rollback()  # descarta só o lote não gravado; os anteriores ficam no banco para a retomada
         logger.error("Ingestão interrompida em '%s' (%d/%d)", titulo, gravados, len(chunks))
-        situacao = (
-            "Nada foi mantido no banco; você pode tentar de novo."
-            if limpo
-            else "Pode haver trechos parciais no banco; remova-os antes de tentar de novo."
-        )
-        raise IngestaoError(f"Ingestão interrompida: {exc} {situacao}") from exc
+        raise IngestaoError(
+            f"Ingestão interrompida: {exc}. Os trechos já gravados foram mantidos; "
+            "envie o mesmo PDF com o mesmo título para retomar."
+        ) from exc
     return gravados
 
 
@@ -741,7 +770,8 @@ def _atualizar_job(titulo: str, **campos) -> None:
 
 
 def _processar_em_segundo_plano(titulo: str, caminho_pdf: str, estrategia: str, api_key: str) -> None:
-    """Lê o PDF (fase 'lendo', por página), fatia e vetoriza (fase 'vetorizando'), com sessão própria."""
+    """Lê o PDF (fase 'lendo'), fatia e vetoriza (fase 'vetorizando'). Se já houver trechos gravados,
+    retoma do ponto em que parou. Em caso de falha, marca a publicação como incompleta."""
     db = SessionLocal()
     try:
         def progresso_leitura(lidas: int, total: int) -> None:
@@ -752,16 +782,51 @@ def _processar_em_segundo_plano(titulo: str, caminho_pdf: str, estrategia: str, 
         if not chunks:
             raise IngestaoError("Nenhum trecho gerado a partir do PDF.")
 
-        _atualizar_job(titulo, fase="vetorizando", feitos=0, total=len(chunks))
+        rec = db.get(PublicacaoRag, titulo)
+        if rec is None:
+            rec = PublicacaoRag(titulo=titulo, estrategia=estrategia, total_trechos=len(chunks), estado="processando")
+            db.add(rec)
+        elif rec.total_trechos != len(chunks):
+            raise IngestaoError(
+                f"O PDF enviado não é o mesmo da ingestão anterior ({len(chunks)} trechos; esperado: "
+                f"{rec.total_trechos}). Exclua a publicação e envie de novo."
+            )
+        rec.estado = "processando"
+        rec.mensagem = None
+        db.commit()
+
+        ja_gravados = int(db.scalar(
+            select(func.count(DocumentoVeterinario.id)).where(DocumentoVeterinario.titulo == titulo)
+        ) or 0)
+        if ja_gravados > len(chunks):
+            raise IngestaoError("Há mais trechos gravados do que o PDF gera. Exclua a publicação e envie de novo.")
+
+        _atualizar_job(titulo, fase="vetorizando", feitos=ja_gravados, total=len(chunks))
 
         def progresso_vetor(n: int) -> None:
-            _atualizar_job(titulo, feitos=n)
+            _atualizar_job(titulo, feitos=ja_gravados + n)
 
-        gravar_trechos(db, titulo, chunks, api_key, progresso_vetor)
+        if ja_gravados < len(chunks):
+            gravar_trechos(db, titulo, chunks[ja_gravados:], api_key, progresso_vetor)
+
+        rec = db.get(PublicacaoRag, titulo)
+        rec.estado = "pronta"
+        rec.mensagem = None
+        db.commit()
         with _JOBS_LOCK:
             _JOBS.pop(titulo, None)  # concluída: a base passa a mostrá-la como pronta
     except Exception as exc:  # noqa: BLE001 — nada pode escapar da thread sem registro
         logger.exception("Ingestão em segundo plano falhou: '%s'", titulo)
+        try:
+            db.rollback()
+            rec = db.get(PublicacaoRag, titulo)
+            if rec is not None:
+                rec.estado = "incompleta"
+                rec.mensagem = str(exc)
+                db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("Não foi possível marcar '%s' como incompleta", titulo)
         _atualizar_job(titulo, estado="erro", mensagem=str(exc))
     finally:
         db.close()
@@ -834,7 +899,7 @@ def _validar_pdf(arquivo: UploadFile) -> None:
 
 @router.get("/publicacoes", dependencies=[Depends(exigir_admin)])
 def listar_publicacoes(db: Session = Depends(get_db)) -> dict[str, list[dict[str, object]]]:
-    """Todas as publicações da base, com contagem de trechos e andamento das que estão sendo gravadas."""
+    """Todas as publicações da base, com contagem de trechos, estado e andamento."""
     try:
         linhas = db.execute(
             select(
@@ -846,6 +911,7 @@ def listar_publicacoes(db: Session = Depends(get_db)) -> dict[str, list[dict[str
             .group_by(DocumentoVeterinario.titulo)
             .order_by(func.min(DocumentoVeterinario.id))
         ).all()
+        recs = {r.titulo: r for r in db.scalars(select(PublicacaoRag)).all()}
     except SQLAlchemyError as exc:
         db.rollback()
         logger.exception("Falha ao listar publicações")
@@ -855,20 +921,15 @@ def listar_publicacoes(db: Session = Depends(get_db)) -> dict[str, list[dict[str
         jobs = {t: dict(j) for t, j in _JOBS.items()}
 
     itens: list[dict[str, object]] = []
+    com_linhas: set[str] = set()
     for titulo, trechos, caracteres, _ in linhas:
-        job = jobs.pop(titulo, None)
-        item: dict[str, object] = {
-            "titulo": titulo, "trechos": int(trechos), "caracteres": int(caracteres),
-            "estado": "pronta", "feitos": None, "total": None, "mensagem": None,
-        }
-        if job:
-            item.update(estado=job["estado"], fase=job.get("fase"), feitos=job["feitos"], total=job["total"], mensagem=job.get("mensagem"))
-        itens.append(item)
+        com_linhas.add(titulo)
+        itens.append(_item_publicacao(titulo, int(trechos), int(caracteres), recs.get(titulo), jobs.pop(titulo, None)))
     for titulo, job in jobs.items():  # em andamento/erro, ainda sem trechos gravados
-        itens.append({
-            "titulo": titulo, "trechos": 0, "caracteres": 0, "estado": job["estado"], "fase": job.get("fase"),
-            "feitos": job["feitos"], "total": job["total"], "mensagem": job.get("mensagem"),
-        })
+        itens.append(_item_publicacao(titulo, 0, 0, recs.get(titulo), job))
+    for titulo, rec in recs.items():  # incompletas sem nenhum trecho gravado
+        if titulo not in com_linhas and titulo not in jobs and rec.estado != "pronta":
+            itens.append(_item_publicacao(titulo, 0, 0, rec, None))
     return {"publicacoes": itens}
 
 
@@ -883,9 +944,9 @@ def incluir_publicacao(
     arquivo: UploadFile = File(...),
     estrategia: str = Form("frases", description="'frases' (livros) ou 'farmaco' (bulário)"),
     db: Session = Depends(get_db),
-) -> dict[str, int | str]:
-    """Recebe o PDF e responde na hora; a leitura (por página) e a vetorização rodam em segundo plano.
-    Acompanhe o andamento em GET /rag/publicacoes."""
+) -> dict[str, object]:
+    """Recebe o PDF e responde na hora; a leitura e a vetorização rodam em segundo plano.
+    Se a publicação ficou incompleta, enviar o mesmo PDF com o mesmo título retoma de onde parou."""
     _validar_pdf(arquivo)
     estrategia_n = _normalizar_estrategia(estrategia)
     if estrategia_n not in ESTRATEGIAS_FATIAMENTO:
@@ -897,20 +958,21 @@ def incluir_publicacao(
         raise HTTPException(422, f"Título acima de {MAX_TITULO_CHARS} caracteres.")
     try:
         api_key = _obter_api_key_gemini(db)
-        ja_existe = db.scalar(
-            select(DocumentoVeterinario.id).where(DocumentoVeterinario.titulo == titulo_limpo).limit(1)
-        )
+        rec = db.get(PublicacaoRag, titulo_limpo)
+        ja_gravados = int(db.scalar(
+            select(func.count(DocumentoVeterinario.id)).where(DocumentoVeterinario.titulo == titulo_limpo)
+        ) or 0)
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Falha ao consultar a base.") from exc
     except RagError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    if ja_existe:
+    if ja_gravados and (rec is None or rec.estado == "pronta"):
         raise HTTPException(422, f"Já existe literatura ingerida com o título '{titulo_limpo}'.")
 
-    with _JOBS_LOCK:
-        if titulo_limpo in _JOBS:  # duas requisições simultâneas com o mesmo título
-            raise HTTPException(422, f"Já existe literatura ingerida com o título '{titulo_limpo}'.")
+    with _JOBS_LOCK:  # duas requisições simultâneas com o mesmo título
+        if _job_ativo(titulo_limpo):
+            raise HTTPException(422, "Esta publicação ainda está em processamento; aguarde terminar.")
         _JOBS[titulo_limpo] = {
             "estado": "processando", "fase": "lendo", "feitos": 0, "total": 0, "mensagem": None,
         }
@@ -921,7 +983,10 @@ def incluir_publicacao(
         arquivo.file.seek(0)
         shutil.copyfileobj(arquivo.file, destino)
     background.add_task(_processar_em_segundo_plano, titulo_limpo, caminho, estrategia_n, api_key)
-    return {"titulo": titulo_limpo, "estado": "processando"}
+    return {
+        "titulo": titulo_limpo, "estado": "processando",
+        "retomando": ja_gravados > 0, "ja_gravados": ja_gravados,
+    }
 
 
 @router.delete("/publicacoes", dependencies=[Depends(exigir_admin)])
@@ -938,11 +1003,14 @@ def excluir_publicacao(
         removidos = db.execute(
             delete(DocumentoVeterinario).where(DocumentoVeterinario.titulo == titulo)
         ).rowcount or 0
+        removeu_estado = db.execute(
+            delete(PublicacaoRag).where(PublicacaoRag.titulo == titulo)
+        ).rowcount or 0
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()
         logger.exception("Falha ao excluir '%s'", titulo)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Falha ao excluir a publicação.") from exc
-    if not removidos and not tinha_job:
+    if not removidos and not removeu_estado and not tinha_job:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Publicação não encontrada.")
     return {"titulo": titulo, "trechos_removidos": int(removidos)}
