@@ -436,7 +436,7 @@ def extrair_texto_pdf(caminho_pdf: str, ao_progredir: Callable[[int, int], None]
             total_paginas = pdf.page_count
             for numero in range(total_paginas):
                 pagina = pdf.load_page(numero)
-                paginas.append(pagina.get_text("text") or "")
+                paginas.append((pagina.get_text("text") or "").replace("\x00", ""))
                 pagina = None  # libera a página antes da próxima
                 if ao_progredir:
                     ao_progredir(numero + 1, total_paginas)
