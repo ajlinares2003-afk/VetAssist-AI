@@ -19,6 +19,8 @@ from schemas.cirurgia import (
     MonitoramentoResponse
 )
 from services.security import obter_usuario_logado, exigir_perfil
+from services.ia_service import gerar_json, IAIndisponivelError
+from services.rag_service import referencias_para_prompt
 
 router = APIRouter(
     prefix="/cirurgias",
@@ -338,6 +340,79 @@ def atualizar_cirurgia(
     db.commit()
     db.refresh(cirurgia_db)
     return cirurgia_db
+
+
+# --- RASCUNHO TÉCNICO DO PROCEDIMENTO (indicação + literatura; nunca inventa o que acontece no ato) ---
+
+PROMPT_RASCUNHO_TECNICO = (
+    "Você é um cirurgião veterinário auxiliando na redação do PLANEJAMENTO técnico de um procedimento cirúrgico.\n"
+    "Escreva um RASCUNHO com a técnica planejada, a abordagem e os pontos de atenção, baseado EXCLUSIVAMENTE "
+    "na indicação cirúrgica e nas REFERÊNCIAS fornecidas.\n"
+    "REGRAS:\n"
+    "1. Não invente achados transoperatórios, intercorrências, hemostasia, fechamento nem desfecho. "
+    "Onde a informação depender do ato cirúrgico, escreva exatamente [A preencher no ato].\n"
+    "2. Não inclua doses, volumes nem protocolos de medicamentos.\n"
+    "3. Se as referências não tratarem do procedimento indicado, devolva descricao_tecnica como string vazia.\n"
+    "4. Responda SOMENTE com JSON no formato: {\"descricao_tecnica\": \"...\"}\n\n"
+)
+
+
+def _validar_rascunho_tecnico(dados: dict) -> dict:
+    if not isinstance(dados, dict):
+        raise ValueError("resposta fora do formato")
+    return {"descricao_tecnica": str(dados.get("descricao_tecnica") or "").strip()[:4000]}
+
+
+@router.post("/rascunho-tecnico/{consulta_id}")
+def gerar_rascunho_tecnico(
+    consulta_id: int,
+    usuario_logado = Depends(exigir_perfil(["ADMIN", "VETERINARIO"])),
+    db: Session = Depends(get_db),
+):
+    """Rascunho do planejamento técnico do procedimento, com base na indicação do atendimento e na biblioteca."""
+    l = db.execute(text("""
+        SELECT c.queixa_principal, c.historico_clinico, c.exame_fisico, c.justificativa_cirurgica,
+               c.suspeita_diagnostica, a.especie, a.raca, a.idade
+        FROM consulta c
+        JOIN animal a ON a.id = c.animal_id
+        WHERE c.id = :i
+    """), {"i": consulta_id}).mappings().first()
+    if not l:
+        raise HTTPException(status_code=404, detail="Atendimento não encontrado.")
+    if not (l["justificativa_cirurgica"] or l["suspeita_diagnostica"]):
+        raise HTTPException(
+            status_code=422,
+            detail="O atendimento não tem indicação cirúrgica registrada. Descreva o procedimento manualmente.",
+        )
+
+    caso = (
+        f"Espécie: {l['especie'] or '-'}. Raça: {l['raca'] or '-'}. Idade: {l['idade'] or 'não informada'}.\n"
+        f"Queixa principal: {l['queixa_principal'] or '-'}\n"
+        f"Histórico clínico: {l['historico_clinico'] or '-'}\n"
+        f"Exame físico: {l['exame_fisico'] or '-'}\n"
+        f"Suspeita diagnóstica: {l['suspeita_diagnostica'] or '-'}\n"
+        f"Justificativa da indicação cirúrgica: {l['justificativa_cirurgica'] or '-'}"
+    )
+    referencias = referencias_para_prompt(db, caso, limite=6)
+    if not referencias:
+        raise HTTPException(
+            status_code=422,
+            detail="A biblioteca não trouxe referências para esta indicação. Descreva o procedimento manualmente.",
+        )
+
+    prompt = PROMPT_RASCUNHO_TECNICO + "REFERÊNCIAS:\n" + referencias + "\n\nCASO:\n" + caso
+    try:
+        resp = gerar_json(db, prompt, validar=_validar_rascunho_tecnico, timeout=90)
+    except IAIndisponivelError:
+        raise HTTPException(status_code=503, detail="A IA está indisponível no momento. Descreva o procedimento manualmente.")
+
+    texto = str(dict(resp.dados).get("descricao_tecnica") or "").strip()
+    if not texto:
+        raise HTTPException(
+            status_code=422,
+            detail="A literatura não trouxe uma técnica para esta indicação. Descreva o procedimento manualmente.",
+        )
+    return {"descricao_tecnica": texto}
 
 
 # --- ROTAS DE FICHA ANESTÉSICA ---
