@@ -400,7 +400,12 @@ def gerar_rascunho_tecnico(
         f"Suspeita diagnóstica: {l['suspeita_diagnostica'] or '-'}\n"
         f"Justificativa da indicação cirúrgica: {l['justificativa_cirurgica'] or '-'}"
     )
-    referencias = referencias_para_prompt(db, caso, limite=6)
+    # a busca usa a INDICAÇÃO (não os sinais clínicos), para trazer trechos sobre a técnica do procedimento
+    consulta_rag = (
+        f"Procedimento cirúrgico: {l['suspeita_diagnostica'] or ''}. Indicação: {l['justificativa_cirurgica'] or ''}. "
+        f"Técnica cirúrgica, acesso e procedimento. Espécie: {l['especie'] or '-'}."
+    )
+    referencias = referencias_para_prompt(db, consulta_rag, limite=6)
     if not referencias:
         raise HTTPException(
             status_code=422,
@@ -415,9 +420,11 @@ def gerar_rascunho_tecnico(
 
     texto = str(dict(resp.dados).get("descricao_tecnica") or "").strip()
     if not texto:
+        fontes_t = list(dict.fromkeys(re.findall(r"^\[\d+\] \((.+)\)$", referencias, re.M)))
+        lista = "; ".join(fontes_t) or "nenhuma"
         raise HTTPException(
             status_code=422,
-            detail="A literatura não trouxe uma técnica para esta indicação. Descreva o procedimento manualmente.",
+            detail=f"A literatura recuperada ({lista}) não descreve a técnica desta indicação. Descreva o procedimento manualmente.",
         )
     fontes = list(dict.fromkeys(re.findall(r"^\[\d+\] \((.+)\)$", referencias, re.M)))
     return {"descricao_tecnica": texto, "fontes": fontes}
