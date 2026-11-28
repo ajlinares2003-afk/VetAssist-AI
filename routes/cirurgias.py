@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -345,12 +346,18 @@ def atualizar_cirurgia(
 # --- RASCUNHO TÉCNICO DO PROCEDIMENTO (indicação + literatura; nunca inventa o que acontece no ato) ---
 
 PROMPT_RASCUNHO_TECNICO = (
-    "Você é um cirurgião veterinário auxiliando na redação do PLANEJAMENTO técnico de um procedimento cirúrgico.\n"
-    "Escreva um RASCUNHO com a técnica planejada, a abordagem e os pontos de atenção, baseado EXCLUSIVAMENTE "
-    "na indicação cirúrgica e nas REFERÊNCIAS fornecidas.\n"
+    "Você é um cirurgião veterinário redigindo o ROTEIRO CIRÚRGICO (transoperatório) de um procedimento.\n"
+    "Baseie-se EXCLUSIVAMENTE na indicação cirúrgica e nas REFERÊNCIAS fornecidas.\n"
+    "NÃO repita avaliação pré-anestésica, exames, checklist nem pós-operatório: isso já está em outros campos.\n"
+    "Use o formato abaixo, em texto curto e objetivo:\n"
+    "- Acesso e posicionamento: ...\n"
+    "- Exploração e identificação das estruturas: ...\n"
+    "- Técnica principal (passos): ...\n"
+    "- Controle de complicações previstas (ex.: hipertensão portal, sangramento), só se pertinente: ...\n"
+    "- Achados transoperatórios: [Achados transoperatórios: preencher no ato]\n"
+    "- Hemostasia / síntese: [Hemostasia / síntese: preencher no ato]\n"
     "REGRAS:\n"
-    "1. Não invente achados transoperatórios, intercorrências, hemostasia, fechamento nem desfecho. "
-    "Onde a informação depender do ato cirúrgico, escreva exatamente [A preencher no ato].\n"
+    "1. Não invente achados, intercorrências nem desfecho.\n"
     "2. Não inclua doses, volumes nem protocolos de medicamentos.\n"
     "3. Se as referências não tratarem do procedimento indicado, devolva descricao_tecnica como string vazia.\n"
     "4. Responda SOMENTE com JSON no formato: {\"descricao_tecnica\": \"...\"}\n\n"
@@ -412,7 +419,8 @@ def gerar_rascunho_tecnico(
             status_code=422,
             detail="A literatura não trouxe uma técnica para esta indicação. Descreva o procedimento manualmente.",
         )
-    return {"descricao_tecnica": texto}
+    fontes = list(dict.fromkeys(re.findall(r"^\[\d+\] \((.+)\)$", referencias, re.M)))
+    return {"descricao_tecnica": texto, "fontes": fontes}
 
 
 # --- ROTAS DE FICHA ANESTÉSICA ---
